@@ -1,17 +1,17 @@
 import 'package:flutter/material.dart';
 
-class MyTextField extends StatefulWidget {
+class MyTextFormField extends StatefulWidget {
+  final TextEditingController controller;
+  final String hintText;
+  final bool obscureText;
+  final FocusNode? focusNode;
+  final Function(String)? onChanged;
+  final bool isEnabled;
+  final Widget? prefixIcon;
+  final Widget? suffixIcon;
+  final String? Function(String?)? validator;
 
-    final TextEditingController controller;
-    final String hintText;
-    final bool obscureText;
-    final FocusNode? focusNode;
-    final Function(String)? onChanged;
-    final bool isEnabled;
-    final Widget? prefixIcon;
-    final Widget? suffixIcon;
-
-  const MyTextField({
+  const MyTextFormField({
     super.key,
     required this.controller,
     required this.hintText,
@@ -21,23 +21,24 @@ class MyTextField extends StatefulWidget {
     required this.isEnabled,
     this.prefixIcon,
     this.suffixIcon,
+    this.validator,
   });
 
   @override
-  State<MyTextField> createState() => _MyTextFieldState();
+  State<MyTextFormField> createState() => _MyTextFormFieldState();
 }
 
-class _MyTextFieldState extends State<MyTextField> {
-
+class _MyTextFormFieldState extends State<MyTextFormField> {
   bool isPasswordVisible = false;
 
   @override
   Widget build(BuildContext context) {
-    return TextField(
+    return TextFormField(
       controller: widget.controller,
       obscureText: widget.obscureText && !isPasswordVisible,
       focusNode: widget.focusNode,
       onChanged: widget.onChanged,
+      validator: widget.validator,
       decoration: InputDecoration(
         enabledBorder: OutlineInputBorder(
           borderSide: BorderSide(
@@ -47,6 +48,16 @@ class _MyTextFieldState extends State<MyTextField> {
         focusedBorder: const OutlineInputBorder(
           borderSide: BorderSide(
             color: Color(0xFF2D8A8A)
+          ),
+        ),
+        errorBorder: const OutlineInputBorder(
+          borderSide: BorderSide(
+            color: Colors.red,
+          ),
+        ),
+        focusedErrorBorder: const OutlineInputBorder(
+          borderSide: BorderSide(
+            color: Colors.red,
           ),
         ),
         fillColor: Theme.of(context).colorScheme.surface,

@@ -1,17 +1,52 @@
 import 'package:flutter/material.dart';
+import 'package:reciclaje_app/auth/auth_service.dart';
 import 'package:reciclaje_app/components/my_button.dart';
 import 'package:reciclaje_app/components/my_textfield.dart';
 import 'package:reciclaje_app/screen/login_screen.dart';
+import 'package:reciclaje_app/screen/otp_screen.dart';
 
-class RecoverPasswordScreen extends StatelessWidget {
-  RecoverPasswordScreen({super.key});
+class RecoverPasswordScreen extends StatefulWidget {
+  const RecoverPasswordScreen({super.key});
+
+  @override
+  State<RecoverPasswordScreen> createState() => _RecoverPasswordScreenState();
+}
+
+class _RecoverPasswordScreenState extends State<RecoverPasswordScreen> {
+  final authService = AuthService();
 
   // text editing controllers
   final usernameController = TextEditingController();
+
   final passwordController = TextEditingController();
 
   // sign user in method
-  void signUserIn() {}
+  void resetPassword() async {
+    if (usernameController.text.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Por favor ingresa tu correo'))
+      );
+      return;
+    }
+
+    try {
+      await authService.generateAndSendOTP(usernameController.text.trim());
+
+      //Navigate to OTP screen
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) {
+            return OTPScreen(email: usernameController.text.trim());
+          },
+        ),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error: $e'))
+      );
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -132,15 +167,17 @@ class RecoverPasswordScreen extends StatelessWidget {
                                 ],
                               ),
                               const SizedBox(height: 40),
-                              MyTextfield(
+                              MyTextField(
                                 controller: usernameController,
                                 hintText: 'correo',
-                                obscureText: false,
+                                obscureText: false, 
+                                isEnabled: true,
                               ),
                               const SizedBox(height: 40),
                               MyButton(
-                                onTap: signUserIn,
+                                onTap: resetPassword,
                                 text: "Enviar",
+                                color: Color(0xFF2D8A8A),
                               ),
                               const SizedBox(height: 80),
                               Center(

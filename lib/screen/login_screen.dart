@@ -1,18 +1,84 @@
 import 'package:flutter/material.dart';
+import 'package:reciclaje_app/auth/auth_service.dart';
 import 'package:reciclaje_app/components/my_button.dart';
 import 'package:reciclaje_app/components/my_textfield.dart';
+// import 'package:reciclaje_app/screen/home_screen.dart';
+import 'package:reciclaje_app/screen/navigation_screens.dart';
 import 'package:reciclaje_app/screen/recover_password.dart';
 import 'package:reciclaje_app/screen/register_screen.dart';
 
-class LoginScreen extends StatelessWidget {
-  LoginScreen({super.key});
+class LoginScreen extends StatefulWidget {
+  const LoginScreen({super.key});
+
+  @override
+  State<LoginScreen> createState() => _LoginScreenState();
+}
+
+class _LoginScreenState extends State<LoginScreen> {
+
+  final authService = AuthService();
 
   // text editing controllers
   final usernameController = TextEditingController();
+
   final passwordController = TextEditingController();
 
   // sign user in method
-  void signUserIn() {}
+  void signUserIn() async {
+
+    if (usernameController.text.isEmpty || passwordController.text.isEmpty) {
+      final snackBar = SnackBar(
+        content: Text(
+          'Por favor ingrese su correo y contraseña',
+          style: TextStyle(color: Colors.white),
+        ),
+        backgroundColor: Colors.red,
+      );
+      ScaffoldMessenger.of(context).showSnackBar(snackBar);
+      return;
+    }
+
+    final snackBar = SnackBar(
+      content: Row(
+        children: [
+          CircularProgressIndicator(),
+          SizedBox(width: 20),
+          Text('Iniciando sesion...'),
+        ],
+      ),
+    );
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(snackBar);
+    }
+
+    // prepare data
+    final email = usernameController.text;
+    final password = passwordController.text;
+
+    try {
+      await authService.signInWithEmailPassword(
+        email, password);
+        
+        print("Login successful for user: $email");
+
+        // Navigate to home screen
+        if (mounted) {
+          //hide the loading snackbar
+          ScaffoldMessenger.of(context).hideCurrentSnackBar();
+
+          // navigate to home screen
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute(builder: (context) => const NavigationScreens(),),
+          );
+        }
+    }
+    catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e")));
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -107,11 +173,7 @@ class LoginScreen extends StatelessWidget {
                               // ), // Extra space for the pot
                               Row(
                                 children: [
-                                  Padding(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 25.0,
-                                    ),
-                                    child: const Text(
+                                  Text(
                                       'Iniciar Sesion',
                                       style: TextStyle(
                                         color: Color(0xFF2D8A8A),
@@ -119,7 +181,6 @@ class LoginScreen extends StatelessWidget {
                                         fontWeight: FontWeight.bold,
                                       ),
                                     ),
-                                  ),
 
                                   Spacer(),
 
@@ -133,24 +194,22 @@ class LoginScreen extends StatelessWidget {
                                 ],
                               ),
                               const SizedBox(height: 40),
-                              MyTextfield(
+                              MyTextField(
                                 controller: usernameController,
-                                hintText: 'correo',
+                                hintText: 'Correo',
                                 obscureText: false,
+                                isEnabled: true,
                               ),
                               const SizedBox(height: 20),
-                              MyTextfield(
+                              MyTextField(
                                 controller: passwordController,
-                                hintText: 'contraseña',
+                                hintText: 'Contraseña',
                                 obscureText: true,
+                                isEnabled: true,
                               ),
                               const SizedBox(height: 15),
                               Align(
                                 alignment: Alignment.centerRight,
-                                child: Padding(
-                                  padding: EdgeInsets.symmetric(
-                                    horizontal: 25.0,
-                                  ),
                                   child: GestureDetector(
                                     onTap:() {
                                       Navigator.push(
@@ -169,13 +228,13 @@ class LoginScreen extends StatelessWidget {
                                         fontSize: 14,
                                       ),
                                     ),
-                                  ),
+                                  ),     
                                 ),
-                              ),
                               const SizedBox(height: 40),
                               MyButton(
                                 onTap: signUserIn,
                                 text: "Iniciar Sesion",
+                                color: Color(0xFF2D8A8A),
                               ),
                               const SizedBox(height: 80),
                               Center(
