@@ -20,6 +20,8 @@ class _RecoverPasswordScreenState extends State<RecoverPasswordScreen> {
 
   final passwordController = TextEditingController();
 
+  bool isLoading = false;
+
   // sign user in method
   void resetPassword() async {
     if (usernameController.text.trim().isEmpty) {
@@ -29,22 +31,80 @@ class _RecoverPasswordScreenState extends State<RecoverPasswordScreen> {
       return;
     }
 
+    setState(() {
+      isLoading = true;  
+    });
+
     try {
-      await authService.generateAndSendOTP(usernameController.text.trim());
+      final email = usernameController.text.trim();
+      print('🔍 Checking eligibility for: $email');
+
+      // check if user can request password reset (cooldown check)
+      final eligibility = await authService.canRequestPasswordReset(email);
+      print('🔍 Eligibility response: $eligibility');
+      print('🔍 Type of eligibility: ${eligibility.runtimeType}');
+
+      if (eligibility['canReset'] != null) {
+      print('🔍 canReset value: ${eligibility['canReset']}');
+      print('🔍 canReset type: ${eligibility['canReset'].runtimeType}');
+    } else {
+      print('🚫 canReset is null!');
+    }
+
+      if (eligibility == null || eligibility.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('No se puede procesar la solicitud en este momento. Inténtalo de nuevo más tarde.'),
+            backgroundColor: Colors.orange,
+            duration: const Duration(seconds: 4),
+          ),
+        );
+        return;
+      }
+
+      // safely check canReset with null safety
+      final canReset = eligibility['canReset'] as bool? ?? false;
+
+      if (!canReset) {
+        final msg = eligibility['message'] ?? 'No se puede restablecer la contraseña en este momento.';
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(msg),
+            backgroundColor: Colors.orange,
+            duration: const Duration(seconds: 4),
+          ),
+        );
+        return;
+      }
+
+      // generate and send OTP
+      await authService.generateAndSendOTP(email);
+
+      // log the password reset attempt
+      await authService.logPasswordResetAttempt(email);
 
       //Navigate to OTP screen
       Navigator.push(
         context,
         MaterialPageRoute(
           builder: (context) {
-            return OTPScreen(email: usernameController.text.trim());
+            return OTPScreen(email: email);
           },
         ),
       );
     } catch (e) {
+      print('🚫 Error in recoverPassword: $e');
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error: $e'))
+        SnackBar(
+          content: Text('Error al restablecer la contraseña'),
+          backgroundColor: Colors.red,
+        ),
       );
+    }
+    finally {
+      setState(() {
+        isLoading = false;  
+      });
     }
   }
 
@@ -60,7 +120,6 @@ class _RecoverPasswordScreenState extends State<RecoverPasswordScreen> {
           ),
         ),
         child: SafeArea(
-          child: SingleChildScrollView(
             child: ConstrainedBox(
               constraints: BoxConstraints(
                 minHeight:
@@ -118,93 +177,95 @@ class _RecoverPasswordScreenState extends State<RecoverPasswordScreen> {
                         ),
                       ),
                       // Login form card
-                      Container(
-                        width: double.infinity,
-                        constraints: BoxConstraints(
-                          minHeight: MediaQuery.of(context).size.height * 0.6,
-                        ),
-                        decoration: const BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.only(
-                            topLeft: Radius.circular(30),
-                            topRight: Radius.circular(30),
+                      Expanded(
+                        child: Container(
+                          width: double.infinity,
+                          constraints: BoxConstraints(
+                            minHeight: MediaQuery.of(context).size.height * 0.6,
                           ),
-                        ),
-                        child: Padding(
-                          padding: const EdgeInsets.all(30.0),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              // const SizedBox(
-                              //   height: 60,
-                              // ), // Extra space for the pot
-                              Row(
-                                children: [
-                                  Padding(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 25.0,
-                                    ),
-                                    child: const Text(
-                                      'Restablecer contraseña',
-                                      style: TextStyle(
-                                        color: Color(0xFF2D8A8A),
-                                        fontSize: 17,
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                    ),
-                                  ),
-
-                                  Spacer(),
-
-                                  Image.asset(
-                                      'lib/images/Pot2.png',
-                                      width: 80,
-                                      height: 120,
-                                      fit: BoxFit.contain,
-                                    ),
-
-                                ],
-                              ),
-                              const SizedBox(height: 40),
-                              MyTextField(
-                                controller: usernameController,
-                                hintText: 'correo',
-                                obscureText: false, 
-                                isEnabled: true,
-                              ),
-                              const SizedBox(height: 40),
-                              MyButton(
-                                onTap: resetPassword,
-                                text: "Enviar",
-                                color: Color(0xFF2D8A8A),
-                              ),
-                              const SizedBox(height: 80),
-                              Center(
-                                child: Row(
-                                  mainAxisAlignment: MainAxisAlignment.center,
+                          decoration: const BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.only(
+                              topLeft: Radius.circular(30),
+                              topRight: Radius.circular(30),
+                            ),
+                          ),
+                          child: SingleChildScrollView(
+                            padding: const EdgeInsets.all(30.0),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                // const SizedBox(
+                                //   height: 60,
+                                // ), // Extra space for the pot
+                                Row(
                                   children: [
-                                    GestureDetector(
-                                      onTap: () {
-                                        Navigator.push(
-                                          context,
-                                          MaterialPageRoute(
-                                            builder: (context) {
-                                              return LoginScreen();
-                                            },
-                                          ),
-                                        );
-                                      },
-                                      child: Text(
-                                        'Volver al inicio de sesion ',
-                                        style: TextStyle(color: Colors.grey),
+                                    Padding(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 25.0,
+                                      ),
+                                      child: const Text(
+                                        'Restablecer contraseña',
+                                        style: TextStyle(
+                                          color: Color(0xFF2D8A8A),
+                                          fontSize: 17,
+                                          fontWeight: FontWeight.bold,
+                                        ),
                                       ),
                                     ),
+                        
+                                    Spacer(),
+                        
+                                    Image.asset(
+                                        'lib/images/Pot2.png',
+                                        width: 80,
+                                        height: 120,
+                                        fit: BoxFit.contain,
+                                      ),
+                        
                                   ],
                                 ),
-                              ),
-                              const SizedBox(height: 30),
-                            ],
+                                const SizedBox(height: 40),
+                                MyTextField(
+                                  controller: usernameController,
+                                  hintText: 'correo',
+                                  obscureText: false, 
+                                  isEnabled: true,
+                                ),
+                                const SizedBox(height: 40),
+                                MyButton(
+                                  onTap: isLoading ? null : resetPassword,
+                                  text: isLoading ? "Enviando..." : "Enviar",
+                                  color: Color(0xFF2D8A8A),
+                                ),
+                                const SizedBox(height: 80),
+                                Center(
+                                  child: Row(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      GestureDetector(
+                                        onTap: () {
+                                          Navigator.push(
+                                            context,
+                                            MaterialPageRoute(
+                                              builder: (context) {
+                                                return LoginScreen();
+                                              },
+                                            ),
+                                          );
+                                        },
+                                        child: Text(
+                                          'Volver al inicio de sesion ',
+                                          style: TextStyle(color: Colors.grey),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                const SizedBox(height: 30),
+                              ],
+                            ),
                           ),
                         ),
                       ),
@@ -215,7 +276,6 @@ class _RecoverPasswordScreenState extends State<RecoverPasswordScreen> {
             ),
           ),
         ),
-      ),
     );
   }
 }

@@ -56,6 +56,9 @@ class _OTPScreenState extends State<OTPScreen> {
       final isValid = await authService.verifyOTP(widget.email, otpCode);
 
       if (isValid) {
+        // clean up expired OTPs when verification is successful
+        await authService.cleanupExpiredOTPs();
+
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('OTP verificado con éxito')),
         );
@@ -77,8 +80,12 @@ class _OTPScreenState extends State<OTPScreen> {
         focusNodes[0].requestFocus();
       }
     } catch (e) {
+      print('🚫 Error in verifyOTP: $e');
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error al verificar OTP: $e')),
+        SnackBar(
+          content: Text('Error al verificar OTP'),
+          backgroundColor: Colors.red,
+        ),
       );
     } finally {
       setState(() {
@@ -89,9 +96,27 @@ class _OTPScreenState extends State<OTPScreen> {
 
   void resendOTP() async {
     try {
+      // check cooldown before allowing resend
+      final eligibility = await authService.canRequestPasswordReset(widget.email);
+
+      if (!eligibility['canReset']) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(eligibility['message']),
+            backgroundColor: Colors.orange,
+          ),
+        );
+        return;
+      }
+
+      // generate and send new OTP
       await authService.generateAndSendOTP(widget.email);
+
+      // log the password reset attempt
+      await authService.logPasswordResetAttempt(widget.email);
+
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('OTP reenviado con éxito')),
+        SnackBar(content: Text('OTP reenviado con éxito a ${widget.email}')),
       );
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(

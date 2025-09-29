@@ -5,6 +5,10 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 class AuthService {
   final SupabaseClient _supabase = Supabase.instance.client;
 
+  // password reset constraints
+  static const int RESET_COOLDOWN_MINUTES = 15;
+  static const int MAX_DAILY_RESETS = 3;
+
   // sign in with email and password
   Future<AuthResponse> signInWithEmailPassword(String email, String password) async {
     return await _supabase.auth.signInWithPassword(
@@ -35,6 +39,9 @@ class AuthService {
 
   // generate and send otp
   Future<String> generateAndSendOTP(String email) async {
+    // clean up expired OTPs before generating a new one
+    await cleanupExpiredOTPs();
+
     // generate 6-digit OTP
     final otp = (100000 + Random().nextInt(900000)).toString();
 
@@ -101,9 +108,164 @@ class AuthService {
     }
   }
 
-  Future<void> resetPasswordForEmail(String email) async {
-    await _supabase.auth.resetPasswordForEmail(
-      email
-    );
+  Future<Map<String, dynamic>> canRequestPasswordReset(String email) async {
+    try {
+      final normalizedEmail = email.toLowerCase().trim();
+
+      // check last reset attempt
+      final lastResetResponse = await _supabase
+          .from('password_logs')
+          .select('reset_requested_at')
+          .eq('email', normalizedEmail)
+          .order('reset_requested_at', ascending: false)
+          .limit(1);
+      
+      if (lastResetResponse.isNotEmpty) {
+        final lastResetTime = DateTime.parse(lastResetResponse.first['reset_requested_at']);
+        final timeDifference = DateTime.now().difference(lastResetTime);
+
+        print('Last reset time: $lastResetTime');
+        print('Time since last reset: ${timeDifference.inMinutes} minutes');
+
+        if (timeDifference.inMinutes < RESET_COOLDOWN_MINUTES) {
+          final remainingMinutes = RESET_COOLDOWN_MINUTES - timeDifference.inMinutes;
+          return {
+            'canRequest': false,
+            'reason': 'cooldown',
+            'remainingMinutes': remainingMinutes,
+            'message': 'Por favor espera $remainingMinutes minutos antes de intentar de nuevo.'
+          };
+        }
+      }
+
+      // check daily limit
+      final today = DateTime.now();
+      final startOfDay = DateTime(today.year, today.month, today.day);
+
+      final dailyAttemptsResponse = await _supabase
+          .from('password_logs')
+          .select('idLog')
+          .eq('email', normalizedEmail)
+          .gte('reset_requested_at', startOfDay.toIso8601String());
+      
+      if (dailyAttemptsResponse.length >= MAX_DAILY_RESETS) {
+        return {
+          'canRequest': false,
+          'reason': 'daily_limit',
+          'attempts': dailyAttemptsResponse.length,
+          'message': 'Has alcanzado el límite diario de $MAX_DAILY_RESETS intentos. Por favor intenta de nuevo mañana.'
+        };
+      }
+
+      return {
+        'canReset': true,
+        'attemptsToday': dailyAttemptsResponse.length,
+        'message': 'Puedes solicitar el restablecimiento'
+      };
+    } catch (e) {
+      print('Error checking password reset eligibility: $e');
+      return {
+        'canReset': false,
+        'reason': 'error',
+        'message': 'Error al verificar los intentos de restablecimiento: $e',
+        'error': e.toString(),
+      };
+    }
+  }
+
+  // log password reset attempt
+  Future<void> logPasswordResetAttempt(String email) async {
+    try {
+      await _supabase.from('password_logs').insert({
+        'email': email.toLowerCase().trim(),
+        'reset_requested_at': DateTime.now().toIso8601String(),
+      });
+    } catch (e) {
+      print('Failed to log password reset attempt: $e');
+    }
+  }
+
+  Future<Map<String, dynamic>> resetPasswordForEmail(String email) async {
+    try {
+      // check if user can request password reset
+      final eligibility = await canRequestPasswordReset(email);
+
+      if (!eligibility['canReset']) {
+        return {
+          'success': false,
+          'message': eligibility['message'],
+          'reason': eligibility['reason'],
+        };
+      }
+
+      // proceed with password reset
+      await _supabase.auth.resetPasswordForEmail(email);
+
+      // log the attempt
+      await logPasswordResetAttempt(email);
+      
+      return {
+        'success': true,
+        'message': 'Se ha enviado un correo para restablecer la contraseña si el correo existe en nuestro sistema!',
+        'attemptsToday': eligibility['attemptsToday'] + 1,
+      };
+    } catch (e) {
+      return {
+        'success': false,
+        'message': 'Error al solicitar el restablecimiento de la contraseña: $e',
+        'error': e.toString(),
+      };
+    }
+  }
+
+  // clean up expired OTPS
+  Future<void> cleanupExpiredOTPs() async {
+    try {
+      final now = DateTime.now();
+
+      // delete expired OTPs
+      await _supabase
+          .from('OTP')
+          .delete()
+          .lt('expires_at', now.toIso8601String());
+      
+      // also delete used OTPs older than 1 hour
+      final oneHourAgo = now.subtract(const Duration(hours: 1));
+      await _supabase
+          .from('OTP')
+          .delete()
+          .eq('used', true)
+          .lt('expires_at', oneHourAgo.toIso8601String());
+      
+      print('OTP limpeza completada');
+    } catch (e) {
+      print('Error en la limpieza de OTPs: $e');
+    }
+  }
+
+  // clean up old password logs (call periodically)
+  Future<void> cleanupOldPasswordLogs() async {
+    try {
+      final thirtyDaysAgo = DateTime.now().subtract(const Duration(days: 30));
+      await _supabase
+          .from('password_logs')
+          .delete()
+          .lt('reset_requested_at', thirtyDaysAgo.toIso8601String());
+    } catch (e) {
+      print('Error en la limpieza de registros antiguos: $e');
+    }
+  }
+
+  // clean up method - call periodically
+  Future<void> performDatabaseCleanup() async {
+    try {
+      await Future.wait([
+        cleanupExpiredOTPs(),
+        cleanupOldPasswordLogs(),
+      ]);
+      print('La limpieza de logs y otps se ha completado.');
+    } catch (e) {
+      print('Error durante la limpieza de base de datos: $e');
+    }
   }
 }

@@ -4,9 +4,10 @@ import 'package:reciclaje_app/model/category.dart';
 class CategoryTags extends StatelessWidget {
   final List<Category> categories;
   final Category? selectedCategory;
-  final Function(Category?) onCategorySelected;
+  final Function(Category?)? onCategorySelected;
   final String? Function(Category?)? validator;
   final String labelText;
+  final bool isEnabled;
 
   const CategoryTags({
     super.key,
@@ -15,6 +16,7 @@ class CategoryTags extends StatelessWidget {
     required this.onCategorySelected,
     this.validator,
     this.labelText = 'Categoría',
+    this.isEnabled = true,
   });
 
   @override
@@ -30,10 +32,12 @@ class CategoryTags extends StatelessWidget {
               padding: const EdgeInsets.only(bottom: 8.0),
               child: Text(
                 labelText,
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 16,
                   fontWeight: FontWeight.w500,
-                  color: Color(0xFF2D8A8A),
+                  color: isEnabled
+                      ? const Color(0xFF2D8A8A)
+                      : Colors.grey.shade600,
                 ),
               ),
             ),
@@ -48,7 +52,7 @@ class CategoryTags extends StatelessWidget {
                   width: 1.0,
                 ),
                 borderRadius: BorderRadius.circular(12.0),
-                color: Colors.grey.shade50,
+                color: isEnabled ? Colors.grey.shade300 : Colors.grey.shade200,
               ),
               child: categories.isEmpty
                   ? const Text(
@@ -64,10 +68,12 @@ class CategoryTags extends StatelessWidget {
                       children: categories.map((category) {
                         final isSelected = selectedCategory?.id == category.id;
                         return GestureDetector(
-                          onTap: () {
-                            onCategorySelected(category);
+                          onTap: isEnabled && onCategorySelected != null
+                          ? () {
+                            onCategorySelected!(category);
                             state.didChange(category);
-                          },
+                          }
+                          : null,
                           child: AnimatedContainer(
                             duration: const Duration(milliseconds: 200),
                             padding: const EdgeInsets.symmetric(
@@ -77,15 +83,15 @@ class CategoryTags extends StatelessWidget {
                             decoration: BoxDecoration(
                               color: isSelected 
                                   ? const Color(0xFF2D8A8A)
-                                  : Colors.white,
+                                  : (isEnabled ? Colors.white : Colors.grey.shade100),
                               borderRadius: BorderRadius.circular(20.0),
                               border: Border.all(
                                 color: isSelected 
                                     ? const Color(0xFF2D8A8A)
-                                    : Colors.grey.shade300,
+                                    : (isEnabled ? Colors.grey.shade300 : Colors.grey.shade200),
                                 width: 1.5,
                               ),
-                              boxShadow: isSelected
+                              boxShadow: isSelected && isEnabled
                                   ? [
                                       BoxShadow(
                                         color: const Color(0xFF2D8A8A).withOpacity(0.3),
@@ -98,7 +104,9 @@ class CategoryTags extends StatelessWidget {
                             child: Text(
                               category.name ?? 'Sin nombre',
                               style: TextStyle(
-                                color: isSelected ? Colors.white : Colors.black87,
+                                color: isSelected 
+                                  ? Colors.white 
+                                  : (isEnabled ? Colors.black87 : Colors.grey.shade600),
                                 fontWeight: isSelected 
                                     ? FontWeight.w600 
                                     : FontWeight.w500,

@@ -6,6 +6,7 @@ class Article {
   int? deliverID;
   int? userId;
   int? state;
+  DateTime? lastUpdate;
 
   Article ({
     this.id,
@@ -15,6 +16,7 @@ class Article {
     this.deliverID,
     this.userId,
     this.state,
+    this.lastUpdate,
   });
 
   factory Article.fromMap(Map<String, dynamic> map) {
@@ -26,6 +28,7 @@ class Article {
       deliverID: map['deliverID'] as int?,
       userId: map['userID'] as int?,
       state: map['state'] as int?,
+      lastUpdate: map['lastUpdate'] != null ? DateTime.parse(map['lastUpdate']) : null,
     );
   }
 
@@ -37,11 +40,12 @@ class Article {
       'deliverID': deliverID,
       'userID': userId,
       'state': state,
+      'lastUpdate': lastUpdate?.toIso8601String(),
     };
   }
 
   @override
   String toString() {
-    return 'Article{id: $id, name: $name, categoryID: $categoryID, description: $description, deliverID: $deliverID, userID: $userId, state: $state}';
+    return 'Article{id: $id, name: $name, categoryID: $categoryID, description: $description, deliverID: $deliverID, userID: $userId, state: $state, lastUpdate: $lastUpdate}';
   }
 }

@@ -49,11 +49,11 @@ class _MyTextFieldState extends State<MyTextField> {
             color: Color(0xFF2D8A8A)
           ),
         ),
-        fillColor: Theme.of(context).colorScheme.surface,
+        fillColor: Colors.grey.shade100,
         filled: true,
         hintText: widget.hintText,
         hintStyle: const TextStyle(
-          color: Colors.grey
+          color: Colors.grey,
         ),
         enabled: widget.isEnabled,
         prefixIcon: widget.prefixIcon,

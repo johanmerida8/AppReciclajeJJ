@@ -1,5 +1,8 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
+import 'package:internet_connection_checker/internet_connection_checker.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:reciclaje_app/auth/auth_service.dart';
 // import 'package:reciclaje_app/components/location_input.dart';
@@ -73,14 +76,79 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _isLoading = true;
   bool _hasError = false;
   String _errorMessage = '';
+
+  //internet connection
+  bool isDeviceConnected = true;
+  bool isFirstStatusCheck = true;
+  StreamSubscription<InternetConnectionStatus>? subscription;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+
+    if (subscription != null) return;
+
+    // Start listening to internet connection changes
+    subscription = InternetConnectionChecker().onStatusChange.listen((status) {
+      final isConnected = status == InternetConnectionStatus.connected;
+      
+      final message = isConnected
+          ? '✅ Conectado a Internet'
+          : '❌ Sin conexión a Internet';
+
+      // Don't show "connected" message on first check
+      if (!(isFirstStatusCheck && isConnected)) {
+        final color = isConnected ? Colors.green : Colors.red;
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(message),
+              backgroundColor: color,
+              duration: const Duration(seconds: 2),
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
+      }
+
+      isFirstStatusCheck = false;
+
+      if (mounted) {
+        setState(() {
+          isDeviceConnected = isConnected;
+        });
+      }
+    });
+  }
+
+  Future<void> _checkInitialConnection() async {
+    final hasConnection = await InternetConnectionChecker().hasConnection;
+    if (mounted) {
+      setState(() {
+        isDeviceConnected = hasConnection;
+      });
+    }
+  }
   
 
   Future<void> _loadData() async {
     print('Loading data...');
+    if (!mounted) return;
     setState(() {
       _isLoading = true;
       _hasError = false;
     });
+
+    if (!isDeviceConnected) {
+      if (!mounted) return;
+      setState(() {
+        _hasError = true;
+        _errorMessage = 'Sin conexión a Internet. Verifica tu conexión y vuelve a intentar.';
+        _isLoading = false;
+      });
+      return;
+    }
 
     try {
       // load categories first
@@ -138,6 +206,7 @@ class _HomeScreenState extends State<HomeScreen> {
         }
       }
 
+      if (!mounted) return; 
       setState(() {
         _recyclingItems = items;
         _categories = ['Todos', ...categoryNames];
@@ -147,6 +216,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
       print('Successfully loaded ${items.length} articles');
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _hasError = true;
         _errorMessage = 'Error al cargar datos: $e';
@@ -264,12 +334,15 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     print('HomeScreen initState called!');
+    _checkInitialConnection();
     _loadData();
   }
 
   @override
   void dispose() {
     _searchController.dispose();
+    subscription?.cancel();
+    subscription = null;
     super.dispose();
   }
 
@@ -616,10 +689,40 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ),
           
-          // Rest of your UI components (AppBar, SearchBar, Categories, etc.)
-          // Transparent AppBar overlay
+          if (!isDeviceConnected)
           Positioned(
             top: 0,
+            left: 0,
+            right: 0,
+            child: Container(
+              width: double.infinity,
+              padding: EdgeInsets.only(
+                top: MediaQuery.of(context).padding.top + 8,
+                bottom: 8,
+                left: 16,
+                right: 16,
+              ),
+              color: Colors.red.shade100,
+              child: Row(
+                children: [
+                  Icon(Icons.wifi_off, color: Colors.red, size: 16),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Sin conexión a Internet',
+                    style: TextStyle(
+                      color: Colors.red.shade700,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+
+          // Transparent AppBar overlay
+          Positioned(
+            top: isDeviceConnected ? 0 : 35,
             left: 0,
             right: 0,
             child: Container(
@@ -649,14 +752,46 @@ class _HomeScreenState extends State<HomeScreen> {
                         ),
                       ),
                       const Spacer(),
+                      // ADD CONNECTION INDICATOR
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: isDeviceConnected 
+                            ? Colors.green.withOpacity(0.8)
+                            : Colors.red.withOpacity(0.8),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            isDeviceConnected ? Icons.wifi : Icons.wifi_off,
+                            color: Colors.white,
+                            size: 12,
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            isDeviceConnected ? 'En línea' : 'Sin conexión',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 8),
                       // Refresh button
                       IconButton(
-                        onPressed: _refreshData,
-                        icon: const Icon(
+                        onPressed: isDeviceConnected ? _refreshData : null,
+                        icon: Icon(
                           Icons.refresh,
-                          color: Colors.white,
+                          color: isDeviceConnected ? Colors.white : Colors.white54,
                         ),
-                        tooltip: 'Actualizar datos',
+                        tooltip: isDeviceConnected
+                            ? 'Actualizar datos'
+                            : 'Sin conexión',
                       ),
                       IconButton(
                         onPressed: () {},
@@ -692,7 +827,7 @@ class _HomeScreenState extends State<HomeScreen> {
           
           // Search bar
           Positioned(
-            top: MediaQuery.of(context).padding.top + 70,
+            top: (isDeviceConnected ? 0 : 35) + MediaQuery.of(context).padding.top + 70,
             left: 16,
             right: 16,
             child: Container(
@@ -742,7 +877,7 @@ class _HomeScreenState extends State<HomeScreen> {
           // Category filter overlay
           if (!_isLoading)
             Positioned(
-              top: MediaQuery.of(context).padding.top + 125,
+              top: (isDeviceConnected ? 0 : 35) + MediaQuery.of(context).padding.top + 125,
               left: 0,
               right: 0,
               child: Container(
@@ -830,7 +965,7 @@ class _HomeScreenState extends State<HomeScreen> {
           // Search results info
           if (_searchQuery.isNotEmpty && !_isLoading)
             Positioned(
-              top: MediaQuery.of(context).padding.top + 195,
+              top: (isDeviceConnected ? 0 : 35) + MediaQuery.of(context).padding.top + 195,
               left: 16,
               right: 16,
               child: Container(

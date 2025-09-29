@@ -4,7 +4,9 @@ import 'package:flutter/material.dart';
 import 'package:reciclaje_app/auth/auth_service.dart';
 import 'package:reciclaje_app/components/my_button.dart';
 import 'package:reciclaje_app/components/my_textfield.dart';
+import 'package:reciclaje_app/components/password_validator.dart';
 import 'package:reciclaje_app/screen/login_screen.dart';
+import 'package:reciclaje_app/utils/password_utils.dart';
 
 class ResetPasswordScreen extends StatefulWidget {
   final String email;
@@ -24,14 +26,28 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
   final authService = AuthService();
   final newPasswordController = TextEditingController();
   final confirmPasswordController = TextEditingController();
+
+  bool _showPasswordValidator = false;
+
   bool isLoading = false;
 
   @override
-  void dispose() {
-    newPasswordController.dispose();
-    confirmPasswordController.dispose();
-    super.dispose();
+  void initState() {
+    super.initState();
+    newPasswordController.addListener(() {
+      setState(() {
+        _showPasswordValidator = newPasswordController.text.isNotEmpty;
+        print('New password input changed: ${newPasswordController.text}');
+      });
+    });
   }
+
+  // @override
+  // void dispose() {
+  //   newPasswordController.dispose();
+  //   confirmPasswordController.dispose();
+  //   super.dispose();
+  // }
 
   void resetPassword() async {
     if (newPasswordController.text.trim().isEmpty) {
@@ -48,9 +64,9 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
       return;
     }
 
-    if (newPasswordController.text.length < 6) {
+    if (newPasswordController.text.length < 8) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('La contraseña debe tener al menos 6 caracteres')),
+        const SnackBar(content: Text('La contraseña debe tener al menos 8 caracteres')),
       );
       return;
     }
@@ -71,6 +87,12 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
         widget.email, 
         newPasswordController.text.trim(), 
       );
+
+      // call the logPasswordResetAttempt method to log the successful reset
+      await authService.logPasswordResetAttempt(widget.email);
+
+      // clean up expired OTPs after successful password reset
+      await authService.cleanupExpiredOTPs();
       
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Contraseña restablecida con éxito')),
@@ -83,8 +105,12 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
         (route) => false,
       );
     } catch (e) {
+      print('🚫 Error in resetPassword: $e');
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error: $e')),
+        SnackBar(
+          content: Text('Error al restablecer la contraseña: $e'),
+          backgroundColor: Colors.red,
+        ),
       );
     } finally {
       setState(() {
@@ -112,19 +138,10 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
           child: Column(
             children: [
               // Top section
-              Container(
+              SizedBox(
                 height: MediaQuery.of(context).size.height * 0.3,
                 child: Stack(
                   children: [
-                    // Back button
-                    // Positioned(
-                    //   top: 20,
-                    //   left: 20,
-                    //   child: IconButton(
-                    //     onPressed: () => Navigator.pop(context),
-                    //     icon: const Icon(Icons.arrow_back, color: Colors.white),
-                    //   ),
-                    // ),
                     // Title
                     const Positioned(
                       bottom: 40,
@@ -174,51 +191,78 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
                       topRight: Radius.circular(30),
                     ),
                   ),
-                  padding: const EdgeInsets.all(30.0),
-                  child: Column(
-                    children: [
-                      const SizedBox(height: 40),
-                      Text(
-                        'Creando nueva contraseña para',
-                        style: TextStyle(
-                          fontSize: 16,
-                          color: Colors.grey[600],
+                  child: SingleChildScrollView(
+
+                    child: Column(
+                      children: [
+                        const SizedBox(height: 40),
+                        Text(
+                          'Creando nueva contraseña para',
+                          style: TextStyle(
+                            fontSize: 16,
+                            color: Colors.grey[600],
+                          ),
                         ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        widget.email,
-                        style: const TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
+                        const SizedBox(height: 8),
+                        Text(
+                          widget.email,
+                          style: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                            color: Color(0xFF2D8A8A),
+                          ),
+                        ),
+                        const SizedBox(height: 40),
+                        // New password field
+                        MyTextField(
+                          controller: newPasswordController,
+                          hintText: 'Nueva contraseña',
+                          obscureText: true,
+                          isEnabled: true,
+                        ),
+                        const SizedBox(height: 20),
+                        // Confirm password field
+                        MyTextField(
+                          controller: confirmPasswordController,
+                          hintText: 'Confirmar contraseña',
+                          obscureText: true,
+                          isEnabled: true,
+                        ),
+                        if (_showPasswordValidator) ...[
+                          const SizedBox(height: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 25),
+                            child: Row(
+                              children: [
+                                // Text(
+                                //   'Seguridad: ',
+                                //   style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                                // ),
+                                // Text(
+                                //   PasswordUtils.getPasswordStrength(passwordController.text),
+                                //   style: TextStyle(
+                                //     fontSize: 12,
+                                //     fontWeight: FontWeight.bold,
+                                //     color: PasswordUtils.getPasswordStrengthColor(passwordController.text),
+                                //   ),
+                                // ),
+                              ],
+                            ),
+                          ),
+                        ],
+
+                        if (_showPasswordValidator)
+                          PasswordValidator(password: newPasswordController.text),
+                        const SizedBox(height: 40),
+                        // Reset button
+                        MyButton(
+                          onTap: isLoading ? null : resetPassword,
+                          text: isLoading ? "Guardando..." : "Restablecer Contraseña",
                           color: Color(0xFF2D8A8A),
                         ),
-                      ),
-                      const SizedBox(height: 40),
-                      // New password field
-                      MyTextField(
-                        controller: newPasswordController,
-                        hintText: 'Nueva contraseña',
-                        obscureText: true,
-                        isEnabled: true,
-                      ),
-                      const SizedBox(height: 20),
-                      // Confirm password field
-                      MyTextField(
-                        controller: confirmPasswordController,
-                        hintText: 'Confirmar contraseña',
-                        obscureText: true,
-                        isEnabled: true,
-                      ),
-                      const SizedBox(height: 40),
-                      // Reset button
-                      MyButton(
-                        onTap: isLoading ? null : resetPassword,
-                        text: isLoading ? "Guardando..." : "Restablecer Contraseña",
-                        color: Color(0xFF2D8A8A),
-                      ),
-                      const SizedBox(height: 50),
-                    ],
+                        const SizedBox(height: 50),
+                      ],
+                    ),
                   ),
                 ),
               ),

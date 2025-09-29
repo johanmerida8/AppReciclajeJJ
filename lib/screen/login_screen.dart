@@ -62,10 +62,20 @@ class _LoginScreenState extends State<LoginScreen> {
         
         print("Login successful for user: $email");
 
+
+
         // Navigate to home screen
         if (mounted) {
           //hide the loading snackbar
           ScaffoldMessenger.of(context).hideCurrentSnackBar();
+
+          // show success snackbar
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text("Inicio de sesion exitoso!"),
+              backgroundColor: Colors.green,
+            ),
+          );
 
           // navigate to home screen
           Navigator.of(context).pushReplacement(
@@ -75,8 +85,16 @@ class _LoginScreenState extends State<LoginScreen> {
     }
     catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e")));
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text("Error al iniciar sesion"),
+            backgroundColor: Colors.red,
+          ),
+        );
       }
+      print("Error during login: $e");
     }
   }
 
@@ -92,7 +110,7 @@ class _LoginScreenState extends State<LoginScreen> {
           ),
         ),
         child: SafeArea(
-          child: SingleChildScrollView(
+          
             child: ConstrainedBox(
               constraints: BoxConstraints(
                 minHeight:
@@ -150,125 +168,127 @@ class _LoginScreenState extends State<LoginScreen> {
                         ),
                       ),
                       // Login form card
-                      Container(
-                        width: double.infinity,
-                        constraints: BoxConstraints(
-                          minHeight: MediaQuery.of(context).size.height * 0.6,
-                        ),
-                        decoration: const BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.only(
-                            topLeft: Radius.circular(30),
-                            topRight: Radius.circular(30),
+                      Expanded(
+                        child: Container(
+                          width: double.infinity,
+                          constraints: BoxConstraints(
+                            minHeight: MediaQuery.of(context).size.height * 0.6,
                           ),
-                        ),
-                        child: Padding(
-                          padding: const EdgeInsets.all(30.0),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              // const SizedBox(
-                              //   height: 60,
-                              // ), // Extra space for the pot
-                              Row(
-                                children: [
-                                  Text(
-                                      'Iniciar Sesion',
-                                      style: TextStyle(
-                                        color: Color(0xFF2D8A8A),
-                                        fontSize: 24,
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                    ),
-
-                                  Spacer(),
-
-                                  Image.asset(
-                                      'lib/images/Pot2.png',
-                                      width: 80,
-                                      height: 120,
-                                      fit: BoxFit.contain,
-                                    ),
-
-                                ],
-                              ),
-                              const SizedBox(height: 40),
-                              MyTextField(
-                                controller: usernameController,
-                                hintText: 'Correo',
-                                obscureText: false,
-                                isEnabled: true,
-                              ),
-                              const SizedBox(height: 20),
-                              MyTextField(
-                                controller: passwordController,
-                                hintText: 'Contraseña',
-                                obscureText: true,
-                                isEnabled: true,
-                              ),
-                              const SizedBox(height: 15),
-                              Align(
-                                alignment: Alignment.centerRight,
-                                  child: GestureDetector(
-                                    onTap:() {
-                                      Navigator.push(
-                                        context,
-                                        MaterialPageRoute(
-                                          builder: (context) {
-                                            return RecoverPasswordScreen();
-                                          },
-                                        ),
-                                      );
-                                    },
-                                    child: Text(
-                                      'Recuperar contraseña',
-                                      style: TextStyle(
-                                        color: Color(0xFF2D8A8A),
-                                        fontSize: 14,
-                                      ),
-                                    ),
-                                  ),     
-                                ),
-                              const SizedBox(height: 40),
-                              MyButton(
-                                onTap: signUserIn,
-                                text: "Iniciar Sesion",
-                                color: Color(0xFF2D8A8A),
-                              ),
-                              const SizedBox(height: 80),
-                              Center(
-                                child: Row(
-                                  mainAxisAlignment: MainAxisAlignment.center,
+                          decoration: const BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.only(
+                              topLeft: Radius.circular(30),
+                              topRight: Radius.circular(30),
+                            ),
+                          ),
+                          child: SingleChildScrollView(
+                            padding: const EdgeInsets.all(30.0),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                // const SizedBox(
+                                //   height: 60,
+                                // ), // Extra space for the pot
+                                Row(
                                   children: [
                                     Text(
-                                      'No tienes cuenta? ',
-                                      style: TextStyle(color: Colors.grey),
-                                    ),
-                                    GestureDetector(
-                                      onTap: () {
+                                        'Iniciar Sesion',
+                                        style: TextStyle(
+                                          color: Color(0xFF2D8A8A),
+                                          fontSize: 24,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                        
+                                    Spacer(),
+                        
+                                    Image.asset(
+                                        'lib/images/Pot2.png',
+                                        width: 80,
+                                        height: 120,
+                                        fit: BoxFit.contain,
+                                      ),
+                        
+                                  ],
+                                ),
+                                const SizedBox(height: 40),
+                                MyTextField(
+                                  controller: usernameController,
+                                  hintText: 'Correo',
+                                  obscureText: false,
+                                  isEnabled: true,
+                                ),
+                                const SizedBox(height: 20),
+                                MyTextField(
+                                  controller: passwordController,
+                                  hintText: 'Contraseña',
+                                  obscureText: true,
+                                  isEnabled: true,
+                                ),
+                                const SizedBox(height: 15),
+                                Align(
+                                  alignment: Alignment.centerRight,
+                                    child: GestureDetector(
+                                      onTap:() {
                                         Navigator.push(
                                           context,
                                           MaterialPageRoute(
                                             builder: (context) {
-                                              return RegisterScreen();
+                                              return RecoverPasswordScreen();
                                             },
                                           ),
                                         );
                                       },
                                       child: Text(
-                                        'Registrate',
+                                        'Recuperar contraseña',
                                         style: TextStyle(
                                           color: Color(0xFF2D8A8A),
-                                          fontWeight: FontWeight.bold,
+                                          fontSize: 14,
                                         ),
                                       ),
-                                    ),
-                                  ],
+                                    ),     
+                                  ),
+                                const SizedBox(height: 40),
+                                MyButton(
+                                  onTap: signUserIn,
+                                  text: "Iniciar Sesion",
+                                  color: Color(0xFF2D8A8A),
                                 ),
-                              ),
-                              const SizedBox(height: 30),
-                            ],
+                                const SizedBox(height: 80),
+                                Center(
+                                  child: Row(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      Text(
+                                        'No tienes cuenta? ',
+                                        style: TextStyle(color: Colors.grey),
+                                      ),
+                                      GestureDetector(
+                                        onTap: () {
+                                          Navigator.push(
+                                            context,
+                                            MaterialPageRoute(
+                                              builder: (context) {
+                                                return RegisterScreen();
+                                              },
+                                            ),
+                                          );
+                                        },
+                                        child: Text(
+                                          'Registrate',
+                                          style: TextStyle(
+                                            color: Color(0xFF2D8A8A),
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                const SizedBox(height: 30),
+                              ],
+                            ),
                           ),
                         ),
                       ),
@@ -279,7 +299,6 @@ class _LoginScreenState extends State<LoginScreen> {
             ),
           ),
         ),
-      ),
     );
   }
 }

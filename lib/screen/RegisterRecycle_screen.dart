@@ -1,18 +1,25 @@
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:reciclaje_app/auth/auth_service.dart';
+import 'package:reciclaje_app/components/image_modal.dart';
 import 'package:reciclaje_app/components/my_button.dart';
 import 'package:reciclaje_app/components/category_tags.dart';
 import 'package:reciclaje_app/components/my_textformfield.dart';
 import 'package:reciclaje_app/components/limit_character_two.dart';
+// import 'package:reciclaje_app/components/row_button.dart';
+import 'package:reciclaje_app/components/row_button_2.dart';
 import 'package:reciclaje_app/database/article_database.dart';
 import 'package:reciclaje_app/database/category_database.dart';
 import 'package:reciclaje_app/database/deliver_database.dart';
+import 'package:reciclaje_app/database/photo_database.dart';
 import 'package:reciclaje_app/database/users_database.dart';
 import 'package:reciclaje_app/model/article.dart';
 import 'package:reciclaje_app/model/category.dart';
 import 'package:reciclaje_app/model/deliver.dart';
+import 'package:reciclaje_app/model/photo.dart';
 import 'package:reciclaje_app/screen/map_picker_screen.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 class RegisterRecycleScreen extends StatefulWidget {
 
@@ -35,6 +42,7 @@ class _RegisterRecycleScreenState extends State<RegisterRecycleScreen> {
   final articleDatabase = ArticleDatabase();
   final categoryDatabase = CategoryDatabase();
   final deliverDatabase = DeliverDatabase();
+  final photoDatabase = PhotoDatabase();
   
   List<Category> _categories = [];
   Category? _selectedCategory;
@@ -45,10 +53,29 @@ class _RegisterRecycleScreenState extends State<RegisterRecycleScreen> {
   LatLng? _selectedLocation;
   String? _selectedAddress;
 
+  List<XFile> pickedImages = [];
+  bool isImageReceived = false;
+
+  bool _isUploadingImages = false;
+  int _uploadedImagesCount = 0;
+
   @override
   void initState() {
     super.initState();
     _loadCategories();
+  }
+
+  @override
+  void dispose() {
+    _itemNameController.dispose();
+    _descriptionController.dispose();
+    super.dispose();
+  }
+
+  void _onImagesChanged(List<XFile> images) {
+    setState(() {
+      pickedImages = images;
+    });
   }
 
   Future<void> _loadCategories() async {
@@ -59,10 +86,6 @@ class _RegisterRecycleScreenState extends State<RegisterRecycleScreen> {
         _selectedCategory = categories.isNotEmpty ? categories.first : null;
         _isLoading = false;
       });
-      
-      // if (widget.isEdit && widget.existingArticle != null) {
-
-      // }
 
     } catch (e) {
       setState(() {
@@ -174,16 +197,29 @@ class _RegisterRecycleScreenState extends State<RegisterRecycleScreen> {
         state: 1, // Active state
       );
 
-      await articleDatabase.createArticle(newArticle);
+      final articleId = await articleDatabase.createArticle(newArticle);
 
-      // Show success message with option to continue or go back
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('¡Artículo registrado exitosamente por ${currentUser.names}!'),
-          backgroundColor: Colors.green,
-          duration: const Duration(seconds: 4),
+      // upload and save photos if any exist
+      if (pickedImages.isNotEmpty) {
+        if (currentUser.id != null) {
+          await _uploadAndSavePhotos(articleId, currentUser.id.toString());
+        } else {
+          throw Exception('El ID del usuario es nulo');
+        }
+      }
+
+      // Show success message with photo count
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          pickedImages.isNotEmpty 
+              ? '¡Artículo con ${pickedImages.length} fotos registrado exitosamente por ${currentUser.names}!'
+              : '¡Artículo registrado exitosamente por ${currentUser.names}!'
         ),
-      );
+        backgroundColor: Colors.green,
+        duration: const Duration(seconds: 4),
+      ),
+    );
 
       // clear form
       _clearForm();
@@ -202,6 +238,92 @@ class _RegisterRecycleScreenState extends State<RegisterRecycleScreen> {
     }
   }
 
+  Future<void> _uploadAndSavePhotos(int articleId, String userId) async {
+  if (pickedImages.isEmpty) return;
+
+  setState(() {
+    _isUploadingImages = true;
+    _uploadedImagesCount = 0;
+  });
+
+  try {
+    final storage = Supabase.instance.client.storage;
+
+    for (int i = 0; i < pickedImages.length; i++) {
+      final image = pickedImages[i];
+      
+      // Clean the image name and create a unique filename
+      final timestamp = DateTime.now().millisecondsSinceEpoch;
+      final cleanUserId = userId.replaceAll(RegExp(r'[^a-zA-Z0-9]'), ''); // Remove special characters
+      final extension = image.name.split('.').last.toLowerCase();
+
+      //validate file extension
+      if (!['jpg', 'jpeg', 'png'].contains(extension)) {
+        throw Exception('Formato de imagen no valido: $extension');
+      }
+
+      final fileName = '${timestamp}_${i}_article_${articleId}.$extension';
+      final filePath = 'users/$cleanUserId/articles/$fileName';
+
+      print('Uploading file: $filePath'); // Debug log
+
+      // Read the file as bytes
+      final bytes = await image.readAsBytes();
+
+      // Upload to supabase storage
+      final uploadResponse = await storage.from('article-images').uploadBinary(
+        filePath, 
+        bytes,
+        fileOptions: const FileOptions(
+          cacheControl: '3600',
+          upsert: false,
+        ),
+      );
+
+      print('Upload response: $uploadResponse'); // Debug log
+
+      // Get the public url
+      final publicUrl = storage.from('article-images').getPublicUrl(filePath);
+      
+      print('Public URL: $publicUrl'); // Debug log
+
+      // Create photo record in the database
+      final newPhoto = Photo(
+        articleID: articleId,
+        url: publicUrl,
+        fileName: fileName,
+        filePath: filePath,
+        fileSize: bytes.length,
+        mimeType: 'image/$extension',
+        isMain: i == 0, // First image as main
+        uploadOrder: i,
+        // lastUpdate: DateTime.now(),
+      );
+
+      await photoDatabase.createPhoto(newPhoto);
+
+      setState(() {
+        _uploadedImagesCount = i + 1;
+      });
+
+      print('Photo ${i + 1}/${pickedImages.length} saved: ${newPhoto.fileName}');
+      print('  fileName: ${newPhoto.fileName}');   // ✅ Debug both values
+      print('  filePath: ${newPhoto.filePath}');
+    }
+
+    print('✅ Todas las fotos guardadas correctamente para el articulo $articleId');
+
+  } catch(e) {
+    print('❌ Error detallado en subir y guardar fotos: $e');
+    throw Exception('Error al subir imágenes: $e');
+  } finally {
+    setState(() {
+      _isUploadingImages = false;
+      _uploadedImagesCount = 0;
+    });
+  }
+}
+
   void _clearForm() {
     _itemNameController.clear();
     _descriptionController.clear();
@@ -209,6 +331,7 @@ class _RegisterRecycleScreenState extends State<RegisterRecycleScreen> {
       _selectedCategory = _categories.isNotEmpty ? _categories.first : null;
       _selectedLocation = null;
       _selectedAddress = null;
+      pickedImages = []; // Clear the images
     });
   }
 
@@ -223,7 +346,7 @@ class _RegisterRecycleScreenState extends State<RegisterRecycleScreen> {
                 ),
               )
             : SingleChildScrollView(
-                padding: const EdgeInsets.all(16.0),
+                padding: const EdgeInsets.all(25.0),
                 child: Form(
                   key: _formKey,
                   child: Column(
@@ -240,10 +363,19 @@ class _RegisterRecycleScreenState extends State<RegisterRecycleScreen> {
                       ),
                       const SizedBox(height: 20),
 
+                      ImageRow(
+                        images: pickedImages, 
+                        onImagesChanged: _onImagesChanged,
+                        maxImages: 10,
+                      ),
+
+                      const SizedBox(height: 20),
+
                       // Item name field
                       MyTextFormField(
                         controller: _itemNameController,
                         hintText: 'Nombre del artículo',
+                        text: 'Nombre del artículo',
                         obscureText: false,
                         isEnabled: true,
                         prefixIcon: const Icon(Icons.recycling),
@@ -278,7 +410,7 @@ class _RegisterRecycleScreenState extends State<RegisterRecycleScreen> {
                       // Description field using LimitCharacterTwo
                       LimitCharacterTwo(
                         controller: _descriptionController,
-                        hintText: 'Describe tu artículo (opcional)',
+                        hintText: 'Describe tu artículo',
                         text: 'Descripción',
                         obscureText: false,
                         isEnabled: true,
@@ -378,7 +510,7 @@ class _RegisterRecycleScreenState extends State<RegisterRecycleScreen> {
                                 color: Colors.grey,
                                 borderRadius: BorderRadius.circular(8),
                               ),
-                              child: const Row(
+                              child: Row(
                                 mainAxisAlignment: MainAxisAlignment.center,
                                 children: [
                                   SizedBox(
@@ -391,13 +523,25 @@ class _RegisterRecycleScreenState extends State<RegisterRecycleScreen> {
                                   ),
                                   SizedBox(width: 8),
                                   Text(
-                                    'Registrando...',
+                                    _isUploadingImages 
+                                    ? 'Subiendo imagenes...'
+                                    : 'Registrando...',
                                     style: TextStyle(
                                       color: Colors.white,
                                       fontWeight: FontWeight.bold,
                                       fontSize: 16,
                                     ),
                                   ),
+                                  if (_isUploadingImages && pickedImages.isNotEmpty) ...[
+                                    const SizedBox(height: 8),
+                                    Text(
+                                      '$_uploadedImagesCount de ${pickedImages.length} fotos',
+                                      style: const TextStyle(
+                                        color: Colors.white70,
+                                        fontSize: 12,
+                                      ),
+                                    ),
+                                  ],
                                 ],
                               ),
                             )
@@ -412,12 +556,5 @@ class _RegisterRecycleScreenState extends State<RegisterRecycleScreen> {
               ),
         ),
     );
-  }
-
-  @override
-  void dispose() {
-    _itemNameController.dispose();
-    _descriptionController.dispose();
-    super.dispose();
   }
 }

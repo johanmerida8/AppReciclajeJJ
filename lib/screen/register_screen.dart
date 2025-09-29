@@ -161,7 +161,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
         // show error message
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Error al crear la cuenta: $e'),
+            content: Text('Error al crear la cuenta'),
             backgroundColor: Colors.red,
           ),
         );
@@ -182,7 +182,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
           ),
         ),
         child: SafeArea(
-          child: SingleChildScrollView(
             child: ConstrainedBox(
               constraints: BoxConstraints(
                 minHeight:
@@ -194,7 +193,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   Column(
                     children: [
                       // Top section with decorative elements
-                      Container(
+                      SizedBox(
                         height: MediaQuery.of(context).size.height * 0.25,
                         child: Stack(
                           children: [
@@ -213,165 +212,154 @@ class _RegisterScreenState extends State<RegisterScreen> {
                         ),
                       ),
                       // Login form card
-                      Container(
-                        width: double.infinity,
-                        constraints: BoxConstraints(
-                          minHeight: MediaQuery.of(context).size.height * 0.6,
-                        ),
-                        decoration: const BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.only(
-                            topLeft: Radius.circular(30),
-                            topRight: Radius.circular(30),
+                      Expanded(
+                        child: Container(
+                          width: double.infinity,
+                          constraints: BoxConstraints(
+                            minHeight: MediaQuery.of(context).size.height * 0.6,
                           ),
-                        ),
-                        child: Padding(
-                          padding: const EdgeInsets.all(30.0),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              // const SizedBox(height: 60), // Extra space for the pot
-                              Row(
-                                children: [
-                                  Padding(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 25.0,
-                                    ),
-                                    child: const Text(
-                                      'Registrate',
-                                      style: TextStyle(
-                                        color: Color(0xFF2D8A8A),
-                                        fontSize: 24,
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                    ),
-                                  ),
-
-                                  Spacer(),
-
-                                  Image.asset(
-                                    'lib/images/Pot2.png',
-                                    width: 80,
-                                    height: 120,
-                                    fit: BoxFit.contain,
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 40),
-                              MyTextField(
-                                controller: namesController,
-                                hintText: 'Nombres',
-                                obscureText: false, isEnabled: true,
-                              ),
-                              const SizedBox(height: 20),
-                              MyTextField(
-                                controller: emailController,
-                                hintText: 'Correo',
-                                obscureText: false, isEnabled: true,
-                              ),
-                              const SizedBox(height: 20),
-                              MyTextField(
-                                controller: passwordController,
-                                hintText: 'Contraseña',
-                                obscureText: true, isEnabled: true,
-                              ),
-                              const SizedBox(height: 20),
-                              MyTextField(
-                                controller: confirmPasswordController,
-                                hintText: 'Confirmar contraseña',
-                                obscureText: true, isEnabled: true,
-                              ),
-
-                              if (_showPasswordValidator) ...[
-                                const SizedBox(height: 8),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 25),
-                                  child: Row(
-                                    children: [
-                                      // Text(
-                                      //   'Seguridad: ',
-                                      //   style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-                                      // ),
-                                      // Text(
-                                      //   PasswordUtils.getPasswordStrength(passwordController.text),
-                                      //   style: TextStyle(
-                                      //     fontSize: 12,
-                                      //     fontWeight: FontWeight.bold,
-                                      //     color: PasswordUtils.getPasswordStrengthColor(passwordController.text),
-                                      //   ),
-                                      // ),
-                                    ],
-                                  ),
-                                ),
-                              ],
-
-                              if (_showPasswordValidator)
-                                PasswordValidator(password: passwordController.text),
-
-                              const SizedBox(height: 40),
-                              MyButton(
-                                onTap: signUserUp, 
-                                text: "Registrate",
-                                color: Color(0xFF2D8A8A),
-                              ),
-                              const SizedBox(height: 80),
-                              Center(
-                                child: Row(
-                                  mainAxisAlignment: MainAxisAlignment.center,
+                          decoration: const BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.only(
+                              topLeft: Radius.circular(30),
+                              topRight: Radius.circular(30),
+                            ),
+                          ),
+                          child: SingleChildScrollView(
+                            padding: const EdgeInsets.all(30.0),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                // const SizedBox(height: 60), // Extra space for the pot
+                                Row(
                                   children: [
-                                    Text(
-                                      'Ya tienes cuenta? ',
-                                      style: TextStyle(color: Colors.grey),
-                                    ),
-                                    GestureDetector(
-                                      onTap: () {
-                                        Navigator.push(
-                                          context,
-                                          MaterialPageRoute(
-                                            builder: (context) {
-                                              return LoginScreen();
-                                            },
-                                          ),
-                                        );
-                                      },
-                                      child: Text(
-                                        'Inicia Sesion',
+                                    Padding(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 25.0,
+                                      ),
+                                      child: const Text(
+                                        'Registrate',
                                         style: TextStyle(
                                           color: Color(0xFF2D8A8A),
+                                          fontSize: 24,
                                           fontWeight: FontWeight.bold,
                                         ),
                                       ),
                                     ),
+                        
+                                    Spacer(),
+                        
+                                    Image.asset(
+                                      'lib/images/Pot2.png',
+                                      width: 80,
+                                      height: 120,
+                                      fit: BoxFit.contain,
+                                    ),
                                   ],
                                 ),
-                              ),
-                              const SizedBox(height: 30),
-                            ],
+                                const SizedBox(height: 40),
+                                MyTextField(
+                                  controller: namesController,
+                                  hintText: 'Nombres',
+                                  obscureText: false, isEnabled: true,
+                                ),
+                                const SizedBox(height: 20),
+                                MyTextField(
+                                  controller: emailController,
+                                  hintText: 'Correo',
+                                  obscureText: false, isEnabled: true,
+                                ),
+                                const SizedBox(height: 20),
+                                MyTextField(
+                                  controller: passwordController,
+                                  hintText: 'Contraseña',
+                                  obscureText: true, isEnabled: true,
+                                ),
+                                const SizedBox(height: 20),
+                                MyTextField(
+                                  controller: confirmPasswordController,
+                                  hintText: 'Confirmar contraseña',
+                                  obscureText: true, isEnabled: true,
+                                ),
+                        
+                                if (_showPasswordValidator) ...[
+                                  const SizedBox(height: 8),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 25),
+                                    child: Row(
+                                      children: [
+                                        // Text(
+                                        //   'Seguridad: ',
+                                        //   style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                                        // ),
+                                        // Text(
+                                        //   PasswordUtils.getPasswordStrength(passwordController.text),
+                                        //   style: TextStyle(
+                                        //     fontSize: 12,
+                                        //     fontWeight: FontWeight.bold,
+                                        //     color: PasswordUtils.getPasswordStrengthColor(passwordController.text),
+                                        //   ),
+                                        // ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                        
+                                if (_showPasswordValidator)
+                                  PasswordValidator(password: passwordController.text),
+                        
+                                const SizedBox(height: 40),
+                                MyButton(
+                                  onTap: signUserUp, 
+                                  text: "Registrate",
+                                  color: Color(0xFF2D8A8A),
+                                ),
+                                const SizedBox(height: 80),
+                                Center(
+                                  child: Row(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      Text(
+                                        'Ya tienes cuenta? ',
+                                        style: TextStyle(color: Colors.grey),
+                                      ),
+                                      GestureDetector(
+                                        onTap: () {
+                                          Navigator.push(
+                                            context,
+                                            MaterialPageRoute(
+                                              builder: (context) {
+                                                return LoginScreen();
+                                              },
+                                            ),
+                                          );
+                                        },
+                                        child: Text(
+                                          'Inicia Sesion',
+                                          style: TextStyle(
+                                            color: Color(0xFF2D8A8A),
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                const SizedBox(height: 30),
+                              ],
+                            ),
                           ),
                         ),
                       ),
                     ],
                   ),
-                  // Pot image positioned between sections
-                  // Positioned(
-                  //   top: MediaQuery.of(context).size.height * 0.4 - 130, // Position at the overlap
-                  //   right: 50,
-                  //   child: Container(
-                  //     child: Image.asset(
-                  //       'lib/images/Pot2.png',
-                  //       width: 120,
-                  //       height: 180,
-                  //       fit: BoxFit.contain,
-                  //     ),
-                  //   ),
-                  // ),
                 ],
               ),
             ),
           ),
         ),
-      ),
+      
     );
   }
 }

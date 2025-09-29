@@ -1,7 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:reciclaje_app/auth/auth_service.dart';
+import 'package:reciclaje_app/components/photo_gallery_widget.dart';
+import 'package:reciclaje_app/components/photo_validation.dart';
+// import 'package:reciclaje_app/components/row_button_2.dart';
+import 'package:reciclaje_app/database/photo_database.dart';
+import 'package:reciclaje_app/model/photo.dart';
 import 'package:reciclaje_app/screen/home_screen.dart';
 import 'package:reciclaje_app/components/my_button.dart';
 import 'package:reciclaje_app/components/category_tags.dart';
@@ -15,6 +21,7 @@ import 'package:reciclaje_app/model/category.dart';
 import 'package:reciclaje_app/model/deliver.dart';
 import 'package:reciclaje_app/screen/map_picker_screen.dart';
 import 'package:reciclaje_app/screen/navigation_screens.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 class DetailRecycleScreen extends StatefulWidget {
   final RecyclingItem item;
@@ -35,11 +42,24 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
   final articleDatabase = ArticleDatabase();
   final categoryDatabase = CategoryDatabase();
   final deliverDatabase = DeliverDatabase();
+  final photoDatabase = PhotoDatabase();  
 
   final _authService = AuthService();
   String? _currentUserEmail;
   
   List<Category> _categories = [];
+  List<Photo> _photos = [];
+  List<Photo> _photosToDelete = [];
+  List<XFile> pickedImages = [];
+
+  Photo? _mainPhoto;
+  bool _isLoadingPhotos = true;
+
+  final ImagePicker _imagePicker = ImagePicker();
+  bool _isUploadingPhoto = false;
+  int _uploadedPhotoCount = 0;
+  
+
   Category? _selectedCategory;
   bool _isLoading = true;
   bool _isSubmitting = false;
@@ -61,6 +81,7 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
     super.initState();
     _initializeData();
     _loadCategories();
+    _loadPhotos();
 
     _currentUserEmail = _authService.getCurrentUserEmail();
   }
@@ -88,6 +109,183 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
       name: widget.item.categoryName,
     );
   }
+
+  void _onImagesChanged(List<XFile> images) {
+    setState(() {
+      pickedImages = images;
+    });
+  }
+
+  Future<void> _loadPhotos() async {
+    try {
+      setState(() {
+        _isLoadingPhotos = true;
+      });
+
+      // load all photos for this article
+      final photos = await photoDatabase.getPhotosByArticleId(widget.item.id);
+      final mainPhoto = await photoDatabase.getMainPhotoByArticleId(widget.item.id);
+
+      setState(() {
+        _photos = photos;
+        _mainPhoto = mainPhoto;
+        _isLoadingPhotos = false;
+      });
+
+      print ('Loaded ${_photos.length} photos for article ${widget.item.id}');
+
+    } catch (e) {
+      setState(() {
+        _isLoadingPhotos = false;
+      });
+      print('Error loading photos: $e');
+    }
+  }
+
+  Future<void> _addPhoto() async {
+  try {
+    // Check photo limit (including existing photos + picked images)
+    final totalPhotos = _photos.length + (_mainPhoto != null ? 1 : 0) + pickedImages.length;
+    if (totalPhotos >= 10) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Límite de 10 fotos alcanzado'), backgroundColor: Colors.orange),
+      );
+      return;
+    }
+
+    setState(() => _isUploadingPhoto = true);
+
+    // Pick multiple images from gallery
+    final List<XFile>? newImages = await _imagePicker.pickMultiImage(
+      maxWidth: 1920,
+      maxHeight: 1080,
+      imageQuality: 80,
+    );
+
+    if (newImages != null && newImages.isNotEmpty) {
+      // Calculate remaining slots
+      final remainingSlots = 10 - totalPhotos;
+      final imagesToAdd = newImages.take(remainingSlots).toList();
+      
+      // Add to picked images list
+      _onImagesChanged([...pickedImages, ...imagesToAdd]);
+      
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('${imagesToAdd.length} foto(s) seleccionada(s)'), 
+          backgroundColor: Colors.green
+        ),
+      );
+    }
+  } catch (e) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
+    );
+  } finally {
+    setState(() => _isUploadingPhoto = false);
+  }
+}
+
+  Future<void> _uploadAndSavePhotos(int articleId, String userId) async {
+  if (pickedImages.isEmpty) return;
+
+  setState(() {
+    _isUploadingPhoto = true;
+    _uploadedPhotoCount = 0;
+  });
+
+  try {
+    final storage = Supabase.instance.client.storage;
+
+    // Get the current photos count to continue the upload order sequence
+    final existingPhotosCount = await photoDatabase.getPhotosCountByArticleId(articleId);
+    
+    // Check if article already has a main photo
+    final bool hasMainPhoto = await photoDatabase.hasMainPhoto(articleId);
+
+    for (int i = 0; i < pickedImages.length; i++) {
+      final image = pickedImages[i];
+      
+      // Calculate the proper upload order (continue from existing photos)
+      final uploadOrder = existingPhotosCount + i;
+      
+      // Clean the image name and create a unique filename
+      final timestamp = DateTime.now().millisecondsSinceEpoch;
+      final cleanUserId = userId.replaceAll(RegExp(r'[^a-zA-Z0-9]'), ''); // Remove special characters
+      final extension = image.name.split('.').last.toLowerCase();
+
+      //validate file extension
+      if (!['jpg', 'jpeg', 'png'].contains(extension)) {
+        throw Exception('Formato de imagen no valido: $extension');
+      }
+
+      // Use the calculated upload order in filename
+      final fileName = '${timestamp}_${uploadOrder}_article_${articleId}.$extension';
+      final filePath = 'users/$cleanUserId/articles/$fileName';
+
+      print('Uploading file: $filePath with upload order: $uploadOrder'); // Debug log
+
+      // Read the file as bytes
+      final bytes = await image.readAsBytes();
+
+      // Upload to supabase storage
+      final uploadResponse = await storage.from('article-images').uploadBinary(
+        filePath, 
+        bytes,
+        fileOptions: const FileOptions(
+          cacheControl: '3600',
+          upsert: false,
+        ),
+      );
+
+      print('Upload response: $uploadResponse'); // Debug log
+
+      // Get the public url
+      final publicUrl = storage.from('article-images').getPublicUrl(filePath);
+      
+      print('Public URL: $publicUrl'); // Debug log
+
+      // Create photo record in the database
+      final newPhoto = Photo(
+        articleID: articleId,
+        url: publicUrl,
+        fileName: fileName,
+        filePath: filePath,
+        fileSize: bytes.length,
+        mimeType: 'image/$extension',
+        isMain: !hasMainPhoto && i == 0, // First new image becomes main only if no main photo exists
+        uploadOrder: uploadOrder, // Use calculated upload order
+        // state: 1, // Set as active
+        // lastUpdate: DateTime.now(),
+      );
+
+      await photoDatabase.createPhoto(newPhoto);
+
+      setState(() {
+        _uploadedPhotoCount = i + 1;
+      });
+
+      print('Photo ${i + 1}/${pickedImages.length} saved: ${newPhoto.fileName} with uploadOrder: $uploadOrder');
+      print('  fileName: ${newPhoto.fileName}');   // ✅ Debug both values
+      print('  filePath: ${newPhoto.filePath}');   // ✅ Debug both values
+      print('  uploadOrder: $uploadOrder');
+    }
+
+    // update article's lastUpdate after adding photos
+    await articleDatabase.updateArticleLastUpdate(articleId);
+
+    print('✅ Todas las fotos guardadas correctamente para el articulo $articleId');
+
+  } catch(e) {
+    print('❌ Error detallado en subir y guardar fotos: $e');
+    throw Exception('Error al subir imágenes: $e');
+  } finally {
+    setState(() {
+      _isUploadingPhoto = false;
+      _uploadedPhotoCount = 0;
+    });
+  }
+}
 
   Future<void> _loadCategories() async {
     try {
@@ -202,6 +400,11 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
     if (_selectedAddress != _originalAddress) hasChanges = true;
     if (_selectedLocation != _originalLocation) hasChanges = true;
 
+    if (_photosToDelete.isNotEmpty) hasChanges = true;
+
+    //check for picked images
+    if (pickedImages.isNotEmpty) hasChanges = true;
+
     if (!hasChanges) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -217,7 +420,42 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
     });
 
     try {
-      // Update deliver if location or address changed
+      // 1. delete marked photos (batch deletion for better performance)
+      if (_photosToDelete.isNotEmpty) {
+        // check if main photo is being deleted
+        bool mainPhotoDeleted = false;
+        for (Photo photo in _photosToDelete) {
+          if (await photoDatabase.isMainPhoto(photo)) {
+            mainPhotoDeleted = true;
+            break;
+          }
+        }
+
+        // delete all marked photos at once
+        await photoDatabase.deleteMultiplePhotos(_photosToDelete);
+
+        //set new main photo if needed
+        if (mainPhotoDeleted) {
+          await photoDatabase.setNewMainPhoto(widget.item.id);
+        }
+
+        // update article's lastUpdate after deleting photos
+        await articleDatabase.updateArticleLastUpdate(widget.item.id);
+
+        print('Deleted ${_photosToDelete.length} photos');  
+      }
+
+      // 2. upload and save new photos if any
+      if (pickedImages.isNotEmpty) {
+        final userId = widget.item.ownerUserId.toString();
+        await _uploadAndSavePhotos(widget.item.id, userId);
+        //clear picked images after upload
+        setState(() {
+          pickedImages.clear();
+        });
+      }
+
+      // 3. Update deliver if location or address changed
       if (_selectedLocation != _originalLocation || 
           _selectedAddress != _originalAddress) {
         Deliver updatedDeliver = Deliver(
@@ -231,7 +469,7 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
         await deliverDatabase.updateDeliver(updatedDeliver);
       }
 
-      // Update article
+      // 4. Update article
       Article updatedArticle = Article(
         id: widget.item.id,
         name: _itemNameController.text.trim(),
@@ -246,6 +484,8 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
 
       await articleDatabase.updateArticle(updatedArticle);
 
+      // 5. reload photos to update UI
+      await _loadPhotos();
 
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -257,6 +497,7 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
       setState(() {
         _isEditing = false;
         _isSubmitting = false;
+        _photosToDelete.clear();
       });
 
       // Update original values
@@ -268,7 +509,7 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
 
     } catch (e) {
       setState(() {
-        _isSubmitting = false;
+        _isSubmitting = false;    
       });
       
       ScaffoldMessenger.of(context).showSnackBar(
@@ -357,45 +598,45 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
         backgroundColor: const Color(0xFF2D8A8A),
         foregroundColor: Colors.white,
         elevation: 0,
-        actions: [
-          if (_isOwner && !_isEditing && !_isSubmitting)
-            PopupMenuButton<String>(
-              onSelected: (value) {
-                switch (value) {
-                  case 'edit':
-                    setState(() {
-                      _isEditing = true;
-                    });
-                    break;
-                  case 'delete':
-                    _deleteArticle();
-                    break;
-                }
-              },
-              itemBuilder: (context) => [
-                const PopupMenuItem(
-                  value: 'edit',
-                  child: Row(
-                    children: [
-                      Icon(Icons.edit, color: Colors.blue),
-                      SizedBox(width: 8),
-                      Text('Editar'),
-                    ],
-                  ),
-                ),
-                const PopupMenuItem(
-                  value: 'delete',
-                  child: Row(
-                    children: [
-                      Icon(Icons.delete, color: Colors.red),
-                      SizedBox(width: 8),
-                      Text('Eliminar'),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-        ],
+        // actions: [
+        //   if (_isOwner && !_isEditing && !_isSubmitting)
+        //     PopupMenuButton<String>(
+        //       onSelected: (value) {
+        //         switch (value) {
+        //           case 'edit':
+        //             setState(() {
+        //               _isEditing = true;
+        //             });
+        //             break;
+        //           case 'delete':
+        //             _deleteArticle();
+        //             break;
+        //         }
+        //       },
+        //       itemBuilder: (context) => [
+        //         const PopupMenuItem(
+        //           value: 'edit',
+        //           child: Row(
+        //             children: [
+        //               Icon(Icons.edit, color: Colors.blue),
+        //               SizedBox(width: 8),
+        //               Text('Editar'),
+        //             ],
+        //           ),
+        //         ),
+        //         const PopupMenuItem(
+        //           value: 'delete',
+        //           child: Row(
+        //             children: [
+        //               Icon(Icons.delete, color: Colors.red),
+        //               SizedBox(width: 8),
+        //               Text('Eliminar'),
+        //             ],
+        //           ),
+        //         ),
+        //       ],
+        //     ),
+        // ],
       ),
       body: SafeArea(
   child: _isLoading
@@ -409,38 +650,55 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              // Header with category badge
-              if (!_isEditing) ...[
-                Center(
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                    decoration: BoxDecoration(
-                      color: _getCategoryColor(widget.item.categoryName),
-                      borderRadius: BorderRadius.circular(25),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          _getCategoryIcon(widget.item.categoryName),
-                          color: Colors.white,
-                          size: 20,
-                        ),
-                        const SizedBox(width: 8),
-                        Text(
-                          widget.item.categoryName,
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 16,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
+              
+
+              // photo gallery
+              const Text(
+                'Fotos del articulo',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFF2D8A8A),
                 ),
+              ),
+              const SizedBox(height: 8),
+                PhotoGalleryWidget(
+                  photos: _photos,
+                  mainPhoto: _mainPhoto,
+                  isLoading: _isLoadingPhotos || _isUploadingPhoto,
+                  isOwner: _isOwner,
+                  photosToDelete: _photosToDelete,
+                  pickedImages: pickedImages,
+                  onPhotosToDeleteChanged: _isOwner && _isEditing ? (photosToDelete) {
+                    setState(() {
+                      _photosToDelete = photosToDelete;
+                    });
+                  } : null,
+                  onPickedImagesChanged: _isOwner && _isEditing ? (updatedImages) {
+                    setState(() {
+                      pickedImages = updatedImages;
+                    });
+                  } : null,
+                  onAddPhoto: _isOwner && _isEditing ? (pickedImages.length + _photos.length + (_mainPhoto != null ? 1 : 0) < 10) 
+                      ? _addPhoto 
+                      : null 
+                    : null,
+                  // onDeletePhoto: _isOwner && _isEditing ? (photo) {
+                  //   print('Delete photo: ${photo.fileName}');
+                  // } : null,
+                ),
+
+                if (_isOwner && _isEditing) ... [
+                  const SizedBox(height: 12),
+                  PhotoValidation(
+                    allPhotos: [..._photos, if (_mainPhoto != null) _mainPhoto!],
+                    photosToDelete: _photosToDelete,
+                    pickedImages: pickedImages,
+                    mainPhoto: _mainPhoto,
+                    maxPhotos: 10,
+                  ),
+                ],
                 const SizedBox(height: 20),
-              ],
 
               Text(
                 _isEditing 
@@ -459,30 +717,84 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
               MyTextFormField(
                 controller: _itemNameController,
                 hintText: 'Nombre del artículo',
+                text: 'Nombre del artículo',
                 obscureText: false,
                 isEnabled: _isEditing,
                 prefixIcon: const Icon(Icons.recycling),
               ),
               const SizedBox(height: 16),
 
-              // Category tags - only show in edit mode
-              if (_isEditing)
-                CategoryTags(
-                  categories: _categories,
-                  selectedCategory: _selectedCategory,
-                  onCategorySelected: (category) {
-                    setState(() {
-                      _selectedCategory = category;
-                    });
-                  },
-                  labelText: 'Categoría',
-                ),
-              if (_isEditing) const SizedBox(height: 16),
+              // Header with category badge
+              // if (!_isEditing) ...[
+              //   Center(
+              //     child: Container(
+              //       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              //       decoration: BoxDecoration(
+              //         color: _getCategoryColor(widget.item.categoryName),
+              //         borderRadius: BorderRadius.circular(25),
+              //       ),
+              //       child: Row(
+              //         mainAxisSize: MainAxisSize.min,
+              //         children: [
+              //           Icon(
+              //             _getCategoryIcon(widget.item.categoryName),
+              //             color: Colors.white,
+              //             size: 20,
+              //           ),
+              //           const SizedBox(width: 8),
+              //           Text(
+              //             widget.item.categoryName,
+              //             style: const TextStyle(
+              //               color: Colors.white,
+              //               fontWeight: FontWeight.bold,
+              //               fontSize: 16,
+              //             ),
+              //           ),
+              //         ],
+              //       ),
+              //     ),
+              //   ),
+              //   const SizedBox(height: 20),
+              // ],
+
+              // // Category tags - only show in edit mode
+              // if (_isEditing)
+              //   CategoryTags(
+              //     categories: _categories,
+              //     selectedCategory: _selectedCategory,
+              //     onCategorySelected: (category) {
+              //       setState(() {
+              //         _selectedCategory = category;
+              //       });
+              //     },
+              //     labelText: 'Categoría',
+              //   ),
+              // if (_isEditing) const SizedBox(height: 16),
+
+              CategoryTags(
+                categories: _categories, 
+                selectedCategory: _selectedCategory, 
+                onCategorySelected: _isEditing ? (category) {
+                  setState(() {
+                    _selectedCategory = category;
+                  });
+                } : null,
+                labelText: 'Categoría',
+                isEnabled: _isEditing,
+                validator: _isEditing ? (value) {
+                  if (value == null) {
+                    return 'Por favor selecciona una categoría';
+                  }
+                  return null;
+                } : null,
+              ),
+
+              const SizedBox(height: 16),
 
               // Description field
               LimitCharacterTwo(
                 controller: _descriptionController,
-                hintText: 'Describe tu artículo (opcional)',
+                hintText: 'Describe tu artículo',
                 text: 'Descripción',
                 obscureText: false,
                 isEnabled: _isEditing,
