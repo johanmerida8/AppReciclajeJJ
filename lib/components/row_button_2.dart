@@ -1,10 +1,7 @@
-import 'dart:async';
 import 'dart:io';
-import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
-import 'package:image_cropper/image_cropper.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:reciclaje_app/utils/Fixed43Cropper.dart';
 
 class ImageRow extends StatelessWidget {
@@ -20,10 +17,20 @@ class ImageRow extends StatelessWidget {
   });
 
   Future<XFile> _openCropper(BuildContext context, XFile file) async {
-    final res = await Navigator.of(context, rootNavigator: true).push<XFile>(
-      MaterialPageRoute(fullscreenDialog: true, builder: (_) => Fixed43Cropper(file: file)),
-    );
-    return res ?? file;
+    // ✅ Usar Fixed43Cropper con cambio automático de ratio por rotación
+    // 0° y 180° (vertical) → Crop box 3:4 (vertical)
+    // 90° y 270° (horizontal) → Crop box 4:3 (horizontal)
+    try {
+      final res = await Navigator.of(context).push<XFile>(
+        MaterialPageRoute(
+          builder: (_) => Fixed43Cropper(file: file),
+        ),
+      );  
+      return res ?? file;
+    } catch (e) {
+      debugPrint('Error cropping image: $e');
+      return file;
+    }
   }
 
   void _addImages(bool fromGallery, BuildContext context) async {
@@ -32,6 +39,10 @@ class ImageRow extends StatelessWidget {
     final picker = ImagePicker();
 
     if (fromGallery) {
+      // Check and request photo permission first
+      final permission = await _requestPhotoPermission(context);
+      if (!permission) return;
+
       // Multi-select from gallery
       final List<XFile> picked = await picker.pickMultiImage(
         imageQuality: 85,
@@ -49,13 +60,142 @@ class ImageRow extends StatelessWidget {
       }
       onImagesChanged([...images, ...results]);
     } else {
+      // Check and request camera permission first
+      final permission = await _requestCameraPermission(context);
+      if (!permission) return;
+
       // Single from camera
       final XFile? shot = await picker.pickImage(source: ImageSource.camera, imageQuality: 85);
       if (shot == null) return;
       final cropped = await _openCropper(context, shot);
       onImagesChanged([...images, cropped]);
     }
-  
+
+  }
+
+  /// Request photo/storage permission
+  Future<bool> _requestPhotoPermission(BuildContext context) async {
+    // ✅ Para Android 12, intentar múltiples permisos
+    PermissionStatus status;
+    
+    if (Platform.isAndroid) {
+      // Primero intentar storage (funciona mejor en Android 10-12)
+      status = await Permission.storage.request();
+      
+      // Si storage falla, intentar photos
+      if (!status.isGranted) {
+        status = await Permission.photos.request();
+      }
+      
+      // Si ambos fallan, intentar manageExternalStorage para Android 11+
+      if (!status.isGranted) {
+        final manageStatus = await Permission.manageExternalStorage.request();
+        if (manageStatus.isGranted) {
+          status = manageStatus;
+        }
+      }
+    } else {
+      // iOS
+      status = await Permission.photos.request();
+    }
+
+    if (status.isGranted) {
+      return true;
+    } else if (status.isPermanentlyDenied) {
+      if (context.mounted) {
+        _showPermissionDeniedDialog(context, 'Galería');
+      }
+      return false;
+    } else if (status.isDenied) {
+      if (context.mounted) {
+        _showPermissionExplanationDialog(context);
+      }
+      return false;
+    }
+
+    return false;
+  }
+
+  /// Request camera permission
+  Future<bool> _requestCameraPermission(BuildContext context) async {
+    final status = await Permission.camera.request();
+
+    if (status.isGranted) {
+      return true;
+    } else if (status.isPermanentlyDenied) {
+      // Show dialog to open settings
+      if (context.mounted) {
+        _showPermissionDeniedDialog(context, 'Cámara');
+      }
+      return false;
+    }
+    
+    return false;
+  }
+
+  /// Show dialog when permission is permanently denied
+  void _showPermissionDeniedDialog(BuildContext context, String permissionName) {
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: Text('Permiso de $permissionName Bloqueado'),
+          content: Text(
+            'Has bloqueado el permiso de $permissionName.\n\n'
+            'Para usar esta función, ve a Configuración y habilita el permiso manualmente.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Cancelar'),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                Navigator.of(context).pop();
+                openAppSettings(); // Opens app settings
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF058896),
+              ),
+              child: const Text('Abrir Configuración'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  /// Show explanation dialog when permission is denied
+  void _showPermissionExplanationDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: const Text('Permiso Necesario'),
+          content: const Text(
+            'Para seleccionar fotos de la galería, necesitamos acceso a tus archivos.\n\n'
+            'Por favor, concede el permiso cuando aparezca el siguiente diálogo.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Cancelar'),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                Navigator.of(context).pop();
+                // Intentar solicitar permisos nuevamente
+                _requestPhotoPermission(context);
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF058896),
+              ),
+              child: const Text('Intentar de Nuevo'),
+            ),
+          ],
+        );
+      },
+    );
   }
 
   void _showImageSourceOptions(BuildContext context) {
@@ -93,60 +233,6 @@ class ImageRow extends StatelessWidget {
       ),
     );
   }
-
-  // Future<XFile?> _cropImage(XFile imageFile, BuildContext context) async {
-
-  //   try {
-  //     final res = await Navigator.of(context).push<XFile>(
-  //       MaterialPageRoute(
-  //         builder: (_) => Fixed43Cropper(file: imageFile),
-  //       ),
-  //     );  
-  //     return res ?? imageFile;
-  //   } catch (e) {
-  //     debugPrint('Error cropping image: $e');
-  //     return imageFile;
-  //   }
-  // }
-
-  // Future<ui.Image> _decodeImage(Uint8List bytes) {
-  //   final c = Completer<ui.Image>();
-  //   try {
-  //     ui.decodeImageFromList(bytes, (ui.Image img) {
-  //       if (!c.isCompleted) c.complete(img);
-  //     });
-  //   } catch (e, s) {
-  //     if (!c.isCompleted) c.completeError(e, s);
-  //   }
-  //   return c.future;
-  // }
-
-  //show dialog to ask if user wants to crop the image
-  // Future<bool?> _showCropDialog(BuildContext context) async {
-
-  //   // check if the context is still valid before showing dialog
-  //   if (!context.mounted) return false;
-
-  //   return showDialog<bool>(
-  //     context: context, 
-  //     builder: (BuildContext context) {
-  //       return AlertDialog(
-  //         title: const Text('Recortar Imagen'),
-  //         content: const Text('¿Deseas recortar la imagen antes de agregarla?'),
-  //         actions: [
-  //           TextButton(
-  //             onPressed: () => Navigator.of(context).pop(false), 
-  //             child: const Text('No, usar original'),
-  //           ),
-  //           TextButton(
-  //             onPressed: () => Navigator.of(context).pop(true), 
-  //             child: const Text('Sí, recortar'),
-  //           ),
-  //         ],
-  //       );
-  //     }
-  //   );
-  // }
 
   // add crop option to existing images
   void _cropExistingImage(int index, BuildContext context) async {
@@ -205,153 +291,163 @@ class ImageRow extends StatelessWidget {
       children: [
         // Horizontal scrollable row
         SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: Row(
-            children: [
-    
-              GestureDetector(
-                onTap: images.length < maxImages ? () => _showImageSourceOptions(context) : null,
-                child: Container(
-                  padding: const EdgeInsets.only(top: 10, bottom: 10),
-                  width: 80,
-                  margin: const EdgeInsets.symmetric(horizontal: 25.0),
-                  decoration: BoxDecoration(
-                    color: images.length < maxImages 
-                        ? Colors.white54
-                        : Colors.grey,
-                    borderRadius: BorderRadius.circular(5),
-                  ),
-                  child: Column(
-                    children: [
-                      Icon(
-                        Icons.add,
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                // Add button
+                GestureDetector(
+                  onTap: images.length < maxImages ? () => _showImageSourceOptions(context) : null,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+                    width: 120,
+                    height: 120,
+                    decoration: BoxDecoration(
+                      color: images.length < maxImages 
+                          ? Colors.white
+                          : Colors.grey.shade300,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
                         color: images.length < maxImages
                             ? const Color(0xFF058896)
-                            : Colors.grey.shade600,
-                        size: 30,
+                            : Colors.grey.shade400,
+                        width: 2,
                       ),
-                      const SizedBox(height: 10),
-                      Text(
-                        images.isEmpty ? 'Agregar\nFotos' :
-                        images.length >= maxImages ? 'Limite\nAlcanzado' : 'Agregar\nMás',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          color: images.length < maxImages 
+                    ),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(
+                          Icons.add_photo_alternate_outlined,
+                          color: images.length < maxImages
                               ? const Color(0xFF058896)
                               : Colors.grey.shade600,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 10,
+                          size: 40,
                         ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              // Images
-              ...images.asMap().entries.map((entry) {
-                final index = entry.key;
-                final image = entry.value;
-                return Container(
-                  width: 80,
-                  height: 80,
-                  margin: const EdgeInsets.only(right: 25),
-                  child: Stack(
-                    children: [
-                      GestureDetector(
-                        onTap: () => _viewImage(context, image),
-                        child: ClipRRect(
-                          borderRadius: BorderRadius.circular(5),
-                          child: Image.file(
-                            File(image.path),
-                            width: 80,
-                            height: 80,
-                            fit: BoxFit.cover,
+                        const SizedBox(height: 8),
+                        Text(
+                          images.isEmpty ? 'Agregar Fotos' :
+                          images.length >= maxImages ? 'Límite\nAlcanzado' : 'Agregar Más',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: images.length < maxImages 
+                                ? const Color(0xFF058896)
+                                : Colors.grey.shade600,
+                            fontWeight: FontWeight.w600,
+                            fontSize: 12,
                           ),
                         ),
-                      ),
-                      // Principal indicator
-                      if (index == 0)
-                        Positioned(
-                          top: 2,
-                          left: 2,
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF058896),
-                              borderRadius: BorderRadius.circular(3),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                // Images
+                ...images.asMap().entries.map((entry) {
+                  final index = entry.key;
+                  final image = entry.value;
+                  return Container(
+                    width: 120,
+                    height: 120,
+                    margin: const EdgeInsets.only(right: 12),
+                    child: Stack(
+                      children: [
+                        GestureDetector(
+                          onTap: () => _viewImage(context, image),
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(8),
+                            child: Image.file(
+                              File(image.path),
+                              width: 120,
+                              height: 120,
+                              fit: BoxFit.cover,
                             ),
-                            child: const Text(
-                              'Principal',
-                              style: TextStyle(
+                          ),
+                        ),
+                        // Principal indicator
+                        if (index == 0)
+                          Positioned(
+                            top: 4,
+                            left: 4,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF058896),
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: const Text(
+                                'Principal',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ),
+                          ),
+                        // Crop button
+                        Positioned(
+                          bottom: 4,
+                          left: 4,
+                          child: GestureDetector(
+                            onTap: () => _cropExistingImage(index, context),
+                            child: Container(
+                              width: 24,
+                              height: 24,
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF058896),
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: const Icon(
+                                Icons.crop,
                                 color: Colors.white,
-                                fontSize: 8,
-                                fontWeight: FontWeight.bold,
+                                size: 16,
                               ),
                             ),
                           ),
                         ),
-                      // Crop button
-                      Positioned(
-                        bottom: 2,
-                        left: 2,
-                        child: GestureDetector(
-                          onTap: () => _cropExistingImage(index, context),
-                          child: Container(
-                            width: 18,
-                            height: 18,
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF058896),
-                              borderRadius: BorderRadius.circular(3),
-                            ),
-                            child: const Icon(
-                              Icons.crop,
-                              color: Colors.white,
-                              size: 12,
-                            ),
-                          ),
-                        ),
-                      ),
-                      // Delete button
-                      Positioned(
-                        top: 2,
-                        right: 2,
-                        child: GestureDetector(
-                          onTap: () => _removeImage(index),
-                          child: Container(
-                            width: 18,
-                            height: 18,
-                            decoration: const BoxDecoration(
-                              color: Colors.red,
-                              shape: BoxShape.circle,
-                            ),
-                            child: const Icon(
-                              Icons.close,
-                              color: Colors.white,
-                              size: 12,
+                        // Delete button
+                        Positioned(
+                          top: 4,
+                          right: 4,
+                          child: GestureDetector(
+                            onTap: () => _removeImage(index),
+                            child: Container(
+                              width: 24,
+                              height: 24,
+                              decoration: const BoxDecoration(
+                                color: Colors.red,
+                                shape: BoxShape.circle,
+                              ),
+                              child: const Icon(
+                                Icons.close,
+                                color: Colors.white,
+                                size: 16,
+                              ),
                             ),
                           ),
                         ),
-                      ),
-                    ],
-                  ),
-                );
-              }).toList(),
-            ],
+                      ],
+                    ),
+                  );
+                }).toList(),
+              ],
+            ),
           ),
-        ),
+        
         
         // Limit text BELOW the buttons
         Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 25.0, vertical: 5),
+          padding: const EdgeInsets.only(top: 12.0),
           child: Text(
-            'Fotos: ${images.length}/$maxImages • Elige primero la foto principal',
-            style: TextStyle(
-              fontSize: 12,
-              color: images.length >= maxImages ? Colors.orange : Colors.grey.shade600,
-              fontWeight: FontWeight.w500,
+              'Fotos: ${images.length}/$maxImages • Elige primero la foto principal',
+              style: TextStyle(
+                fontSize: 12,
+                color: images.length >= maxImages ? Colors.orange : Colors.grey.shade600,
+                fontWeight: FontWeight.w500,
+              ),
             ),
-          ),
         ),
+        
       ],
     );
   }

@@ -8,6 +8,7 @@ class CategoryTags extends StatelessWidget {
   final String? Function(Category?)? validator;
   final String labelText;
   final bool isEnabled;
+  final Set<int> disabledCategoryIds;
 
   const CategoryTags({
     super.key,
@@ -17,6 +18,7 @@ class CategoryTags extends StatelessWidget {
     this.validator,
     this.labelText = 'Categoría',
     this.isEnabled = true,
+    this.disabledCategoryIds = const {},
   });
 
   @override
@@ -52,71 +54,107 @@ class CategoryTags extends StatelessWidget {
                   width: 1.0,
                 ),
                 borderRadius: BorderRadius.circular(12.0),
-                color: isEnabled ? Colors.grey.shade300 : Colors.grey.shade200,
+                color: isEnabled ? Colors.white : Colors.grey.shade200,
               ),
-              child: categories.isEmpty
-                  ? const Text(
-                      'No hay categorías disponibles',
-                      style: TextStyle(
-                        color: Colors.grey,
-                        fontStyle: FontStyle.italic,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // hint cuando no hay seleccion
+                  if (selectedCategory == null && categories.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 8.0),
+                      child: Text(
+                        'Selecciona una categoría de reciclaje',
+                        style: TextStyle(
+                          color: Colors.grey.shade600,
+                          fontSize: 13,
+                          fontStyle: FontStyle.italic,
+                        ),
                       ),
-                    )
-                  : Wrap(
-                      spacing: 8.0,
-                      runSpacing: 8.0,
-                      children: categories.map((category) {
-                        final isSelected = selectedCategory?.id == category.id;
-                        return GestureDetector(
-                          onTap: isEnabled && onCategorySelected != null
-                          ? () {
-                            onCategorySelected!(category);
-                            state.didChange(category);
-                          }
-                          : null,
-                          child: AnimatedContainer(
-                            duration: const Duration(milliseconds: 200),
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 16.0,
-                              vertical: 8.0,
-                            ),
-                            decoration: BoxDecoration(
-                              color: isSelected 
-                                  ? const Color(0xFF2D8A8A)
-                                  : (isEnabled ? Colors.white : Colors.grey.shade100),
-                              borderRadius: BorderRadius.circular(20.0),
-                              border: Border.all(
-                                color: isSelected 
-                                    ? const Color(0xFF2D8A8A)
-                                    : (isEnabled ? Colors.grey.shade300 : Colors.grey.shade200),
-                                width: 1.5,
-                              ),
-                              boxShadow: isSelected && isEnabled
-                                  ? [
-                                      BoxShadow(
-                                        color: const Color(0xFF2D8A8A).withOpacity(0.3),
-                                        blurRadius: 4,
-                                        offset: const Offset(0, 2),
-                                      ),
-                                    ]
-                                  : [],
-                            ),
-                            child: Text(
-                              category.name ?? 'Sin nombre',
-                              style: TextStyle(
-                                color: isSelected 
-                                  ? Colors.white 
-                                  : (isEnabled ? Colors.black87 : Colors.grey.shade600),
-                                fontWeight: isSelected 
-                                    ? FontWeight.w600 
-                                    : FontWeight.w500,
-                                fontSize: 14,
-                              ),
-                            ),
-                          ),
-                        );
-                      }).toList(),
                     ),
+                  categories.isEmpty
+                      ? const Text(
+                          'No hay categorías disponibles',
+                          style: TextStyle(
+                            color: Colors.grey,
+                            fontStyle: FontStyle.italic,
+                          ),
+                        )
+                      : Wrap(
+                          spacing: 8.0,
+                          runSpacing: 8.0,
+                          children: categories.map((category) {
+                            final isSelected = selectedCategory?.id == category.id;
+                            final isDisabled = disabledCategoryIds.contains(category.id ?? -1);
+                            return GestureDetector(
+                              onTap: isDisabled || !isEnabled ? null : () {
+                                onCategorySelected?.call(category);
+                                state.didChange(category);
+                              },
+                              child: Tooltip(
+                                message: isDisabled 
+                                    ? 'Ya tienes un artículo pendiente con esta categoría' 
+                                    : category.name ?? 'Sin nombre',
+                                child: AnimatedContainer(
+                                  duration: const Duration(milliseconds: 200),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 16.0,
+                                    vertical: 8.0,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: isDisabled 
+                                        ? Colors.grey.shade200 // ✅ Gris cuando está bloqueada
+                                        : (isSelected ? const Color(0xFF2D8A8A) : Colors.white),
+                                    borderRadius: BorderRadius.circular(20.0),
+                                    border: Border.all(
+                                      color: isDisabled 
+                                          ? Colors.grey.shade400 
+                                          : (isSelected ? const Color(0xFF2D8A8A) : Colors.grey.shade300),
+                                      width: 1.5,
+                                    ),
+                                    boxShadow: isDisabled || !isSelected
+                                        ? []
+                                        : [
+                                            BoxShadow(
+                                              color: const Color(0xFF2D8A8A).withOpacity(0.3),
+                                              blurRadius: 4,
+                                              offset: const Offset(0, 2),
+                                            ),
+                                          ],
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      if (isDisabled)
+                                        Padding(
+                                          padding: const EdgeInsets.only(right: 6.0),
+                                          child: Icon(
+                                            Icons.lock_outline,
+                                            size: 16,
+                                            color: Colors.grey.shade600,
+                                          ),
+                                        ),
+                                      Text(
+                                        category.name ?? 'Sin nombre',
+                                        style: TextStyle(
+                                          color: isDisabled 
+                                              ? Colors.grey.shade600 
+                                              : (isSelected ? Colors.white : Colors.black87),
+                                          fontWeight: isDisabled 
+                                              ? FontWeight.w400 
+                                              : (isSelected ? FontWeight.w600 : FontWeight.w500),
+                                          fontSize: 14,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            );
+                          }).toList(),
+                        ),
+                ],
+              ),
             ),
             
             // Error message

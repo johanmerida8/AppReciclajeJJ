@@ -42,6 +42,25 @@ class ArticleDatabase {
     }
   }
 
+  // ✅ NUEVO: Obtener artículos por ID de usuario
+  Future<List<Article>> getArticlesByUserId(int userId) async {
+    try {
+      final response = await database
+          .select()
+          .eq('userID', userId)
+          .eq('state', 1) // Solo artículos activos
+          .order('lastUpdate', ascending: false);
+      
+      final articles = response.map((map) => Article.fromMap(map)).toList();
+      print('📦 Encontrados ${articles.length} artículos para usuario $userId');
+      
+      return articles;
+    } catch (e) {
+      print('❌ Error al obtener artículos del usuario $userId: $e');
+      return [];
+    }
+  }
+
   // update
   Future updateArticle(Article oldArticle) async {
     try {

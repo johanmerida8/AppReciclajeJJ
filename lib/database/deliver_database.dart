@@ -26,7 +26,6 @@ class DeliverDatabase {
         .from('deliver')
         .stream(primaryKey: ['idDeliver'])
         .map((maps) => maps
-            .where((map) => map['state'] == 1) // Filtrar por estado activo
             .map((map) => Deliver.fromMap(map))
             .toList());
   }
@@ -35,7 +34,7 @@ class DeliverDatabase {
   Future<Deliver?> getDeliverById(int id) async {
     try {
       final response =
-          await database.select().eq('idDeliver', id).eq('state', 1).single();
+          await database.select().eq('idDeliver', id).single();
       return Deliver.fromMap(response);
     } catch (e) {
       print('Error al obtener la entrega por ID: $e');
@@ -75,8 +74,7 @@ class DeliverDatabase {
         throw Exception('El ID de la entrega no puede ser nulo');
       }
 
-      final res = await database
-          .update({'state': 0}).eq('idDeliver', deliver.id!);
+      final res = await database.delete().eq('idDeliver', deliver.id!);
       print('Entrega eliminada correctamente: $res');
       return res;
     } catch (e) {

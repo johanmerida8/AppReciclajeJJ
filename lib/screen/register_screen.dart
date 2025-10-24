@@ -126,7 +126,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
       final newUser = Users(
         names: names,
         email: email,
-        // password: password,
+        role: 'usuario-normal',
         state: 1,
       );
 
@@ -276,13 +276,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                                   hintText: 'Contraseña',
                                   obscureText: true, isEnabled: true,
                                 ),
-                                const SizedBox(height: 20),
-                                MyTextField(
-                                  controller: confirmPasswordController,
-                                  hintText: 'Confirmar contraseña',
-                                  obscureText: true, isEnabled: true,
-                                ),
-                        
+                                
                                 if (_showPasswordValidator) ...[
                                   const SizedBox(height: 8),
                                   Container(
@@ -308,6 +302,14 @@ class _RegisterScreenState extends State<RegisterScreen> {
                         
                                 if (_showPasswordValidator)
                                   PasswordValidator(password: passwordController.text),
+
+                                const SizedBox(height: 20),
+                                MyTextField(
+                                  controller: confirmPasswordController,
+                                  hintText: 'Confirmar contraseña',
+                                  obscureText: true, isEnabled: true,
+                                ),
+                        
                         
                                 const SizedBox(height: 40),
                                 MyButton(

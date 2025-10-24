@@ -45,5 +45,15 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	
+	<!-- Permission descriptions for iOS -->
+	<key>NSCameraUsageDescription</key>
+	<string>Necesitamos acceso a tu cámara para tomar fotos de los artículos que quieres reciclar.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Necesitamos acceso a tu galería para seleccionar fotos de los artículos que quieres reciclar.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Necesitamos tu ubicación para mostrar dónde se encuentra el artículo reciclable en el mapa.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>Necesitamos tu ubicación para mostrar dónde se encuentra el artículo reciclable en el mapa.</string>
 </dict>
 </plist>

@@ -99,17 +99,6 @@ class _LimitCharacterTwoState extends State<LimitCharacterTwo> {
                   ),
               ],
             ),
-
-            // if (characterCount > 100) ...[
-            //   const SizedBox(height: 8),
-            //   const Text(
-            //     'Alcanzaste el máximo de caracteres',
-            //     style: TextStyle(
-            //       color: Colors.red,
-            //       fontSize: 12,
-            //     ),
-            //   ),
-            // ],
           ],
         ),
     );

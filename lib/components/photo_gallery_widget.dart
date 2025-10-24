@@ -2,7 +2,6 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:reciclaje_app/components/add_photo_button.dart';
 import 'package:reciclaje_app/components/fullscreen_photo_viewer.dart';
 import 'package:reciclaje_app/model/photo.dart';
 

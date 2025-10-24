@@ -37,6 +37,8 @@ class AuthService {
     return user?.email;
   }
 
+  // get user role
+
   // generate and send otp
   Future<String> generateAndSendOTP(String email) async {
     // clean up expired OTPs before generating a new one

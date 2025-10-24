@@ -4,7 +4,7 @@ class Deliver {
   double? lat;
   double? lng;
   // DateTime? pickUpDate;
-  int? state;
+  // int? state;
 
   Deliver({
     this.id,
@@ -12,7 +12,7 @@ class Deliver {
     this.lat,
     this.lng,
     // this.pickUpDate,
-    this.state,
+    // this.state,
   });
 
   factory Deliver.fromMap(Map<String, dynamic> map) {
@@ -24,7 +24,7 @@ class Deliver {
       // pickUpDate: map['datePickUp'] != null
       //     ? DateTime.parse(map['datePickUp'] as String)
       //     : null,
-      state: map['state'] as int?,
+      // state: map['state'] as int?,
     );
   }
 
@@ -34,7 +34,7 @@ class Deliver {
       'lat': lat,
       'lng': lng,
       // 'datePickUp': pickUpDate?.toIso8601String(),
-      'state': state ?? 1, // Por defecto, estado activo
+      // 'state': state ?? 1, // Por defecto, estado activo
     };
   }
 }

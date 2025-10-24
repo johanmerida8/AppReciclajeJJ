@@ -1,24 +1,181 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:geocoding/geocoding.dart';
 import 'package:latlong2/latlong.dart';
-import 'package:reciclaje_app/components/location_input.dart';
+import 'package:location/location.dart' as loc;
 
 class MapPickerScreen extends StatefulWidget {
   final LatLng initialLocation;
+  final LatLng? originalLocation;
 
-  const MapPickerScreen({super.key, required this.initialLocation});
+  const MapPickerScreen({super.key, required this.initialLocation, this.originalLocation});
 
   @override
   State<MapPickerScreen> createState() => _MapPickerScreenState();
 }
 
-class _MapPickerScreenState extends State<MapPickerScreen> {
+class _MapPickerScreenState extends State<MapPickerScreen> with WidgetsBindingObserver {
   LatLng? _pickedLocation;
   String? _selectedAddress;
   bool _isLoadingAddress = false;
+  bool _isGettingInitialLocation = false;
   
   final MapController _mapController = MapController();
+  final loc.Location _location = loc.Location();
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    
+    // Don't configure location settings here - wait until user explicitly requests location
+    // This prevents crashes if permissions aren't granted yet
+  }
+
+  /// Configure location settings for optimal performance (call only when permissions granted)
+  Future<void> _configureLocationSettings() async {
+    try {
+      // Only configure if we have permission
+      final permission = await _location.hasPermission();
+      if (permission == loc.PermissionStatus.granted ||
+          permission == loc.PermissionStatus.grantedLimited) {
+        // Request high accuracy mode
+        await _location.changeSettings(
+          accuracy: loc.LocationAccuracy.high,
+          interval: 1000, // Update every 1 second
+          distanceFilter: 0, // Get updates for any distance change
+        );
+      }
+    } catch (e) {
+      print('Error configuring location settings: $e');
+    }
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      // App has come to the foreground (e.g., after enabling location in settings)
+      _checkLocationServiceStatus();
+    }
+  }
+
+  /// Check if location services are enabled and optionally re-request location
+  Future<void> _checkLocationServiceStatus() async {
+    try {
+      final serviceEnabled = await _location.serviceEnabled();
+      if (!serviceEnabled && mounted) {
+        // Location was disabled, now it might be enabled
+        final enabled = await _location.requestService();
+        if (enabled) {
+          // Service now enabled, optionally get location again
+          // Uncomment if you want to auto-center when location is re-enabled
+          // _getInitialUserLocation();
+        }
+      }
+    } catch (e) {
+      print('Error checking location service: $e');
+    }
+  }
+
+  /// Get user's current location when user clicks the button (GPS should already be enabled)
+  Future<void> _getInitialUserLocation() async {
+    if (_isGettingInitialLocation) return;
+
+    setState(() {
+      _isGettingInitialLocation = true;
+    });
+
+    try {
+      // Step 1: Check if location service is enabled
+      bool serviceEnabled = await _location.serviceEnabled();
+      
+      if (!serviceEnabled) {
+        // GPS not enabled
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('⚠️ GPS desactivado. Por favor, actívalo desde la pantalla principal'),
+              backgroundColor: Colors.orange,
+              duration: Duration(seconds: 3),
+            ),
+          );
+        }
+        return;
+      }
+
+      // Step 2: Check permission status
+      loc.PermissionStatus permissionGranted = await _location.hasPermission();
+      
+      if (permissionGranted == loc.PermissionStatus.denied ||
+          permissionGranted == loc.PermissionStatus.deniedForever) {
+        // Permission not granted
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('⚠️ Permiso de ubicación no concedido. Por favor, concédelo desde la pantalla principal'),
+              backgroundColor: Colors.orange,
+              duration: Duration(seconds: 3),
+            ),
+          );
+        }
+        return;
+      }
+
+      // Step 3: Configure location settings now that we have permission
+      await _configureLocationSettings();
+
+      // Step 4: Get location with timeout (loading indicator already shown in UI)
+      final locationData = await _location.getLocation().timeout(
+        const Duration(seconds: 15),
+        onTimeout: () {
+          throw Exception('Tiempo de espera agotado. El GPS puede estar inicializándose.');
+        },
+      );
+
+      if (locationData.latitude != null && locationData.longitude != null) {
+        await _handleLocationSelection(
+          locationData.latitude!,
+          locationData.longitude!,
+          fromMap: false,
+        );
+        // ✅ No mostrar snackbar adicional aquí - _handleLocationSelection ya muestra uno
+      }
+    } on TimeoutException {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('⏱️ El GPS está tardando. Intenta de nuevo o selecciona manualmente.'),
+            backgroundColor: Colors.orange,
+            duration: Duration(seconds: 4),
+          ),
+        );
+      }
+    } catch (e) {
+      print('Error getting initial location: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('❌ Error: ${e.toString()}'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isGettingInitialLocation = false;
+        });
+      }
+    }
+  }
 
   Future<String> _getAddressFromCoordinates(LatLng location) async {
     try {
@@ -76,7 +233,15 @@ class _MapPickerScreenState extends State<MapPickerScreen> {
   Future<void> _handleLocationSelection(double lat, double lng, {bool fromMap = false}) async {
     final location = LatLng(lat, lng);
     
-    _mapController.move(location, 15.0);
+    // ✅ Solo centrar sin cambiar el zoom si fue desde el mapa
+    // Si es desde GPS, hacer zoom para que el usuario vea mejor
+    if (fromMap) {
+      // Mantener el zoom actual del usuario
+      _mapController.move(location, _mapController.camera.zoom);
+    } else {
+      // Desde GPS, zoom a 15 para ver la ubicación claramente
+      _mapController.move(location, 17.0);
+    }
     
     setState(() {
       _pickedLocation = location;
@@ -92,8 +257,8 @@ class _MapPickerScreenState extends State<MapPickerScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(fromMap 
-              ? '📍 Ubicación seleccionada en el mapa' 
-              : '📍 Ubicación actual obtenida'),
+              ? '📍 Ubicación seleccionada' 
+              : '✅ Ubicación obtenida'),
           backgroundColor: const Color(0xFF2D8A8A),
           duration: const Duration(seconds: 2),
           behavior: SnackBarBehavior.floating,
@@ -162,21 +327,55 @@ class _MapPickerScreenState extends State<MapPickerScreen> {
                 maxZoom: 19,
               ),
 
-              if (_pickedLocation != null)
-                MarkerLayer(
-                  markers: [
+              MarkerLayer(
+                markers: [
+                  // ✅ Marcador de ubicación original
+                  if (widget.originalLocation != null)
                     Marker(
-                      point: _pickedLocation!, 
-                      width: 40,
-                      height: 40,
+                      point: widget.originalLocation!,
+                      width: 50,
+                      height: 65, // ✅ Aumentado de 50 a 65 para evitar overflow (label + icon)
+                      child: Column(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: Colors.grey.shade700,
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: const Text(
+                              'Original',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 10,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Icon(
+                            Icons.location_on,
+                            color: Colors.grey.shade600,
+                            size: 40,
+                          ),
+                        ],
+                      ),
+                    ),
+                  
+                  // Marcador seleccionado
+                  if (_pickedLocation != null)
+                    Marker(
+                      point: _pickedLocation!,
+                      width: 50,
+                      height: 50,
                       child: const Icon(
-                        Icons.location_on, 
-                        size: 50, 
+                        Icons.location_on,
+                        size: 50,
                         color: Color(0xFF2D8A8A),
                       ),
                     ),
-                  ],
-                ),
+                ],
+              ),
             ],
           ),
 
@@ -189,38 +388,96 @@ class _MapPickerScreenState extends State<MapPickerScreen> {
               elevation: 4,
               child: Padding(
                 padding: const EdgeInsets.all(12),
-                child: Row(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Icon(
-                      Icons.info_outline,
-                      color: Color(0xFF2D8A8A),
-                      size: 20,
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        _pickedLocation == null 
-                            ? 'Toca en el mapa para seleccionar la ubicación de entrega o usa el botón de ubicación actual'
-                            : 'Confirma o cancela la ubicación seleccionada',
-                        style: const TextStyle(
-                          fontSize: 12,
-                          color: Colors.black87,
+                    Row(
+                      children: [
+                        const Icon(
+                          Icons.info_outline,
+                          color: Color(0xFF2D8A8A),
+                          size: 20,
                         ),
-                      ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            _pickedLocation == null 
+                                ? 'Toca el mapa o usa tu ubicación actual'
+                                : 'Confirma o cancela la ubicación',
+                            style: const TextStyle(
+                              fontSize: 12,
+                              color: Colors.black87,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
+                    if (_pickedLocation == null && !_isGettingInitialLocation) ...[
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: TextButton.icon(
+                              onPressed: _getInitialUserLocation,
+                              icon: const Icon(Icons.my_location, size: 16),
+                              label: const Text(
+                                'Usar mi ubicación',
+                                style: TextStyle(fontSize: 13),
+                              ),
+                              style: TextButton.styleFrom(
+                                foregroundColor: const Color(0xFF2D8A8A),
+                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                backgroundColor: const Color(0xFF2D8A8A).withOpacity(0.1),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      const Row(
+                        children: [
+                          Icon(Icons.tips_and_updates, size: 12, color: Colors.grey),
+                          SizedBox(width: 4),
+                          Expanded(
+                            child: Text(
+                              'Asegúrate de tener GPS activado para mejor precisión',
+                              style: TextStyle(
+                                fontSize: 10,
+                                color: Colors.grey,
+                                fontStyle: FontStyle.italic,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                    if (_isGettingInitialLocation) ...[
+                      const SizedBox(height: 8),
+                      const Row(
+                        children: [
+                          SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Color(0xFF2D8A8A),
+                            ),
+                          ),
+                          SizedBox(width: 8),
+                          Text(
+                            'Obteniendo tu ubicación...',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.grey,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
                   ],
                 ),
               ),
-            ),
-          ),
-
-          // Current Location FAB - Positioned on the right side
-          Positioned(
-            top: 100,
-            right: 16,
-            child: LocationInput(
-              initialLocation: widget.initialLocation,
-              onSelectLocation: _handleLocationSelection,
             ),
           ),
 

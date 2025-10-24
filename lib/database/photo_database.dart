@@ -27,15 +27,23 @@ class PhotoDatabase {
   //getters
   Future<Photo?> getMainPhotoByArticleId(int articleId) async {
     try {
+      print('🔍 Buscando foto principal para artículo ID: $articleId');
+      
       final response = await database
           .select('*')
           .eq('article_id', articleId)
           .eq('isMain', true)
           .maybeSingle();
       
+      if (response != null) {
+        print('✅ Foto principal encontrada: ${response['fileName']}');
+      } else {
+        print('⚠️ No se encontró foto principal para artículo $articleId');
+      }
+      
       return response != null ? Photo.fromMap(response) : null;
     } catch (e) {
-      print('Error al obtener la foto principal: $e');
+      print('❌ Error al obtener la foto principal: $e');
       rethrow;
     }
   }
@@ -43,14 +51,21 @@ class PhotoDatabase {
   // get all photos for an article ordered by uploadOrder
   Future<List<Photo>> getPhotosByArticleId(int articleId) async {
     try {
+      print('🔍 Buscando fotos para artículo ID: $articleId');
+      
       final response = await database
           .select('*')
           .eq('article_id', articleId)
           .order('uploadOrder', ascending: true);
       
+      print('📊 Respuesta de base de datos: ${response.length} fotos encontradas');
+      for (var photo in response) {
+        print('   - Foto: ${photo['fileName']} (ID: ${photo['idPhoto']})');
+      }
+      
       return response.map<Photo>((map) => Photo.fromMap(map)).toList();
     } catch (e) {
-      print('Error al obtener las fotos del artículo: $e');
+      print('❌ Error al obtener las fotos del artículo: $e');
       rethrow;
     }
   }

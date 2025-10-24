@@ -22,6 +22,12 @@ class MyApp extends StatelessWidget {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       title: 'Reciclaje App',
+      theme: ThemeData(
+        useMaterial3: true, // ✅ Habilitar Material Design 3
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: const Color(0xFF2D8A8A),
+        ),
+      ),
       home: AuthGate(),
     );
   }

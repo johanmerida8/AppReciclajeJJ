@@ -220,14 +220,7 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
                           obscureText: true,
                           isEnabled: true,
                         ),
-                        const SizedBox(height: 20),
-                        // Confirm password field
-                        MyTextField(
-                          controller: confirmPasswordController,
-                          hintText: 'Confirmar contraseña',
-                          obscureText: true,
-                          isEnabled: true,
-                        ),
+
                         if (_showPasswordValidator) ...[
                           const SizedBox(height: 8),
                           Container(
@@ -253,6 +246,15 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
 
                         if (_showPasswordValidator)
                           PasswordValidator(password: newPasswordController.text),
+                          
+                        const SizedBox(height: 20),
+                        // Confirm password field
+                        MyTextField(
+                          controller: confirmPasswordController,
+                          hintText: 'Confirmar contraseña',
+                          obscureText: true,
+                          isEnabled: true,
+                        ),
                         const SizedBox(height: 40),
                         // Reset button
                         MyButton(

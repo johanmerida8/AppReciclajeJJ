@@ -2,15 +2,15 @@ class Users {
   int? id;
   String? names;
   String? email;
-  // String? password;
   int? state;
+  String? role;
 
   Users({
     this.id,
     this.names,
     this.email,
-    // this.password,
     this.state,
+    this.role,
   });
 
   factory Users.fromMap(Map<String, dynamic> map) {
@@ -18,7 +18,7 @@ class Users {
       id: map['idUser'] as int?,
       names: map['names'] as String?,
       email: map['email'] as String?,
-      // password: map['password'] ?? '',
+      role: map['role'] as String?,
       state: map['state'] as int?,
     );
   }
@@ -27,13 +27,13 @@ class Users {
     return {
       'names': names,
       'email': email,
-      // 'password': password,
+      'role': role,
       'state': state,
     };
   }
 
   @override
   String toString() {
-    return 'Users{id: $id, names: $names, email: $email, state: $state}';
+    return 'Users{id: $id, names: $names, email: $email, role: $role, state: $state}';
   }
 }

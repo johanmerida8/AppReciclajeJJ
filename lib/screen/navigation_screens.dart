@@ -36,7 +36,7 @@ class _NavigationScreensState extends State<NavigationScreens> {
         backgroundColor: Colors.transparent,
         color: const Color(0xFF2D8A8A), // Your app's teal color
         // buttonBackgroundColor: const Color(0xFF2D8A8A), // Green accent
-        buttonBackgroundColor: const Color.fromARGB(211, 35, 167, 123),
+        buttonBackgroundColor: const Color.fromARGB(255, 45, 138, 138),
         height: 75,
         items: _navigationItems,
         index: _currentIndex,

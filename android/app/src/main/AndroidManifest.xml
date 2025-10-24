@@ -1,19 +1,38 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
+    <!-- Internet for API calls and image uploads -->
     <uses-permission android:name="android.permission.INTERNET" />
+    
+    <!-- Location permissions for pinning recyclable item location -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
-    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
-
+    
+    <!-- Camera and storage for taking/selecting photos -->
     <uses-permission android:name="android.permission.CAMERA"/>
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
+    
+    <!-- Storage permissions for different Android versions -->
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32"/>
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29"/>
+    
+    <!-- For Android 13+ (API 33+) - Granular media permissions -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>
+    
+    <!-- For Android 10-12 (API 29-32) - Additional storage permission -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" 
+        android:minSdkVersion="30" 
+        android:maxSdkVersion="32" 
+        tools:ignore="ScopedStorage" />
+    
+    <!-- Photos permission for Android 14+ (API 34+) -->
+    <uses-permission android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED" />
     
 
     <application
         android:label="reciclaje_app"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        android:requestLegacyExternalStorage="true">
         <activity
             android:name=".MainActivity"
             android:exported="true"
