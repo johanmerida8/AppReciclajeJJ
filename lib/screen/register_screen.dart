@@ -7,10 +7,12 @@ import 'package:reciclaje_app/components/my_textfield.dart';
 import 'package:reciclaje_app/components/password_validator.dart';
 import 'package:reciclaje_app/database/users_database.dart';
 import 'package:reciclaje_app/model/users.dart';
+import 'package:reciclaje_app/screen/administrator/administrator_dashboard_screen.dart';
 // import 'package:reciclaje_app/screen/home_screen.dart';
 import 'package:reciclaje_app/screen/login_screen.dart';
 import 'package:reciclaje_app/screen/navigation_screens.dart';
 import 'package:reciclaje_app/utils/password_utils.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 class RegisterScreen extends StatefulWidget {
   const RegisterScreen({super.key});
@@ -36,6 +38,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
   bool _showPasswordValidator = false;
 
+  bool _isLoading = false;
+
   @override
   void initState() {
     super.initState();
@@ -49,124 +53,129 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
   // sign user in method
   void signUserUp() async {
-    final names = namesController.text;
-    final email = emailController.text;
+    final names = namesController.text.trim();
+    final email = emailController.text.trim();
     final password = passwordController.text;
     final confirmPassword = confirmPasswordController.text;
 
-    if (names.isEmpty ||
-        email.isEmpty ||
-        password.isEmpty ||
-        confirmPassword.isEmpty) {
-      final snackBar = SnackBar(
-        content: Text(
-          'Por favor llena todos los campos',
-          style: TextStyle(color: Colors.white),
-        ),
-        backgroundColor: Colors.red,
+    // Validaciones básicas
+    if (names.isEmpty || email.isEmpty || password.isEmpty || confirmPassword.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Por favor llena todos los campos'), backgroundColor: Colors.red),
       );
-      ScaffoldMessenger.of(context).showSnackBar(snackBar);
       return;
     }
 
-    // password validation
-    if (!PasswordUtils.isPasswordValid(password)) {
+    // Email simple regex
+    final emailRegex = RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$');
+    if (!emailRegex.hasMatch(email)) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('La contraseña no cumple con todos los requisitos de seguridad'),
-          backgroundColor: Colors.red,
-          duration: Duration(seconds: 3),
-        ),
+        const SnackBar(content: Text('Ingrese un correo válido'), backgroundColor: Colors.red),
       );
       return;
     }
 
     if (password != confirmPassword) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Las contraseñas no coinciden'),
-          backgroundColor: Colors.red,
-        ),
+        const SnackBar(content: Text('Las contraseñas no coinciden'), backgroundColor: Colors.red),
       );
       return;
     }
 
-    // validate password strength
-    if (password.length < 6) {
+    if (!PasswordUtils.isPasswordValid(password)) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('La contraseña debe tener al menos 6 caracteres'),
-          backgroundColor: Colors.red,
-        ),
+        const SnackBar(content: Text('La contraseña no cumple con los requisitos'), backgroundColor: Colors.red),
       );
       return;
     }
 
-    final snackBar = SnackBar(
-      content: Row(
-        children: [
-          CircularProgressIndicator(),
-          SizedBox(width: 20),
-          Text('Creando cuenta...'),
-        ],
-      ),
+    // evitar múltiples envíos
+    if (_isLoading) return;
+    setState(() => _isLoading = true);
+
+    // show loading snackbar (opcional)
+    final loadingSnack = SnackBar(
+      content: Row(children: const [
+        CircularProgressIndicator(),
+        SizedBox(width: 16),
+        Text('Creando cuenta...'),
+      ]),
+      duration: const Duration(minutes: 1),
     );
+    ScaffoldMessenger.of(context).showSnackBar(loadingSnack);
 
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(snackBar);
-    }
-
-    // attempt to sign up
     try {
-      await authService.signUpWithEmailPassword(email, password);
+      // --- Lógica para rol ---
+      String role = 'distribuidor';
+      if (names.toLowerCase() == 'admin' || names.toLowerCase() == 'administrador') {
+        // comprobar si ya existe un administrador
+        final existingAdmin = await Supabase.instance.client
+            .from('users')
+            .select('idUser')
+            .eq('role', 'administrador')
+            .maybeSingle();
 
-      print("Usuario registrado: $email");
+        if (existingAdmin != null) {
+          // ya existe admin -> impedir crear otro
+          ScaffoldMessenger.of(context).hideCurrentSnackBar();
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Ya existe un administrador registrado. No se puede crear otro.'), backgroundColor: Colors.red),
+          );
+          setState(() => _isLoading = false);
+          return;
+        }
+        role = 'administrador';
+      }
 
-      // create user in the database
-      final newUser = Users(
-        names: names,
-        email: email,
-        role: 'usuario-normal',
-        state: 1,
-      );
+      // --- Comprobar email duplicado en tabla users (evita crear auth duplicado) ---
+      final existingUser = await Supabase.instance.client
+          .from('users')
+          .select('idUser')
+          .eq('email', email)
+          .maybeSingle();
 
-      await userDatabase.createUser(newUser);
-      print("Usuario creado en la base de datos: $email");
-
-      // navigate to home screen
-      if (mounted) {
-        //hide the loading snackbar
+      if (existingUser != null) {
         ScaffoldMessenger.of(context).hideCurrentSnackBar();
-
-        // show success message
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Cuenta creada exitosamente!'),
-            backgroundColor: Colors.green,
-          ),
+          const SnackBar(content: Text('Ya existe una cuenta con ese correo'), backgroundColor: Colors.red),
+        );
+        setState(() => _isLoading = false);
+        return;
+      }
+
+      // --- Crear cuenta usando AuthService (que ahora acepta role) ---
+      final res = await authService.signUpWithEmailPassword(email, password, names, role: role);
+
+      // Verificar resultado
+      if (res.user == null) {
+        throw Exception('No se creó la cuenta (respuesta vacía del servidor)');
+      }
+
+
+      // éxito
+      if (mounted) {
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Cuenta creada exitosamente como $role'), backgroundColor: Colors.green),
         );
 
-        // navigate to home screen
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (context) => const NavigationScreens()),
+        // no necesitas navegar si usas AuthGate; pero si quieres dirigir admin inmediatamente:
+        if (role == 'administrador') {
+          Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => const AdminDashboardScreen()));
+        } else {
+          Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => const NavigationScreens()));
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error al crear la cuenta: $e'), backgroundColor: Colors.red),
         );
       }
-    }
-    // catch any errors
-    catch (e) {
-      if (mounted) {
-        //hide the loading snackbar
-        ScaffoldMessenger.of(context).hideCurrentSnackBar();
-
-        // show error message
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error al crear la cuenta'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-      print("Error during registration: $e");
+      print('Error during registration: $e');
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 

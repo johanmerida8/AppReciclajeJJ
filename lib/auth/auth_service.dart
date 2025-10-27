@@ -17,18 +17,75 @@ class AuthService {
     );
   }
 
-  // sign up with email and password
-  Future<AuthResponse> signUpWithEmailPassword(String email, String password) async {
-    return await _supabase.auth.signUp(
-      email: email,
-      password: password,
-    );
+  /// Sign up and also create (or update) the users row with the given role.
+  /// Note: in production prefer doing user creation/upsert server-side.
+  Future<AuthResponse> signUpWithEmailPassword(
+    String email,
+    String password,
+    String name, {
+    String role = 'distribuidor',
+  }) async {
+    try {
+      // 1) Crear auth user
+      final response = await _supabase.auth.signUp(email: email, password: password);
+
+      // 2) Si el auth user fue creado (response.user != null), aseguramos la fila en 'users'
+      if (response.user != null) {
+        final userRow = {
+          'names': name,
+          'email': email,
+          'role': role,
+          'state': 1,
+          'created_at': DateTime.now().toIso8601String(),
+        };
+
+        try {
+          // Intentamos insertar. Si tu SDK soporta upsert, puedes usar upsert en vez de insert.
+          await _supabase.from('users').insert(userRow);
+        } catch (insertError) {
+          // Si falla por clave duplicada (email único), intentamos hacer update para sincronizar role/nombre
+          // Dependiendo del error que retorna Postgres/Supabase, puedes detectar el mensaje; aquí hacemos una actualización segura:
+          try {
+            await _supabase
+                .from('users')
+                .update({
+                  'names': name,
+                  'role': role,
+                  'state': 1,
+                })
+                .eq('email', email);
+          } catch (updateError) {
+            // si update también falla, mostramos/loggeamos para depuración
+            print('Error upserting user row: $updateError');
+            // no rethrow porque queremos devolver el response de auth aunque la fila users tenga problema;
+            // si prefieres, puedes rethrow para que el caller lo maneje.
+          }
+        }
+      }
+
+      return response;
+    } catch (e) {
+      print('Error en signUpWithEmailPassword: $e');
+      rethrow;
+    }
+  }
+
+  // fetch role
+  Future<String?> fetchUserRole(String email) async {
+    final response = await _supabase
+      .from('users')
+      .select('role')
+      .eq('email', email)
+      .maybeSingle();
+    
+    if (response != null && response['role'] != null) {
+      return response['role'] as String;
+    }
+    return null;
   }
 
   // sign out
-  Future<void> signOut() async {
-    await _supabase.auth.signOut();
-  }
+  Future<void> signOut() async => await _supabase.auth.signOut();
 
   // get user email
   String? getCurrentUserEmail() {
