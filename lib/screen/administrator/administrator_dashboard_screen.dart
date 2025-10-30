@@ -1,8 +1,9 @@
-// lib/screen/admin_dashboard_screen.dart
 import 'package:flutter/material.dart';
+import 'package:reciclaje_app/auth/auth_service.dart';
 import 'package:reciclaje_app/database/company_database.dart';
+import 'package:reciclaje_app/database/users_database.dart';
 import 'package:reciclaje_app/model/company.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:reciclaje_app/model/users.dart';
 
 class AdminDashboardScreen extends StatefulWidget {
   const AdminDashboardScreen({super.key});
@@ -12,154 +13,12 @@ class AdminDashboardScreen extends StatefulWidget {
 }
 
 class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
+  final authService = AuthService();
   final CompanyDatabase _companyDb = CompanyDatabase();
-  final SupabaseClient _supabase = Supabase.instance.client;
+  final UsersDatabase _usersDb = UsersDatabase();
 
-  // abrir diálogo para crear empresa
-  void _showCreateCompanyDialog() {
-    final nameCompanyController = TextEditingController();
-    final nameOwnerController = TextEditingController();
-    final emailOwnerController = TextEditingController();
-
-    showDialog(
-      context: context,
-      builder: (context) {
-        return AlertDialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          titlePadding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
-          contentPadding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
-          title: Row(
-            children: const [
-              Icon(Icons.business, color: Color(0xFF2D8A8A)),
-              SizedBox(width: 10),
-              Text(
-                'Registrar nueva empresa',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-              ),
-            ],
-          ),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                _InputField(
-                  controller: nameCompanyController,
-                  hint: 'Nombre de la empresa',
-                ),
-                const SizedBox(height: 10),
-                _InputField(
-                  controller: nameOwnerController,
-                  hint: 'Nombre del administrador de empresa',
-                ),
-                const SizedBox(height: 10),
-                _InputField(
-                  controller: emailOwnerController,
-                  hint: 'Correo del administrador',
-                  keyboardType: TextInputType.emailAddress,
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              style: TextButton.styleFrom(
-                backgroundColor: Colors.grey[300],
-                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-              ),
-              child: const Text('Cancelar', style: TextStyle(color: Colors.black)),
-            ),
-            ElevatedButton(
-              onPressed: () async {
-                final nameCompany = nameCompanyController.text.trim();
-                final nameOwner = nameOwnerController.text.trim();
-                final emailOwner = emailOwnerController.text.trim();
-
-                if (nameCompany.isEmpty || nameOwner.isEmpty || emailOwner.isEmpty) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Por favor completa todos los campos')),
-                  );
-                  return;
-                }
-
-                try {
-                  // 🔹 1. Crear usuario admin-empresa
-                  final userResponse = await _supabase
-                      .from('users')
-                      .insert({
-                        'names': nameOwner,
-                        'email': emailOwner,
-                        'role': 'admin-empresa',
-                        'state': 1,
-                        'created_at': DateTime.now().toIso8601String(),
-                      })
-                      .select('idUser')
-                      .maybeSingle();
-
-                  if (userResponse == null || userResponse['idUser'] == null) {
-                    throw Exception('Error al registrar el usuario');
-                  }
-
-                  final int adminId = userResponse['idUser'];
-
-                  // 🔹 2. Crear la empresa vinculada al usuario
-                  final company = Company(
-                    nameCompany: nameCompany,
-                    adminUserId: adminId,
-                    state: 1,
-                  );
-                  await _companyDb.createCompany(company);
-
-                  if (mounted) {
-                    Navigator.pop(context);
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('Empresa y usuario creados exitosamente'),
-                        backgroundColor: Colors.green,
-                      ),
-                    );
-                  }
-                } catch (e) {
-                  if (mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text('Error al crear empresa o usuario: $e'),
-                        backgroundColor: Colors.red,
-                      ),
-                    );
-                  }
-                }
-              },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF2D8A8A),
-                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-              ),
-              child: const Text('Registrar'),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-  // borrar empresa
-  Future<void> _deleteCompany(Company c) async {
-    try {
-      await _companyDb.deleteCompany(c);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Empresa eliminada')),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error al eliminar: $e')),
-        );
-      }
-    }
+  void _logout() async {
+    await authService.signOut();
   }
 
   @override
@@ -172,9 +31,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
         centerTitle: true,
         actions: [
           IconButton(
-            icon: const Icon(Icons.add),
-            onPressed: _showCreateCompanyDialog,
-          ),
+            onPressed: _logout, 
+            icon: Icon(Icons.logout)
+          )
         ],
       ),
       body: StreamBuilder<List<Company>>(
@@ -187,69 +46,292 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
             return Center(child: Text('Error: ${snapshot.error}'));
           }
 
-          final companies = snapshot.data ?? [];
-          if (companies.isEmpty) {
+          final allCompanies = snapshot.data ?? [];
+          
+          // Separate companies by approval status
+          final pendingCompanies = allCompanies.where((c) => c.isApproved == 'Pending' || (c.isApproved == null && c.state == 0)).toList();
+          final activeCompanies = allCompanies.where((c) => c.isApproved == 'Approved' && c.state == 1).toList();
+
+          if (allCompanies.isEmpty) {
             return const Center(child: Text('No hay empresas registradas'));
           }
 
-          return ListView.builder(
+          return ListView(
             padding: const EdgeInsets.all(12),
-            itemCount: companies.length,
-            itemBuilder: (context, index) {
-              final c = companies[index];
-              return Card(
-                margin: const EdgeInsets.symmetric(vertical: 8),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                elevation: 2,
-                child: ListTile(
-                  leading: const Icon(Icons.apartment, color: Color(0xFF2D8A8A)),
-                  title: Text(c.nameCompany ?? 'Sin nombre'),
-                  subtitle: Text('ID admin: ${c.adminUserId ?? '-'}'),
-                  trailing: IconButton(
-                    icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
-                    onPressed: () => _deleteCompany(c),
+            children: [
+              // Pending Approvals Section
+              if (pendingCompanies.isNotEmpty) ...[
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.orange.shade50,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.orange.shade200),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.pending_actions, color: Colors.orange.shade700),
+                      const SizedBox(width: 10),
+                      Text(
+                        'Solicitudes Pendientes (${pendingCompanies.length})',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.orange.shade700,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-              );
-            },
+                const SizedBox(height: 10),
+                ...pendingCompanies.map((company) => _buildPendingCompanyCard(company)),
+                const SizedBox(height: 20),
+                const Divider(thickness: 2),
+                const SizedBox(height: 20),
+              ],
+
+              // Active Companies Section
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.green.shade50,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.green.shade200),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.business, color: Colors.green.shade700),
+                    const SizedBox(width: 10),
+                    Text(
+                      'Empresas Activas (${activeCompanies.length})',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.green.shade700,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 10),
+              if (activeCompanies.isEmpty)
+                const Center(
+                  child: Padding(
+                    padding: EdgeInsets.all(20),
+                    child: Text('No hay empresas activas'),
+                  ),
+                )
+              else
+                ...activeCompanies.map((company) => _buildActiveCompanyCard(company)),
+            ],
           );
         },
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _showCreateCompanyDialog,
-        backgroundColor: const Color(0xFF2D8A8A),
-        child: const Icon(Icons.add),
+    );
+  }
+
+  // Build card for pending companies
+  Widget _buildPendingCompanyCard(Company company) {
+    return Card(
+      margin: const EdgeInsets.symmetric(vertical: 8),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      color: Colors.orange.shade50,
+      child: FutureBuilder<Users?>(
+        future: _usersDb.getUserById(company.adminUserId),
+        builder: (context, userSnapshot) {
+          final adminUser = userSnapshot.data;
+          
+          return ExpansionTile(
+            leading: const Icon(Icons.business_outlined, color: Colors.orange),
+            title: Text(
+              company.nameCompany ?? 'Sin nombre',
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+            subtitle: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Admin: ${adminUser?.names ?? 'Cargando...'}'),
+                Text('Email: ${adminUser?.email ?? ''}'),
+              ],
+            ),
+            children: [
+              Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: [
+                    Expanded(
+                      child: ElevatedButton.icon(
+                        onPressed: () => _approveCompany(company, adminUser),
+                        icon: const Icon(Icons.check_circle),
+                        label: const Text('Aprobar'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.green,
+                          foregroundColor: Colors.white,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: ElevatedButton.icon(
+                        onPressed: () => _rejectCompany(company, adminUser),
+                        icon: const Icon(Icons.cancel),
+                        label: const Text('Rechazar'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.red,
+                          foregroundColor: Colors.white,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          );
+        },
       ),
     );
   }
-}
 
-class _InputField extends StatelessWidget {
-  final TextEditingController controller;
-  final String hint;
-  final TextInputType keyboardType;
-
-  const _InputField({
-    required this.controller,
-    required this.hint,
-    this.keyboardType = TextInputType.text,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return TextField(
-      controller: controller,
-      keyboardType: keyboardType,
-      decoration: InputDecoration(
-        hintText: hint,
-        filled: true,
-        fillColor: const Color(0xFFF2F4F7),
-        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide.none,
-        ),
+  // Build card for active companies
+  Widget _buildActiveCompanyCard(Company company) {
+    return Card(
+      margin: const EdgeInsets.symmetric(vertical: 8),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: FutureBuilder<Users?>(
+        future: _usersDb.getUserById(company.adminUserId),
+        builder: (context, userSnapshot) {
+          final adminUser = userSnapshot.data;
+          
+          return ListTile(
+            leading: const Icon(Icons.apartment, color: Color(0xFF2D8A8A)),
+            title: Text(company.nameCompany ?? 'Sin nombre'),
+            subtitle: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Admin: ${adminUser?.names ?? 'Cargando...'}'),
+                Text('Email: ${adminUser?.email ?? ''}'),
+              ],
+            ),
+            trailing: Chip(
+              label: const Text('Activa'),
+              backgroundColor: Colors.green.shade100,
+              labelStyle: TextStyle(color: Colors.green.shade700, fontSize: 12),
+            ),
+          );
+        },
       ),
     );
+  }
+
+  // Approve company
+  Future<void> _approveCompany(Company company, Users? adminUser) async {
+    try {
+      // Update company state to 1 (active) and isApproved to 'Approved'
+      final updatedCompany = Company(
+        companyId: company.companyId,
+        nameCompany: company.nameCompany,
+        adminUserId: company.adminUserId,
+        state: 1,
+        isApproved: 'Approved',
+      );
+      await _companyDb.updateCompany(updatedCompany);
+
+      // Update user state to 1 (active)
+      if (adminUser != null) {
+        final updatedUser = Users(
+          id: adminUser.id,
+          names: adminUser.names,
+          email: adminUser.email,
+          role: adminUser.role,
+          state: 1,
+        );
+        await _usersDb.updateUser(updatedUser);
+      }
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Empresa aprobada exitosamente'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error al aprobar: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  // Reject company
+  Future<void> _rejectCompany(Company company, Users? adminUser) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Confirmar rechazo'),
+        content: Text('¿Estás seguro de rechazar la empresa "${company.nameCompany}"?\n\nEsta acción marcará la empresa como rechazada.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancelar'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            child: const Text('Rechazar'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    try {
+      // Update company state and isApproved to 'Rejected'
+      final updatedCompany = Company(
+        companyId: company.companyId,
+        nameCompany: company.nameCompany,
+        adminUserId: company.adminUserId,
+        state: 0,
+        isApproved: 'Rejected',
+      );
+      await _companyDb.updateCompany(updatedCompany);
+
+      // Update user state to 0 (inactive)
+      if (adminUser != null) {
+        final updatedUser = Users(
+          id: adminUser.id,
+          names: adminUser.names,
+          email: adminUser.email,
+          role: adminUser.role,
+          state: 0,
+        );
+        await _usersDb.updateUser(updatedUser);
+      }
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Solicitud rechazada'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error al rechazar: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
   }
 }

@@ -3,12 +3,14 @@ class Company {
   int? adminUserId;
   String? nameCompany;
   int? state;
+  String? isApproved; // "Approved", "Rejected", "Pending"
 
   Company({
     this.companyId,
     this.adminUserId,
     this.nameCompany,
     this.state,
+    this.isApproved,
   });
 
   factory Company.fromMap(Map<String, dynamic> map) {
@@ -17,6 +19,7 @@ class Company {
       adminUserId: map['adminUserID'],
       nameCompany: map['nameCompany'] as String,
       state: map['state'] as int,
+      isApproved: map['isApproved'] as String?,
     );
   }
 
@@ -25,11 +28,12 @@ class Company {
       'adminUserID': adminUserId,
       'nameCompany': nameCompany,
       'state': state,
+      'isApproved': isApproved,
     };
   }
 
   @override
   String toString() {
-    return 'Company{idCompany: $companyId, adminUserId: $adminUserId, nameCompany: $nameCompany, state: $state}';
+    return 'Company{idCompany: $companyId, adminUserId: $adminUserId, nameCompany: $nameCompany, state: $state, isApproved: $isApproved}';
   }
 }

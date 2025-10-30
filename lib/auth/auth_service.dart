@@ -74,7 +74,7 @@ class AuthService {
   Future<String?> fetchUserRole(String email) async {
     final response = await _supabase
       .from('users')
-      .select('role')
+      .select('role, state')
       .eq('email', email)
       .maybeSingle();
     
@@ -82,6 +82,20 @@ class AuthService {
       return response['role'] as String;
     }
     return null;
+  }
+
+  // check if user is approved (state = 1)
+  Future<bool> isUserApproved(String email) async {
+    final response = await _supabase
+      .from('users')
+      .select('state')
+      .eq('email', email)
+      .maybeSingle();
+    
+    if (response != null && response['state'] != null) {
+      return response['state'] == 1;
+    }
+    return false;
   }
 
   // sign out
@@ -93,8 +107,6 @@ class AuthService {
     final user = session?.user;
     return user?.email;
   }
-
-  // get user role
 
   // generate and send otp
   Future<String> generateAndSendOTP(String email) async {

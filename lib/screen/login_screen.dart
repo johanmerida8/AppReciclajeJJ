@@ -2,10 +2,15 @@ import 'package:flutter/material.dart';
 import 'package:reciclaje_app/auth/auth_service.dart';
 import 'package:reciclaje_app/components/my_button.dart';
 import 'package:reciclaje_app/components/my_textfield.dart';
+import 'package:reciclaje_app/database/employee_database.dart';
 // import 'package:reciclaje_app/screen/home_screen.dart';
 import 'package:reciclaje_app/screen/navigation_screens.dart';
 import 'package:reciclaje_app/screen/recover_password.dart';
 import 'package:reciclaje_app/screen/register_screen.dart';
+import 'package:reciclaje_app/screen/company_registration_screen.dart';
+import 'package:reciclaje_app/screen/administrator/administrator_dashboard_screen.dart';
+import 'package:reciclaje_app/screen/empresa/company_navigation_screens.dart';
+import 'package:reciclaje_app/screen/empresa/employee_change_password_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -17,6 +22,7 @@ class LoginScreen extends StatefulWidget {
 class _LoginScreenState extends State<LoginScreen> {
 
   final authService = AuthService();
+  final employeeDb = EmployeeDatabase();
 
   // text editing controllers
   final usernameController = TextEditingController();
@@ -57,14 +63,52 @@ class _LoginScreenState extends State<LoginScreen> {
     final password = passwordController.text;
 
     try {
+      // First check if this is an employee trying to login with temporary password
+      final employeeData = await employeeDb.getEmployeeByEmail(email);
+      
+      if (employeeData != null && employeeData['temporaryPassword'] == password) {
+        // Employee logging in with temporary password - force password change
+        if (mounted) {
+          ScaffoldMessenger.of(context).hideCurrentSnackBar();
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute(
+              builder: (_) => EmployeeChangePasswordScreen(employeeData: employeeData),
+            ),
+          );
+        }
+        return;
+      }
+
+      // Regular Supabase authentication
       await authService.signInWithEmailPassword(
         email, password);
         
         print("Login successful for user: $email");
 
+        // Check if user is approved before proceeding
+        final isApproved = await authService.isUserApproved(email);
+        
+        if (!isApproved) {
+          // Sign them out immediately
+          await authService.signOut();
+          
+          if (mounted) {
+            ScaffoldMessenger.of(context).hideCurrentSnackBar();
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text("Tu cuenta está pendiente de aprobación por el administrador"),
+                backgroundColor: Colors.orange,
+                duration: Duration(seconds: 5),
+              ),
+            );
+          }
+          return;
+        }
 
-
-        // Navigate to home screen
+        // Check user role to navigate to correct screen
+        final role = await authService.fetchUserRole(email);
+        
+        // Navigate to appropriate screen based on role
         if (mounted) {
           //hide the loading snackbar
           ScaffoldMessenger.of(context).hideCurrentSnackBar();
@@ -77,10 +121,21 @@ class _LoginScreenState extends State<LoginScreen> {
             ),
           );
 
-          // navigate to home screen
-          Navigator.of(context).pushReplacement(
-            MaterialPageRoute(builder: (context) => const NavigationScreens(),),
-          );
+          // navigate based on role
+          if (role?.toLowerCase() == 'administrador') {
+            Navigator.of(context).pushReplacement(
+              MaterialPageRoute(builder: (context) => const AdminDashboardScreen(),),
+            );
+          } else if (role?.toLowerCase() == 'admin-empresa') {
+            Navigator.of(context).pushReplacement(
+              MaterialPageRoute(builder: (context) => const CompanyNavigationScreens(),),
+            );
+          } else {
+            // distribuidor or any other role
+            Navigator.of(context).pushReplacement(
+              MaterialPageRoute(builder: (context) => const NavigationScreens(),),
+            );
+          }
         }
     }
     catch (e) {
@@ -284,6 +339,33 @@ class _LoginScreenState extends State<LoginScreen> {
                                         ),
                                       ),
                                     ],
+                                  ),
+                                ),
+                                const SizedBox(height: 20),
+                                // Company Registration Button
+                                Center(
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                                    child: OutlinedButton.icon(
+                                      onPressed: () {
+                                        Navigator.push(
+                                          context,
+                                          MaterialPageRoute(
+                                            builder: (context) => const CompanyRegistrationScreen(),
+                                          ),
+                                        );
+                                      },
+                                      icon: const Icon(Icons.business, size: 20),
+                                      label: const Text('Registrar Empresa de Reciclaje'),
+                                      style: OutlinedButton.styleFrom(
+                                        foregroundColor: const Color(0xFF2D8A8A),
+                                        side: const BorderSide(color: Color(0xFF2D8A8A)),
+                                        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 20),
+                                        shape: RoundedRectangleBorder(
+                                          borderRadius: BorderRadius.circular(8),
+                                        ),
+                                      ),
+                                    ),
                                   ),
                                 ),
                                 const SizedBox(height: 30),

@@ -6,7 +6,7 @@ import 'package:reciclaje_app/components/my_button.dart';
 import 'package:reciclaje_app/components/my_textfield.dart';
 import 'package:reciclaje_app/components/password_validator.dart';
 import 'package:reciclaje_app/database/users_database.dart';
-import 'package:reciclaje_app/model/users.dart';
+// import 'package:reciclaje_app/model/users.dart';
 import 'package:reciclaje_app/screen/administrator/administrator_dashboard_screen.dart';
 // import 'package:reciclaje_app/screen/home_screen.dart';
 import 'package:reciclaje_app/screen/login_screen.dart';
@@ -161,7 +161,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
         // no necesitas navegar si usas AuthGate; pero si quieres dirigir admin inmediatamente:
         if (role == 'administrador') {
-          Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => const AdminDashboardScreen()));
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute(builder: (_) => const AdminDashboardScreen())
+          );
         } else {
           Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => const NavigationScreens()));
         }

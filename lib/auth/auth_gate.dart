@@ -1,11 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:reciclaje_app/auth/auth_service.dart';
 import 'package:reciclaje_app/screen/administrator/administrator_dashboard_screen.dart';
+import 'package:reciclaje_app/screen/empresa/company_navigation_screens.dart';
 import 'package:reciclaje_app/screen/navigation_screens.dart';
 import 'package:reciclaje_app/screen/login_screen.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class AuthGate extends StatelessWidget {
+
   const AuthGate({super.key});
 
   @override
@@ -54,7 +56,9 @@ class AuthGate extends StatelessWidget {
 
             // 🔎 Redirección según el rol
             if (role == 'administrador') {
-              return const AdminDashboardScreen(); // 🔐 Admin general
+              return const AdminDashboardScreen();
+            } else if (role == 'admin-empresa') {
+              return const CompanyNavigationScreens();
             } else {
               // 👤 Distribuidor o cualquier otro rol por defecto
               return const NavigationScreens();

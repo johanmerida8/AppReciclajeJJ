@@ -14,7 +14,7 @@ import 'package:reciclaje_app/utils/Fixed43Cropper.dart';
 import 'package:reciclaje_app/database/photo_database.dart';
 import 'package:reciclaje_app/model/photo.dart';
 import 'package:reciclaje_app/model/recycling_items.dart';
-import 'package:reciclaje_app/screen/home_screen.dart';
+// import 'package:reciclaje_app/screen/home_screen.dart';
 import 'package:reciclaje_app/components/my_button.dart';
 import 'package:reciclaje_app/components/category_tags.dart';
 import 'package:reciclaje_app/components/my_textformfield.dart';
