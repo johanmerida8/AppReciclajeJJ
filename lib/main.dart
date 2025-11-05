@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:reciclaje_app/auth/auth_gate.dart';
+import 'package:reciclaje_app/screen/distribuidor/reset_password_link_screen.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 void main() async {
@@ -13,17 +14,50 @@ void main() async {
   runApp(const MyApp());
 }
 
-class MyApp extends StatelessWidget {
+class MyApp extends StatefulWidget {
   const MyApp({super.key});
 
-  // This widget is the root of your application.
+  @override
+  State<MyApp> createState() => _MyAppState();
+}
+
+class _MyAppState extends State<MyApp> {
+  final _navigatorKey = GlobalKey<NavigatorState>();
+
+  @override
+  void initState() {
+    super.initState();
+    _setupDeepLinkListener();
+  }
+
+  /// Listen for deep links (password reset, magic links, etc.)
+  void _setupDeepLinkListener() {
+    Supabase.instance.client.auth.onAuthStateChange.listen((data) {
+      final event = data.event;
+      
+      print('🔗 Auth event: $event');
+      
+      // When user clicks password reset link, redirect to reset password screen
+      if (event == AuthChangeEvent.passwordRecovery) {
+        print('🔑 Password recovery detected - navigating to reset screen');
+        _navigatorKey.currentState?.pushAndRemoveUntil(
+          MaterialPageRoute(
+            builder: (context) => const ResetPasswordLinkScreen(),
+          ),
+          (route) => false,
+        );
+      }
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      navigatorKey: _navigatorKey,
       debugShowCheckedModeBanner: false,
       title: 'Reciclaje App',
       theme: ThemeData(
-        useMaterial3: true, // ✅ Habilitar Material Design 3
+        useMaterial3: true,
         colorScheme: ColorScheme.fromSeed(
           seedColor: const Color(0xFF2D8A8A),
         ),

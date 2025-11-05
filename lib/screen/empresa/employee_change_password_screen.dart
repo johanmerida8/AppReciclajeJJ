@@ -3,7 +3,7 @@ import 'package:reciclaje_app/components/my_button.dart';
 import 'package:reciclaje_app/components/my_textfield.dart';
 import 'package:reciclaje_app/components/password_validator.dart';
 import 'package:reciclaje_app/database/employee_database.dart';
-import 'package:reciclaje_app/screen/administrator/administrator_navigations.dart';
+import 'package:reciclaje_app/screen/employee/employee_navigation_screens.dart';
 import 'package:reciclaje_app/utils/password_utils.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -84,9 +84,9 @@ class _EmployeeChangePasswordScreenState extends State<EmployeeChangePasswordScr
           ),
         );
 
-        // Navigate to distributor navigation screens
+        // Navigate to employee navigation screens
         Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (_) => const NavigationScreens()),
+          MaterialPageRoute(builder: (_) => const EmployeeNavigationScreens()),
         );
       }
     } catch (e) {

@@ -94,6 +94,7 @@ class RecyclingDataService {
         availableTimeStart: article.availableTimeStart ?? '',
         availableTimeEnd: article.availableTimeEnd ?? '',
         createdAt: DateTime.now(),
+        workflowStatus: article.workflowStatus,
       );
     } catch (e) {
       print('Error converting article to RecyclingItem: $e');

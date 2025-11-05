@@ -4,8 +4,10 @@ import 'package:reciclaje_app/database/company_database.dart';
 import 'package:reciclaje_app/database/users_database.dart';
 import 'package:reciclaje_app/model/company.dart';
 import 'package:reciclaje_app/screen/empresa/company_profile_screen.dart';
+// import 'package:reciclaje_app/screen/empresa/company_profile_screen.dart';
+// import 'package:reciclaje_app/screen/empresa/company_profile_screen_new.dart';
 import 'package:reciclaje_app/screen/empresa/employees_screen.dart';
-import 'package:reciclaje_app/screen/login_screen.dart';
+import 'package:reciclaje_app/screen/distribuidor/login_screen.dart';
 
 class CompanyAdminDashboardScreen extends StatefulWidget {
   const CompanyAdminDashboardScreen({super.key});
@@ -119,10 +121,10 @@ class _CompanyAdminDashboardScreenState extends State<CompanyAdminDashboardScree
               const SizedBox(height: 16),
               const Text('No se encontró información de la empresa'),
               const SizedBox(height: 16),
-              ElevatedButton(
-                onPressed: _signOut,
-                child: const Text('Cerrar Sesión'),
-              ),
+              // ElevatedButton(
+              //   onPressed: _signOut,
+              //   child: const Text('Cerrar Sesión'),
+              // ),
             ],
           ),
         ),
@@ -135,13 +137,13 @@ class _CompanyAdminDashboardScreenState extends State<CompanyAdminDashboardScree
         title: Text(_company!.nameCompany ?? 'Panel Empresa'),
         backgroundColor: const Color(0xFF2D8A8A),
         centerTitle: true,
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.logout),
-            onPressed: _signOut,
-            tooltip: 'Cerrar Sesión',
-          ),
-        ],
+        // actions: [
+        //   IconButton(
+        //     icon: const Icon(Icons.logout),
+        //     onPressed: _signOut,
+        //     tooltip: 'Cerrar Sesión',
+        //   ),
+        // ],
       ),
       body: Padding(
         padding: const EdgeInsets.all(16.0),
@@ -242,7 +244,7 @@ class _CompanyAdminDashboardScreenState extends State<CompanyAdminDashboardScree
                       Navigator.push(
                         context,
                         MaterialPageRoute(
-                          builder: (_) => CompanyProfileScreen(company: _company!),
+                          builder: (_) => CompanyProfileScreen(),
                         ),
                       ).then((_) => _loadCompanyData()); // Reload after edit
                     },

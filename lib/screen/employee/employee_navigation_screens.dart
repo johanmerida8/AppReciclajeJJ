@@ -1,29 +1,29 @@
 import 'package:curved_navigation_bar/curved_navigation_bar.dart';
 import 'package:flutter/material.dart';
-import 'package:reciclaje_app/screen/RegisterRecycle_screen.dart';
-import 'package:reciclaje_app/screen/home_screen.dart';
-import 'package:reciclaje_app/screen/profile_screen.dart';
+import 'package:reciclaje_app/screen/employee/employee_home_screen.dart';
+import 'package:reciclaje_app/screen/employee/employee_tasks_screen.dart';
+import 'package:reciclaje_app/screen/employee/employee_profile_screen.dart';
 
-class NavigationScreens extends StatefulWidget {
-  const NavigationScreens({super.key});
+class EmployeeNavigationScreens extends StatefulWidget {
+  const EmployeeNavigationScreens({super.key});
 
   @override
-  State<NavigationScreens> createState() => _NavigationScreensState();
+  State<EmployeeNavigationScreens> createState() => _EmployeeNavigationScreensState();
 }
 
-class _NavigationScreensState extends State<NavigationScreens> {
+class _EmployeeNavigationScreensState extends State<EmployeeNavigationScreens> {
   int _currentIndex = 0;
   
   // List of screens to navigate between
   final List<Widget> _screens = [
-    const HomeScreen(),
-    const RegisterRecycleScreen(), // For registering recycling items
-    const ProfileScreen(),
+    const EmployeeHomeScreen(),
+    const EmployeeTasksScreen(),
+    const EmployeeProfileScreen(),
   ];
 
   final List<Widget> _navigationItems = [
     const Icon(Icons.home, size: 30, color: Colors.white),
-    const Icon(Icons.add_box, size: 30, color: Colors.white),
+    const Icon(Icons.assignment, size: 30, color: Colors.white),
     const Icon(Icons.person, size: 30, color: Colors.white),
   ];
 
@@ -34,8 +34,7 @@ class _NavigationScreensState extends State<NavigationScreens> {
       body: _screens[_currentIndex],
       bottomNavigationBar: CurvedNavigationBar(
         backgroundColor: Colors.transparent,
-        color: const Color(0xFF2D8A8A), // Your app's teal color
-        // buttonBackgroundColor: const Color(0xFF2D8A8A), // Green accent
+        color: const Color(0xFF2D8A8A),
         buttonBackgroundColor: const Color.fromARGB(255, 45, 138, 138),
         height: 75,
         items: _navigationItems,

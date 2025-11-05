@@ -25,7 +25,7 @@ import 'package:reciclaje_app/model/article.dart';
 import 'package:reciclaje_app/model/category.dart';
 import 'package:reciclaje_app/model/deliver.dart';
 import 'package:reciclaje_app/model/photo.dart';
-import 'package:reciclaje_app/screen/map_picker_screen.dart';
+import 'package:reciclaje_app/screen/distribuidor/map_picker_screen.dart';
 import 'package:reciclaje_app/services/workflow_service.dart'; // ✅ Nuevo servicio
 import 'package:supabase_flutter/supabase_flutter.dart';
 

@@ -1,35 +1,23 @@
 import 'package:flutter/material.dart';
 import 'package:reciclaje_app/auth/auth_service.dart';
-import 'package:reciclaje_app/database/article_database.dart';
-import 'package:reciclaje_app/database/company_database.dart';
-import 'package:reciclaje_app/database/photo_database.dart';
 import 'package:reciclaje_app/database/users_database.dart';
-import 'package:reciclaje_app/model/article.dart';
-import 'package:reciclaje_app/model/company.dart';
-import 'package:reciclaje_app/model/photo.dart';
 import 'package:reciclaje_app/model/users.dart';
 import 'package:reciclaje_app/screen/distribuidor/login_screen.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-class CompanyProfileScreen extends StatefulWidget {
-  const CompanyProfileScreen({super.key});
+class EmployeeProfileScreen extends StatefulWidget {
+  const EmployeeProfileScreen({super.key});
 
   @override
-  State<CompanyProfileScreen> createState() => _CompanyProfileScreenState();
+  State<EmployeeProfileScreen> createState() => _EmployeeProfileScreenState();
 }
 
-class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
-  final authService = AuthService();
-  final usersDatabase = UsersDatabase();
-  final companyDatabase = CompanyDatabase();
-  final articleDatabase = ArticleDatabase();
-  final photoDatabase = PhotoDatabase();
+class _EmployeeProfileScreenState extends State<EmployeeProfileScreen> {
+  final AuthService authService = AuthService();
+  final UsersDatabase usersDatabase = UsersDatabase();
 
   Users? currentUser;
-  Company? currentCompany;
-  List<Article> companyArticles = [];
-  Map<int, Photo?> articlePhotos = {};
-  Map<int, String> categoryNames = {};
+  List<Map<String, dynamic>> employeeTasks = [];
   bool isLoading = true;
 
   @override
@@ -47,42 +35,22 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
         // Fetch user details
         currentUser = await usersDatabase.getUserByEmail(email);
         
-        print('✅ Loaded user: ${currentUser?.names} (${currentUser?.email})');
-        print('✅ User role from DB: ${currentUser?.role}');
+        print('✅ Loaded employee: ${currentUser?.names} (${currentUser?.email})');
         
-        // Fetch company details
+        // Fetch employee's assigned tasks
         if (currentUser?.id != null) {
-          // Get company where this user is admin
-          final companies = await Supabase.instance.client
-              .from('company')
-              .select()
-              .eq('adminUserID', currentUser!.id!)
-              .limit(1);
+          final tasks = await Supabase.instance.client
+              .from('tasks')
+              .select('''
+                *,
+                article:articleId (
+                  *,
+                  photo:idArticle (url)
+                )
+              ''')
+              .eq('employeeId', currentUser!.id!);
           
-          if (companies.isNotEmpty) {
-            currentCompany = Company.fromMap(companies.first);
-            
-            // Fetch company's articles
-            companyArticles = await articleDatabase.getArticlesByUserId(currentUser!.id!);
-            
-            // Load photos and category names for each article
-            for (var article in companyArticles) {
-              if (article.id != null) {
-                final photo = await photoDatabase.getMainPhotoByArticleId(article.id!);
-                articlePhotos[article.id!] = photo;
-                
-                // Fetch category name
-                if (article.categoryID != null) {
-                  final category = await Supabase.instance.client
-                      .from('category')
-                      .select('name')
-                      .eq('idCategory', article.categoryID!)
-                      .single();
-                  categoryNames[article.id!] = category['name'] as String;
-                }
-              }
-            }
-          }
+          employeeTasks = List<Map<String, dynamic>>.from(tasks);
         }
       }
     } catch (e) {
@@ -130,7 +98,7 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
   void _navigateToEditProfile() async {
     if (currentUser == null) return;
     
-    // TODO: Create EditProfileScreen for company
+    // TODO: Create EditProfileScreen for employee
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Función de editar perfil próximamente')),
     );
@@ -197,7 +165,7 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
                               : null,
                           child: currentUser?.avatarUrl == null
                               ? const Icon(
-                                  Icons.business,
+                                  Icons.person,
                                   size: 60,
                                   color: Color(0xFF2D8A8A),
                                 )
@@ -209,12 +177,12 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              // Company name with menu icon
+                              // User name with menu icon
                               Row(
                                 children: [
                                   Flexible(
                                     child: Text(
-                                      currentCompany?.nameCompany ?? currentUser?.names ?? 'Empresa',
+                                      currentUser?.names ?? 'Empleado',
                                       style: const TextStyle(
                                         fontSize: 24,
                                         fontWeight: FontWeight.bold,
@@ -245,7 +213,7 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
                               const SizedBox(height: 4),
                               // User role
                               const Text(
-                                'Empresa',
+                                'Empleado',
                                 style: TextStyle(
                                   fontSize: 14,
                                   color: Colors.white70,
@@ -257,7 +225,7 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
                       ],
                     ),
                   ),
-                  // Stats row - 6 stats for empresa
+                  // Stats row - 3 stats for empleado
                   Container(
                     margin: const EdgeInsets.symmetric(horizontal: 25),
                     padding: const EdgeInsets.all(20),
@@ -265,62 +233,31 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
                       color: Colors.white,
                       borderRadius: BorderRadius.circular(15),
                     ),
-                    child: Column(
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceAround,
                       children: [
-                        // First row: 3 stats
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceAround,
-                          children: [
-                            _buildStatItem(
-                              '${companyArticles.length}',
-                              'Publicados',
-                              Colors.blue,
-                            ),
-                            Container(width: 1, height: 40, color: Colors.grey[300]),
-                            _buildStatItem(
-                              '${companyArticles.where((a) => a.workflowStatus == 'pendiente' || a.workflowStatus == null).length}',
-                              'En Espera',
-                              Colors.purple,
-                            ),
-                            Container(width: 1, height: 40, color: Colors.grey[300]),
-                            _buildStatItem(
-                              '${companyArticles.where((a) => a.workflowStatus == 'sin_asignar').length}',
-                              'Sin Asignar',
-                              Colors.amber,
-                            ),
-                          ],
+                        _buildStatItem(
+                          '${employeeTasks.where((t) => t['status'] == 'asignado').length}',
+                          'Asignado',
+                          Colors.blue,
                         ),
-                        const SizedBox(height: 20),
-                        Divider(height: 1, color: Colors.grey[300]),
-                        const SizedBox(height: 20),
-                        // Second row: 3 stats
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceAround,
-                          children: [
-                            _buildStatItem(
-                              '${companyArticles.where((a) => a.workflowStatus == 'en_proceso').length}',
-                              'En Proceso',
-                              Colors.orange,
-                            ),
-                            Container(width: 1, height: 40, color: Colors.grey[300]),
-                            _buildStatItem(
-                              '${companyArticles.where((a) => a.workflowStatus == 'completado').length}',
-                              'Recogidos',
-                              Colors.green,
-                            ),
-                            Container(width: 1, height: 40, color: Colors.grey[300]),
-                            _buildStatItem(
-                              '${companyArticles.where((a) => a.workflowStatus == 'vencido').length}',
-                              'Vencidos',
-                              Colors.red,
-                            ),
-                          ],
+                        Container(width: 1, height: 40, color: Colors.grey[300]),
+                        _buildStatItem(
+                          '${employeeTasks.where((t) => t['status'] == 'en_proceso').length}',
+                          'En Procesos',
+                          Colors.orange,
+                        ),
+                        Container(width: 1, height: 40, color: Colors.grey[300]),
+                        _buildStatItem(
+                          '${employeeTasks.where((t) => t['status'] == 'completado').length}',
+                          'Recogidos',
+                          Colors.green,
                         ),
                       ],
                     ),
                   ),
                   const SizedBox(height: 20),
-                  // Publications section
+                  // Tasks section
                   Expanded(
                     child: Container(
                       decoration: const BoxDecoration(
@@ -336,7 +273,7 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
                           const Padding(
                             padding: EdgeInsets.fromLTRB(25, 25, 25, 10),
                             child: Text(
-                              'Publicaciones',
+                              'Mis Tareas',
                               style: TextStyle(
                                 fontSize: 20,
                                 fontWeight: FontWeight.bold,
@@ -362,11 +299,11 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
                             ),
                           ),
                           const SizedBox(height: 10),
-                          // Articles count
+                          // Tasks count
                           Padding(
                             padding: const EdgeInsets.symmetric(horizontal: 25),
                             child: Text(
-                              'Total ${companyArticles.length} publicaciones',
+                              'Total ${employeeTasks.length} tareas',
                               style: TextStyle(
                                 fontSize: 13,
                                 color: Colors.grey[600],
@@ -374,21 +311,21 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
                             ),
                           ),
                           const SizedBox(height: 15),
-                          // Grid of articles
+                          // Grid of tasks
                           Expanded(
-                            child: companyArticles.isEmpty
+                            child: employeeTasks.isEmpty
                                 ? Center(
                                     child: Column(
                                       mainAxisAlignment: MainAxisAlignment.center,
                                       children: [
                                         Icon(
-                                          Icons.inventory_2_outlined,
+                                          Icons.assignment_outlined,
                                           size: 80,
                                           color: Colors.grey[300],
                                         ),
                                         const SizedBox(height: 16),
                                         Text(
-                                          'No tienes publicaciones',
+                                          'No tienes tareas asignadas',
                                           style: TextStyle(
                                             fontSize: 16,
                                             color: Colors.grey[600],
@@ -406,14 +343,14 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
                                         crossAxisSpacing: 10,
                                         childAspectRatio: 0.85,
                                       ),
-                                      itemCount: companyArticles.length,
+                                      itemCount: employeeTasks.length,
                                       itemBuilder: (context, index) {
-                                        final article = companyArticles[index];
+                                        final task = employeeTasks[index];
                                         return GestureDetector(
                                           onTap: () {
-                                            // TODO: Navigate to detail
+                                            // TODO: Navigate to task detail
                                           },
-                                          child: _buildArticleCard(article),
+                                          child: _buildTaskCard(task),
                                         );
                                       },
                                     ),
@@ -430,40 +367,36 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
   }
 
   Widget _buildStatItem(String value, String label, Color color) {
-    return Expanded(
-      child: Column(
-        children: [
-          Text(
-            value,
-            style: TextStyle(
-              fontSize: 20,
-              fontWeight: FontWeight.bold,
-              color: color,
-            ),
+    return Column(
+      children: [
+        Text(
+          value,
+          style: TextStyle(
+            fontSize: 24,
+            fontWeight: FontWeight.bold,
+            color: color,
           ),
-          const SizedBox(height: 4),
-          Text(
-            label,
-            style: TextStyle(
-              fontSize: 11,
-              color: Colors.grey[600],
-            ),
-            textAlign: TextAlign.center,
-            maxLines: 2,
+        ),
+        const SizedBox(height: 4),
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: 12,
+            color: Colors.grey[600],
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 
-  Widget _buildArticleCard(Article article) {
+  Widget _buildTaskCard(Map<String, dynamic> task) {
     Color statusColor;
     String statusText;
     
-    switch (article.workflowStatus?.toLowerCase()) {
+    switch (task['status']?.toString().toLowerCase()) {
       case 'completado':
         statusColor = Colors.green;
-        statusText = 'Recogido';
+        statusText = 'Completado';
         break;
       case 'en_proceso':
         statusColor = Colors.orange;
@@ -473,21 +406,24 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
         statusColor = Colors.blue;
         statusText = 'Asignado';
         break;
-      case 'sin_asignar':
-        statusColor = Colors.amber;
-        statusText = 'Sin Asignar';
-        break;
-      case 'vencido':
-        statusColor = Colors.red;
-        statusText = 'Vencido';
-        break;
       default:
-        statusColor = Colors.purple;
-        statusText = 'En Espera';
+        statusColor = Colors.grey;
+        statusText = 'Pendiente';
     }
 
-    final photo = articlePhotos[article.id];
-    final imageUrl = photo?.url;
+    final article = task['article'];
+    final photos = article?['photo'];
+    String? imageUrl;
+    
+    if (photos != null) {
+      if (photos is List && photos.isNotEmpty) {
+        imageUrl = photos[0]['url'];
+      } else if (photos is Map) {
+        imageUrl = photos['url'];
+      }
+    }
+
+    final articleName = article?['name'] ?? 'Tarea sin título';
 
     return Container(
       decoration: BoxDecoration(
@@ -543,7 +479,7 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  article.name ?? 'Sin título',
+                  articleName,
                   style: const TextStyle(
                     fontSize: 14,
                     fontWeight: FontWeight.bold,
@@ -558,31 +494,29 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                 ),
-                if (article.condition != null) ...[
-                  const SizedBox(height: 4),
-                  Text(
-                    article.condition!,
-                    style: const TextStyle(
-                      fontSize: 11,
-                      color: Colors.white70,
-                      shadows: [
-                        Shadow(
-                          color: Colors.black,
-                          blurRadius: 2,
-                        ),
-                      ],
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
+                const SizedBox(height: 4),
+                Text(
+                  'Tarea #${task['taskId'] ?? ''}',
+                  style: const TextStyle(
+                    fontSize: 11,
+                    color: Colors.white70,
+                    shadows: [
+                      Shadow(
+                        color: Colors.black,
+                        blurRadius: 2,
+                      ),
+                    ],
                   ),
-                ],
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
               ],
             ),
           ),
           if (imageUrl == null)
             Center(
               child: Icon(
-                Icons.image_not_supported,
+                Icons.assignment,
                 size: 40,
                 color: Colors.grey[600],
               ),

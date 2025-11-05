@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:latlong2/latlong.dart';
-import 'package:reciclaje_app/screen/map_picker_screen.dart';
+import 'package:reciclaje_app/screen/distribuidor/map_picker_screen.dart';
 
 class LocationSelector extends StatelessWidget {
   final LatLng? selectedLocation;

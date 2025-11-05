@@ -5,8 +5,7 @@ import 'package:reciclaje_app/auth/auth_service.dart';
 import 'package:reciclaje_app/components/my_button.dart';
 import 'package:reciclaje_app/components/my_textfield.dart';
 import 'package:reciclaje_app/components/password_validator.dart';
-import 'package:reciclaje_app/screen/login_screen.dart';
-import 'package:reciclaje_app/utils/password_utils.dart';
+import 'package:reciclaje_app/screen/distribuidor/login_screen.dart';
 
 class ResetPasswordScreen extends StatefulWidget {
   final String email;
@@ -76,26 +75,26 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
     });
 
     try {
-      
-      // 
-      print('Attempting password reset with:');
-      print('Email: ${widget.email}');
-      print('New Password Length: ${newPasswordController.text.trim().length}');
+      print('🔐 Updating password via Supabase for: ${widget.email}');
 
-      // Actually update the password instead of simulating
-      await authService.updatePassword(
-        widget.email, 
-        newPasswordController.text.trim(), 
+      // 🆕 Update password using Supabase (user is already authenticated via OTP)
+      await authService.updatePasswordAfterSupabaseOTP(
+        newPasswordController.text.trim(),
       );
 
-      // call the logPasswordResetAttempt method to log the successful reset
+      // Log the password reset attempt
       await authService.logPasswordResetAttempt(widget.email);
-
-      // clean up expired OTPs after successful password reset
-      await authService.cleanupExpiredOTPs();
+      
+      // 🆕 Sign out immediately to prevent AuthGate from redirecting to home
+      await authService.signOut();
+      
+      if (!mounted) return;
       
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Contraseña restablecida con éxito')),
+        const SnackBar(
+          content: Text('✅ Contraseña restablecida con éxito'),
+          backgroundColor: Colors.green,
+        ),
       );
 
       // Navigate to login screen
@@ -192,7 +191,7 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
                     ),
                   ),
                   child: SingleChildScrollView(
-
+                    padding: const EdgeInsets.symmetric(horizontal: 30.0),
                     child: Column(
                       children: [
                         const SizedBox(height: 40),

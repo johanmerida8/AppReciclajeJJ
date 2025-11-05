@@ -1,8 +1,10 @@
 import 'package:curved_navigation_bar/curved_navigation_bar.dart';
 import 'package:flutter/material.dart';
 import 'package:reciclaje_app/screen/empresa/company_admin_dashboard_screen.dart';
+import 'package:reciclaje_app/screen/empresa/company_profile_screen.dart';
+// import 'package:reciclaje_app/screen/empresa/company_profile_screen_new.dart';
+import 'package:reciclaje_app/screen/empresa/company_map_screen.dart';
 import 'package:reciclaje_app/screen/empresa/employees_screen.dart';
-import 'package:reciclaje_app/screen/profile_screen.dart';
 import 'package:reciclaje_app/auth/auth_service.dart';
 import 'package:reciclaje_app/database/company_database.dart';
 import 'package:reciclaje_app/database/users_database.dart';
@@ -61,18 +63,21 @@ class _CompanyNavigationScreensState extends State<CompanyNavigationScreens> {
       return [
         const Center(child: Text('Error: No se encontró la empresa')),
         const Center(child: Text('Error: No se encontró la empresa')),
-        const ProfileScreen(),
+        const Center(child: Text('Error: No se encontró la empresa')),
+        const Center(child: Text('Error: No se encontró la empresa')),
       ];
     }
     
     return [
+      const CompanyMapScreen(),
       const CompanyAdminDashboardScreen(),
       EmployeesScreen(companyId: _companyId!),
-      const ProfileScreen(),
+      const CompanyProfileScreen(),
     ];
   }
 
   final List<Widget> _navigationItems = [
+    const Icon(Icons.map, size: 30, color: Colors.white),
     const Icon(Icons.dashboard, size: 30, color: Colors.white),
     const Icon(Icons.people, size: 30, color: Colors.white),
     const Icon(Icons.person, size: 30, color: Colors.white),

@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:geocoding/geocoding.dart';
-import 'package:reciclaje_app/screen/map_picker_screen.dart';
+import 'package:reciclaje_app/screen/distribuidor/map_picker_screen.dart';
 
 class LocationMapPreview extends StatefulWidget {
   final LatLng location;

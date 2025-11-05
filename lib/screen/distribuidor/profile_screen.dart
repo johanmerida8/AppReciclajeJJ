@@ -1,35 +1,34 @@
 import 'package:flutter/material.dart';
 import 'package:reciclaje_app/auth/auth_service.dart';
 import 'package:reciclaje_app/database/article_database.dart';
-import 'package:reciclaje_app/database/company_database.dart';
 import 'package:reciclaje_app/database/photo_database.dart';
 import 'package:reciclaje_app/database/users_database.dart';
 import 'package:reciclaje_app/model/article.dart';
-import 'package:reciclaje_app/model/company.dart';
 import 'package:reciclaje_app/model/photo.dart';
+import 'package:reciclaje_app/model/recycling_items.dart';
 import 'package:reciclaje_app/model/users.dart';
+import 'package:reciclaje_app/screen/distribuidor/detail_recycle_screen.dart';
+import 'package:reciclaje_app/screen/distribuidor/edit_profile_screen.dart';
 import 'package:reciclaje_app/screen/distribuidor/login_screen.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-class CompanyProfileScreen extends StatefulWidget {
-  const CompanyProfileScreen({super.key});
+class ProfileScreen extends StatefulWidget {
+  const ProfileScreen({super.key});
 
   @override
-  State<CompanyProfileScreen> createState() => _CompanyProfileScreenState();
+  State<ProfileScreen> createState() => _ProfileScreenState();
 }
 
-class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
+class _ProfileScreenState extends State<ProfileScreen> {
   final authService = AuthService();
   final usersDatabase = UsersDatabase();
-  final companyDatabase = CompanyDatabase();
   final articleDatabase = ArticleDatabase();
   final photoDatabase = PhotoDatabase();
 
   Users? currentUser;
-  Company? currentCompany;
-  List<Article> companyArticles = [];
-  Map<int, Photo?> articlePhotos = {};
-  Map<int, String> categoryNames = {};
+  List<Article> userArticles = [];
+  Map<int, Photo?> articlePhotos = {}; // Cache for article photos
+  Map<int, String> categoryNames = {}; // Cache for category names
   bool isLoading = true;
 
   @override
@@ -50,36 +49,24 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
         print('✅ Loaded user: ${currentUser?.names} (${currentUser?.email})');
         print('✅ User role from DB: ${currentUser?.role}');
         
-        // Fetch company details
+        // Fetch user's articles
         if (currentUser?.id != null) {
-          // Get company where this user is admin
-          final companies = await Supabase.instance.client
-              .from('company')
-              .select()
-              .eq('adminUserID', currentUser!.id!)
-              .limit(1);
+          userArticles = await articleDatabase.getArticlesByUserId(currentUser!.id!);
           
-          if (companies.isNotEmpty) {
-            currentCompany = Company.fromMap(companies.first);
-            
-            // Fetch company's articles
-            companyArticles = await articleDatabase.getArticlesByUserId(currentUser!.id!);
-            
-            // Load photos and category names for each article
-            for (var article in companyArticles) {
-              if (article.id != null) {
-                final photo = await photoDatabase.getMainPhotoByArticleId(article.id!);
-                articlePhotos[article.id!] = photo;
-                
-                // Fetch category name
-                if (article.categoryID != null) {
-                  final category = await Supabase.instance.client
-                      .from('category')
-                      .select('name')
-                      .eq('idCategory', article.categoryID!)
-                      .single();
-                  categoryNames[article.id!] = category['name'] as String;
-                }
+          // Load photos and category names for each article
+          for (var article in userArticles) {
+            if (article.id != null) {
+              final photo = await photoDatabase.getMainPhotoByArticleId(article.id!);
+              articlePhotos[article.id!] = photo;
+              
+              // Fetch category name
+              if (article.categoryID != null) {
+                final category = await Supabase.instance.client
+                    .from('category')
+                    .select('name')
+                    .eq('idCategory', article.categoryID!)
+                    .single();
+                categoryNames[article.id!] = category['name'] as String;
               }
             }
           }
@@ -95,6 +82,7 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
   }
 
   void _logout() async {
+    // Show confirmation dialog
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -127,15 +115,75 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
     }
   }
 
+  // Navigate to edit profile screen
   void _navigateToEditProfile() async {
     if (currentUser == null) return;
     
-    // TODO: Create EditProfileScreen for company
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Función de editar perfil próximamente')),
+    final result = await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => EditProfileScreen(user: currentUser!),
+      ),
     );
+
+    // Refresh data if profile was updated
+    if (result == true) {
+      _loadUserData();
+    }
   }
 
+  // Convert Article to RecyclingItem for DetailRecycleScreen
+  Future<RecyclingItem?> _convertArticleToRecyclingItem(Article article) async {
+    try {
+      // Fetch deliver info
+      final deliver = await Supabase.instance.client
+          .from('deliver')
+          .select('address, lat, lng')
+          .eq('idDeliver', article.deliverID!)
+          .single();
+
+      return RecyclingItem(
+        id: article.id!,
+        title: article.name ?? '',
+        deliverID: article.deliverID,
+        description: article.description,
+        categoryID: article.categoryID,
+        categoryName: categoryNames[article.id] ?? '',
+        condition: article.condition,
+        ownerUserId: article.userId,
+        userName: currentUser?.names ?? '',
+        userEmail: currentUser?.email ?? '',
+        latitude: (deliver['lat'] as num).toDouble(),
+        longitude: (deliver['lng'] as num).toDouble(),
+        address: deliver['address'] as String,
+        availableDays: article.availableDays ?? '',
+        availableTimeStart: article.availableTimeStart ?? '',
+        availableTimeEnd: article.availableTimeEnd ?? '',
+        createdAt: article.lastUpdate ?? DateTime.now(),
+      );
+    } catch (e) {
+      print('❌ Error converting article to recycling item: $e');
+      return null;
+    }
+  }
+
+  // Navigate to detail screen
+  void _navigateToDetail(Article article) async {
+    final recyclingItem = await _convertArticleToRecyclingItem(article);
+    if (recyclingItem != null && mounted) {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => DetailRecycleScreen(item: recyclingItem),
+        ),
+      ).then((_) {
+        // Refresh data when coming back
+        _loadUserData();
+      });
+    }
+  }
+
+  // Show profile menu with edit profile and logout options (from edit icon)
   void _showProfileMenu() {
     showModalBottomSheet(
       context: context,
@@ -197,7 +245,7 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
                               : null,
                           child: currentUser?.avatarUrl == null
                               ? const Icon(
-                                  Icons.business,
+                                  Icons.person,
                                   size: 60,
                                   color: Color(0xFF2D8A8A),
                                 )
@@ -209,12 +257,12 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              // Company name with menu icon
+                              // User name with edit icon
                               Row(
                                 children: [
                                   Flexible(
                                     child: Text(
-                                      currentCompany?.nameCompany ?? currentUser?.names ?? 'Empresa',
+                                      currentUser?.names ?? 'Usuario',
                                       style: const TextStyle(
                                         fontSize: 24,
                                         fontWeight: FontWeight.bold,
@@ -243,10 +291,12 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
                                 ],
                               ),
                               const SizedBox(height: 4),
-                              // User role
-                              const Text(
-                                'Empresa',
-                                style: TextStyle(
+                              // User role (not "Usuario" badge)
+                              Text(
+                                currentUser?.role?.toLowerCase() == 'distribuidor'
+                                    ? 'Distribuidor'
+                                    : currentUser?.role?.toUpperCase() ?? 'USUARIO',
+                                style: const TextStyle(
                                   fontSize: 14,
                                   color: Colors.white70,
                                 ),
@@ -257,7 +307,7 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
                       ],
                     ),
                   ),
-                  // Stats row - 6 stats for empresa
+                  // Stats row
                   Container(
                     margin: const EdgeInsets.symmetric(horizontal: 25),
                     padding: const EdgeInsets.all(20),
@@ -265,56 +315,25 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
                       color: Colors.white,
                       borderRadius: BorderRadius.circular(15),
                     ),
-                    child: Column(
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceAround,
                       children: [
-                        // First row: 3 stats
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceAround,
-                          children: [
-                            _buildStatItem(
-                              '${companyArticles.length}',
-                              'Publicados',
-                              Colors.blue,
-                            ),
-                            Container(width: 1, height: 40, color: Colors.grey[300]),
-                            _buildStatItem(
-                              '${companyArticles.where((a) => a.workflowStatus == 'pendiente' || a.workflowStatus == null).length}',
-                              'En Espera',
-                              Colors.purple,
-                            ),
-                            Container(width: 1, height: 40, color: Colors.grey[300]),
-                            _buildStatItem(
-                              '${companyArticles.where((a) => a.workflowStatus == 'sin_asignar').length}',
-                              'Sin Asignar',
-                              Colors.amber,
-                            ),
-                          ],
+                        _buildStatItem(
+                          '${userArticles.length}',
+                          'Publicados',
+                          Colors.blue,
                         ),
-                        const SizedBox(height: 20),
-                        Divider(height: 1, color: Colors.grey[300]),
-                        const SizedBox(height: 20),
-                        // Second row: 3 stats
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceAround,
-                          children: [
-                            _buildStatItem(
-                              '${companyArticles.where((a) => a.workflowStatus == 'en_proceso').length}',
-                              'En Proceso',
-                              Colors.orange,
-                            ),
-                            Container(width: 1, height: 40, color: Colors.grey[300]),
-                            _buildStatItem(
-                              '${companyArticles.where((a) => a.workflowStatus == 'completado').length}',
-                              'Recogidos',
-                              Colors.green,
-                            ),
-                            Container(width: 1, height: 40, color: Colors.grey[300]),
-                            _buildStatItem(
-                              '${companyArticles.where((a) => a.workflowStatus == 'vencido').length}',
-                              'Vencidos',
-                              Colors.red,
-                            ),
-                          ],
+                        Container(width: 1, height: 40, color: Colors.grey[300]),
+                        _buildStatItem(
+                          '${userArticles.where((a) => a.workflowStatus == 'en_proceso').length}',
+                          'En Procesos',
+                          Colors.orange,
+                        ),
+                        Container(width: 1, height: 40, color: Colors.grey[300]),
+                        _buildStatItem(
+                          '${userArticles.where((a) => a.workflowStatus == 'completado').length}',
+                          'Recogidos',
+                          Colors.green,
                         ),
                       ],
                     ),
@@ -362,11 +381,42 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
                             ),
                           ),
                           const SizedBox(height: 10),
+                          // Filter options
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 25),
+                            // child: Row(
+                            //   children: [
+                            //     Text(
+                            //       'por fecha',
+                            //       style: TextStyle(
+                            //         fontSize: 14,
+                            //         color: Colors.grey[600],
+                            //       ),
+                            //     ),
+                            //     const SizedBox(width: 8),
+                            //     Icon(Icons.calendar_today, size: 16, color: Colors.grey[600]),
+                            //     const Spacer(),
+                            //     // 3-dot menu button
+                            //     IconButton(
+                            //       icon: Icon(Icons.more_vert, size: 24, color: Colors.grey[600]),
+                            //       onPressed: _showSettingsMenu,
+                            //       tooltip: 'Más opciones',
+                            //       padding: EdgeInsets.zero,
+                            //       constraints: const BoxConstraints(),
+                            //     ),
+                            //     const SizedBox(width: 16),
+                            //     Icon(Icons.sort, size: 20, color: Colors.grey[600]),
+                            //     const SizedBox(width: 16),
+                            //     Icon(Icons.grid_view, size: 20, color: Colors.grey[600]),
+                            //   ],
+                            // ),
+                          ),
+                          const SizedBox(height: 10),
                           // Articles count
                           Padding(
                             padding: const EdgeInsets.symmetric(horizontal: 25),
                             child: Text(
-                              'Total ${companyArticles.length} publicaciones',
+                              'Total ${userArticles.length} finalizadas',
                               style: TextStyle(
                                 fontSize: 13,
                                 color: Colors.grey[600],
@@ -376,7 +426,7 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
                           const SizedBox(height: 15),
                           // Grid of articles
                           Expanded(
-                            child: companyArticles.isEmpty
+                            child: userArticles.isEmpty
                                 ? Center(
                                     child: Column(
                                       mainAxisAlignment: MainAxisAlignment.center,
@@ -406,13 +456,11 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
                                         crossAxisSpacing: 10,
                                         childAspectRatio: 0.85,
                                       ),
-                                      itemCount: companyArticles.length,
+                                      itemCount: userArticles.length,
                                       itemBuilder: (context, index) {
-                                        final article = companyArticles[index];
+                                        final article = userArticles[index];
                                         return GestureDetector(
-                                          onTap: () {
-                                            // TODO: Navigate to detail
-                                          },
+                                          onTap: () => _navigateToDetail(article),
                                           child: _buildArticleCard(article),
                                         );
                                       },
@@ -430,40 +478,37 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
   }
 
   Widget _buildStatItem(String value, String label, Color color) {
-    return Expanded(
-      child: Column(
-        children: [
-          Text(
-            value,
-            style: TextStyle(
-              fontSize: 20,
-              fontWeight: FontWeight.bold,
-              color: color,
-            ),
+    return Column(
+      children: [
+        Text(
+          value,
+          style: TextStyle(
+            fontSize: 24,
+            fontWeight: FontWeight.bold,
+            color: color,
           ),
-          const SizedBox(height: 4),
-          Text(
-            label,
-            style: TextStyle(
-              fontSize: 11,
-              color: Colors.grey[600],
-            ),
-            textAlign: TextAlign.center,
-            maxLines: 2,
+        ),
+        const SizedBox(height: 4),
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: 12,
+            color: Colors.grey[600],
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 
   Widget _buildArticleCard(Article article) {
+    // Determine status color and text
     Color statusColor;
     String statusText;
     
     switch (article.workflowStatus?.toLowerCase()) {
       case 'completado':
         statusColor = Colors.green;
-        statusText = 'Recogido';
+        statusText = 'Completado';
         break;
       case 'en_proceso':
         statusColor = Colors.orange;
@@ -473,17 +518,9 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
         statusColor = Colors.blue;
         statusText = 'Asignado';
         break;
-      case 'sin_asignar':
-        statusColor = Colors.amber;
-        statusText = 'Sin Asignar';
-        break;
-      case 'vencido':
-        statusColor = Colors.red;
-        statusText = 'Vencido';
-        break;
       default:
-        statusColor = Colors.purple;
-        statusText = 'En Espera';
+        statusColor = Colors.grey;
+        statusText = 'Pendiente';
     }
 
     final photo = articlePhotos[article.id];
@@ -502,6 +539,7 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
       ),
       child: Stack(
         children: [
+          // Gradient overlay for better text visibility
           Container(
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(12),
@@ -516,6 +554,7 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
               ),
             ),
           ),
+          // Status badge at top right
           Positioned(
             top: 8,
             right: 8,
@@ -535,6 +574,7 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
               ),
             ),
           ),
+          // Article title at bottom
           Positioned(
             bottom: 10,
             left: 10,
@@ -579,6 +619,7 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
               ],
             ),
           ),
+          // Show icon if no image
           if (imageUrl == null)
             Center(
               child: Icon(

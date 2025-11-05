@@ -4,13 +4,14 @@ import 'package:reciclaje_app/components/my_button.dart';
 import 'package:reciclaje_app/components/my_textfield.dart';
 import 'package:reciclaje_app/database/employee_database.dart';
 // import 'package:reciclaje_app/screen/home_screen.dart';
-import 'package:reciclaje_app/screen/navigation_screens.dart';
-import 'package:reciclaje_app/screen/recover_password.dart';
-import 'package:reciclaje_app/screen/register_screen.dart';
-import 'package:reciclaje_app/screen/company_registration_screen.dart';
+import 'package:reciclaje_app/screen/distribuidor/navigation_screens.dart';
+import 'package:reciclaje_app/screen/distribuidor/recover_password.dart';
+import 'package:reciclaje_app/screen/distribuidor/register_screen.dart';
+import 'package:reciclaje_app/screen/empresa/company_registration_screen.dart';
 import 'package:reciclaje_app/screen/administrator/administrator_dashboard_screen.dart';
 import 'package:reciclaje_app/screen/empresa/company_navigation_screens.dart';
 import 'package:reciclaje_app/screen/empresa/employee_change_password_screen.dart';
+import 'package:reciclaje_app/screen/employee/employee_navigation_screens.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -129,6 +130,10 @@ class _LoginScreenState extends State<LoginScreen> {
           } else if (role?.toLowerCase() == 'admin-empresa') {
             Navigator.of(context).pushReplacement(
               MaterialPageRoute(builder: (context) => const CompanyNavigationScreens(),),
+            );
+          } else if (role?.toLowerCase() == 'empleado') {
+            Navigator.of(context).pushReplacement(
+              MaterialPageRoute(builder: (context) => const EmployeeNavigationScreens(),),
             );
           } else {
             // distribuidor or any other role

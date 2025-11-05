@@ -19,7 +19,6 @@ class _NavigationScreensState extends State<NavigationScreens> {
     const HomeScreen(),
     const RegisterRecycleScreen(), // For registering recycling items
     const ProfileScreen(),
-    
   ];
 
   final List<Widget> _navigationItems = [

@@ -2,8 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:reciclaje_app/auth/auth_service.dart';
 import 'package:reciclaje_app/screen/administrator/administrator_dashboard_screen.dart';
 import 'package:reciclaje_app/screen/empresa/company_navigation_screens.dart';
-import 'package:reciclaje_app/screen/navigation_screens.dart';
-import 'package:reciclaje_app/screen/login_screen.dart';
+import 'package:reciclaje_app/screen/employee/employee_navigation_screens.dart';
+import 'package:reciclaje_app/screen/distribuidor/navigation_screens.dart';
+import 'package:reciclaje_app/screen/distribuidor/login_screen.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class AuthGate extends StatelessWidget {
@@ -52,15 +53,26 @@ class AuthGate extends StatelessWidget {
               );
             }
 
-            final role = roleSnapshot.data?.toLowerCase();
+            final role = roleSnapshot.data?.toLowerCase().trim();
+
+            // 🐛 Debug: Print the role to see what's being returned
+            print('🔍 AUTH_GATE: User email: $email');
+            print('🔍 AUTH_GATE: User role from DB: "${roleSnapshot.data}"');
+            print('🔍 AUTH_GATE: Normalized role: "$role"');
 
             // 🔎 Redirección según el rol
             if (role == 'administrador') {
+              print('✅ Redirecting to: AdminDashboardScreen');
               return const AdminDashboardScreen();
             } else if (role == 'admin-empresa') {
+              print('✅ Redirecting to: CompanyNavigationScreens');
               return const CompanyNavigationScreens();
+            } else if (role == 'empleado') {
+              print('✅ Redirecting to: EmployeeNavigationScreens');
+              return const EmployeeNavigationScreens();
             } else {
-              // 👤 Distribuidor o cualquier otro rol por defecto
+              // Distribuidor o cualquier otro rol por defecto
+              print('✅ Redirecting to: NavigationScreens (distribuidor)');
               return const NavigationScreens();
             }
           },

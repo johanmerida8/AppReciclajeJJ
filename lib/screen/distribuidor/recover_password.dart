@@ -2,8 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:reciclaje_app/auth/auth_service.dart';
 import 'package:reciclaje_app/components/my_button.dart';
 import 'package:reciclaje_app/components/my_textfield.dart';
-import 'package:reciclaje_app/screen/login_screen.dart';
-import 'package:reciclaje_app/screen/otp_screen.dart';
+import 'package:reciclaje_app/screen/distribuidor/login_screen.dart';
+import 'package:reciclaje_app/screen/distribuidor/otp_screen.dart';
 
 class RecoverPasswordScreen extends StatefulWidget {
   const RecoverPasswordScreen({super.key});
@@ -22,7 +22,7 @@ class _RecoverPasswordScreenState extends State<RecoverPasswordScreen> {
 
   bool isLoading = false;
 
-  // sign user in method
+  // send OTP via email
   void resetPassword() async {
     if (usernameController.text.trim().isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -37,66 +37,52 @@ class _RecoverPasswordScreenState extends State<RecoverPasswordScreen> {
 
     try {
       final email = usernameController.text.trim();
-      print('🔍 Checking eligibility for: $email');
+      print('🔍 Sending OTP to: $email');
 
-      // check if user can request password reset (cooldown check)
+      // Check rate limits first
       final eligibility = await authService.canRequestPasswordReset(email);
-      print('🔍 Eligibility response: $eligibility');
-      print('🔍 Type of eligibility: ${eligibility.runtimeType}');
-
-      if (eligibility['canReset'] != null) {
-      print('🔍 canReset value: ${eligibility['canReset']}');
-      print('🔍 canReset type: ${eligibility['canReset'].runtimeType}');
-    } else {
-      print('🚫 canReset is null!');
-    }
-
-      if (eligibility == null || eligibility.isEmpty) {
+      
+      if (eligibility['canReset'] != true) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('No se puede procesar la solicitud en este momento. Inténtalo de nuevo más tarde.'),
+            content: Text(eligibility['message'] ?? 'Por favor espera antes de intentar de nuevo'),
             backgroundColor: Colors.orange,
             duration: const Duration(seconds: 4),
           ),
         );
+        setState(() {
+          isLoading = false;  
+        });
         return;
       }
 
-      // safely check canReset with null safety
-      final canReset = eligibility['canReset'] as bool? ?? false;
+      // 🆕 Send OTP via Supabase (free, unlimited)
+      await authService.sendOTPToEmail(email);
 
-      if (!canReset) {
-        final msg = eligibility['message'] ?? 'No se puede restablecer la contraseña en este momento.';
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(msg),
-            backgroundColor: Colors.orange,
-            duration: const Duration(seconds: 4),
-          ),
-        );
-        return;
-      }
-
-      // generate and send OTP
-      await authService.generateAndSendOTP(email);
-
-      // log the password reset attempt
+      // Log the attempt
       await authService.logPasswordResetAttempt(email);
 
-      //Navigate to OTP screen
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (context) {
-            return OTPScreen(email: email);
-          },
-        ),
-      );
-    } catch (e) {
-      print('🚫 Error in recoverPassword: $e');
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Error al restablecer la contraseña'),
+          content: Text('✅ Código enviado a $email'),
+          backgroundColor: Colors.green,
+        ),
+      );
+
+      // Navigate to OTP verification screen
+      if (mounted) {
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(
+            builder: (context) => OTPScreen(email: email),
+          ),
+        );
+      }
+    } catch (e) {
+      print('🚫 Error in resetPassword: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error al enviar OTP: $e'),
           backgroundColor: Colors.red,
         ),
       );

@@ -8,7 +8,7 @@ import 'package:reciclaje_app/components/password_validator.dart';
 import 'package:reciclaje_app/database/company_database.dart';
 import 'package:reciclaje_app/database/users_database.dart';
 import 'package:reciclaje_app/model/company.dart';
-import 'package:reciclaje_app/screen/login_screen.dart';
+import 'package:reciclaje_app/screen/distribuidor/login_screen.dart';
 import 'package:reciclaje_app/utils/password_utils.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 

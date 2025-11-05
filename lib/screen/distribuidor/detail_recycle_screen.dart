@@ -25,7 +25,7 @@ import 'package:reciclaje_app/database/deliver_database.dart';
 import 'package:reciclaje_app/model/article.dart';
 import 'package:reciclaje_app/model/category.dart';
 import 'package:reciclaje_app/model/deliver.dart';
-import 'package:reciclaje_app/screen/navigation_screens.dart';
+import 'package:reciclaje_app/screen/distribuidor/navigation_screens.dart';
 import 'package:reciclaje_app/services/workflow_service.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 

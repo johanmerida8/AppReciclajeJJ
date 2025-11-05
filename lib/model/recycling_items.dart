@@ -16,6 +16,7 @@ class RecyclingItem {
   final String availableTimeStart;
   final String availableTimeEnd;
   final DateTime createdAt;
+  final String? workflowStatus;
 
   RecyclingItem({
     required this.id,
@@ -35,6 +36,7 @@ class RecyclingItem {
     required this.availableTimeStart,
     required this.availableTimeEnd,
     required this.createdAt,
+    this.workflowStatus,
   });
 
   // ✅ Serialization methods for caching
@@ -57,6 +59,7 @@ class RecyclingItem {
       'availableTimeStart': availableTimeStart,
       'availableTimeEnd': availableTimeEnd,
       'createdAt': createdAt.toIso8601String(),
+      'workflowStatus': workflowStatus,
     };
   }
 
@@ -79,6 +82,7 @@ class RecyclingItem {
       availableTimeStart: json['availableTimeStart'],
       availableTimeEnd: json['availableTimeEnd'],
       createdAt: DateTime.parse(json['createdAt']),
+      workflowStatus: json['workflowStatus'],
     );
   }
 }
