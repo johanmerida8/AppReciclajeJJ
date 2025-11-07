@@ -1,7 +1,7 @@
 class RecyclingItem {
   final int id;
   final String title;
-  final int? deliverID;
+  // final int? deliverID;
   final String? description;
   final int? categoryID;
   final String categoryName;
@@ -21,7 +21,7 @@ class RecyclingItem {
   RecyclingItem({
     required this.id,
     required this.title,
-    this.deliverID,
+    // this.deliverID,
     this.description,
     this.categoryID,
     this.condition,
@@ -44,7 +44,7 @@ class RecyclingItem {
     return {
       'id': id,
       'title': title,
-      'deliverID': deliverID,
+      // 'deliverID': deliverID,
       'description': description,
       'categoryID': categoryID,
       'categoryName': categoryName,
@@ -67,7 +67,7 @@ class RecyclingItem {
     return RecyclingItem(
       id: json['id'],
       title: json['title'],
-      deliverID: json['deliverID'],
+      // deliverID: json['deliverID'],
       description: json['description'],
       categoryID: json['categoryID'],
       categoryName: json['categoryName'],

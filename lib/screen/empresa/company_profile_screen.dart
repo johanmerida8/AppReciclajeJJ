@@ -2,13 +2,15 @@ import 'package:flutter/material.dart';
 import 'package:reciclaje_app/auth/auth_service.dart';
 import 'package:reciclaje_app/database/article_database.dart';
 import 'package:reciclaje_app/database/company_database.dart';
-import 'package:reciclaje_app/database/photo_database.dart';
+import 'package:reciclaje_app/database/media_database.dart';
 import 'package:reciclaje_app/database/users_database.dart';
 import 'package:reciclaje_app/model/article.dart';
 import 'package:reciclaje_app/model/company.dart';
-import 'package:reciclaje_app/model/photo.dart';
+import 'package:reciclaje_app/model/multimedia.dart';
 import 'package:reciclaje_app/model/users.dart';
+import 'package:reciclaje_app/screen/distribuidor/edit_profile_screen.dart';
 import 'package:reciclaje_app/screen/distribuidor/login_screen.dart';
+import 'package:reciclaje_app/screen/empresa/edit_company_profile_screen.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class CompanyProfileScreen extends StatefulWidget {
@@ -23,14 +25,17 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
   final usersDatabase = UsersDatabase();
   final companyDatabase = CompanyDatabase();
   final articleDatabase = ArticleDatabase();
-  final photoDatabase = PhotoDatabase();
+  final mediaDatabase = MediaDatabase();
 
   Users? currentUser;
+  Multimedia? currentUserAvatar; // Admin user's avatar from multimedia table
+  Multimedia? companyAvatar; // Company's avatar/logo from multimedia table
   Company? currentCompany;
   List<Article> companyArticles = [];
-  Map<int, Photo?> articlePhotos = {};
+  Map<int, Multimedia?> articlePhotos = {};
   Map<int, String> categoryNames = {};
   bool isLoading = true;
+  bool isViewingCompanyProfile = true; // Toggle between company and admin profile
 
   @override
   void initState() {
@@ -50,6 +55,13 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
         print('✅ Loaded user: ${currentUser?.names} (${currentUser?.email})');
         print('✅ User role from DB: ${currentUser?.role}');
         
+        // Load user avatar from multimedia table
+        if (currentUser?.id != null) {
+          final avatarPattern = 'users/${currentUser!.id}/avatars/';
+          currentUserAvatar = await mediaDatabase.getMainPhotoByPattern(avatarPattern);
+          print('📸 Admin user avatar: ${currentUserAvatar?.url ?? "No avatar"}');
+        }
+        
         // Fetch company details
         if (currentUser?.id != null) {
           // Get company where this user is admin
@@ -62,13 +74,20 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
           if (companies.isNotEmpty) {
             currentCompany = Company.fromMap(companies.first);
             
+            // Load company avatar/logo from multimedia table
+            if (currentCompany?.companyId != null) {
+              final companyAvatarPattern = 'empresa/${currentCompany!.companyId}/avatar/';
+              companyAvatar = await mediaDatabase.getMainPhotoByPattern(companyAvatarPattern);
+              print('🏢 Company avatar: ${companyAvatar?.url ?? "No company logo"}');
+            }
+            
             // Fetch company's articles
             companyArticles = await articleDatabase.getArticlesByUserId(currentUser!.id!);
             
             // Load photos and category names for each article
             for (var article in companyArticles) {
               if (article.id != null) {
-                final photo = await photoDatabase.getMainPhotoByArticleId(article.id!);
+                final photo = await mediaDatabase.getMainPhotoByPattern('articles/${article.id}');
                 articlePhotos[article.id!] = photo;
                 
                 // Fetch category name
@@ -130,10 +149,52 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
   void _navigateToEditProfile() async {
     if (currentUser == null) return;
     
-    // TODO: Create EditProfileScreen for company
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Función de editar perfil próximamente')),
+    if (isViewingCompanyProfile) {
+      // Edit company profile
+      _navigateToEditCompanyProfile();
+    } else {
+      // Edit admin user profile
+      _navigateToEditAdminProfile();
+    }
+  }
+
+  void _navigateToEditAdminProfile() async {
+    if (currentUser == null) return;
+    
+    // Navigate to edit profile screen (same as distribuidor)
+    final result = await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => EditProfileScreen(user: currentUser!),
+      ),
     );
+
+    // Refresh data if profile was updated
+    if (result == true) {
+      _loadUserData();
+    }
+  }
+
+  void _navigateToEditCompanyProfile() async {
+    if (currentCompany == null) return;
+    
+    final result = await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => EditCompanyProfileScreen(company: currentCompany!),
+      ),
+    );
+    
+    if (result == true) {
+      // Reload company data
+      await _loadUserData();
+    }
+  }
+
+  void _toggleProfileView() {
+    setState(() {
+      isViewingCompanyProfile = !isViewingCompanyProfile;
+    });
   }
 
   void _showProfileMenu() {
@@ -175,6 +236,13 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // Determine what to display based on profile view
+    final displayAvatar = isViewingCompanyProfile ? companyAvatar : currentUserAvatar;
+    final displayName = isViewingCompanyProfile 
+        ? (currentCompany?.nameCompany ?? 'Empresa') 
+        : (currentUser?.names ?? 'Usuario');
+    final displayRole = isViewingCompanyProfile ? 'Empresa' : 'Administrador de Empresa';
+    
     return SafeArea(
       child: Scaffold(
         backgroundColor: const Color(0xFF2D8A8A),
@@ -188,18 +256,18 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
                     padding: const EdgeInsets.fromLTRB(25, 20, 25, 30),
                     child: Row(
                       children: [
-                        // Avatar on the left
+                        // Avatar on the left (company or admin based on toggle)
                         CircleAvatar(
                           radius: 50,
                           backgroundColor: Colors.white,
-                          backgroundImage: currentUser?.avatarUrl != null
-                              ? NetworkImage(currentUser!.avatarUrl!)
+                          backgroundImage: displayAvatar?.url != null
+                              ? NetworkImage(displayAvatar!.url!)
                               : null,
-                          child: currentUser?.avatarUrl == null
-                              ? const Icon(
-                                  Icons.business,
+                          child: displayAvatar?.url == null
+                              ? Icon(
+                                  isViewingCompanyProfile ? Icons.business : Icons.person,
                                   size: 60,
-                                  color: Color(0xFF2D8A8A),
+                                  color: const Color(0xFF2D8A8A),
                                 )
                               : null,
                         ),
@@ -209,12 +277,12 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              // Company name with menu icon
+                              // Profile name with switcher and menu
                               Row(
                                 children: [
                                   Flexible(
                                     child: Text(
-                                      currentCompany?.nameCompany ?? currentUser?.names ?? 'Empresa',
+                                      displayName,
                                       style: const TextStyle(
                                         fontSize: 24,
                                         fontWeight: FontWeight.bold,
@@ -225,6 +293,25 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
                                     ),
                                   ),
                                   const SizedBox(width: 8),
+                                  // Profile switcher button
+                                  GestureDetector(
+                                    onTap: _toggleProfileView,
+                                    child: Container(
+                                      padding: const EdgeInsets.all(6),
+                                      decoration: BoxDecoration(
+                                        color: Colors.white.withOpacity(0.3),
+                                        shape: BoxShape.circle,
+                                      ),
+                                      child: Icon(
+                                        isViewingCompanyProfile 
+                                            ? Icons.person_outline 
+                                            : Icons.business_outlined,
+                                        color: Colors.white,
+                                        size: 18,
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 4),
                                   GestureDetector(
                                     onTap: _showProfileMenu,
                                     child: Container(
@@ -243,10 +330,10 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
                                 ],
                               ),
                               const SizedBox(height: 4),
-                              // User role
-                              const Text(
-                                'Empresa',
-                                style: TextStyle(
+                              // Role display
+                              Text(
+                                displayRole,
+                                style: const TextStyle(
                                   fontSize: 14,
                                   color: Colors.white70,
                                 ),
@@ -257,68 +344,40 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
                       ],
                     ),
                   ),
-                  // Stats row - 6 stats for empresa
-                  Container(
-                    margin: const EdgeInsets.symmetric(horizontal: 25),
-                    padding: const EdgeInsets.all(20),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(15),
+                  // Objetos stats - only show in Admin view
+                  if (!isViewingCompanyProfile)
+                    Container(
+                      margin: const EdgeInsets.symmetric(horizontal: 25, vertical: 10),
+                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 15),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(15),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Objetos',
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                              color: Color(0xFF2D8A8A),
+                            ),
+                          ),
+                          const SizedBox(height: 15),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceAround,
+                            children: [
+                              _buildObjectStatItem('8', 'En espera', Colors.orange),
+                              _buildObjectStatItem('8', 'Sin Asignar', Colors.purple),
+                              _buildObjectStatItem('8', 'En Proceso', Colors.amber),
+                              _buildObjectStatItem('8', 'Entregado', Colors.teal),
+                              _buildObjectStatItem('8', 'Vencido', Colors.red),
+                            ],
+                          ),
+                        ],
+                      ),
                     ),
-                    child: Column(
-                      children: [
-                        // First row: 3 stats
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceAround,
-                          children: [
-                            _buildStatItem(
-                              '${companyArticles.length}',
-                              'Publicados',
-                              Colors.blue,
-                            ),
-                            Container(width: 1, height: 40, color: Colors.grey[300]),
-                            _buildStatItem(
-                              '${companyArticles.where((a) => a.workflowStatus == 'pendiente' || a.workflowStatus == null).length}',
-                              'En Espera',
-                              Colors.purple,
-                            ),
-                            Container(width: 1, height: 40, color: Colors.grey[300]),
-                            _buildStatItem(
-                              '${companyArticles.where((a) => a.workflowStatus == 'sin_asignar').length}',
-                              'Sin Asignar',
-                              Colors.amber,
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 20),
-                        Divider(height: 1, color: Colors.grey[300]),
-                        const SizedBox(height: 20),
-                        // Second row: 3 stats
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceAround,
-                          children: [
-                            _buildStatItem(
-                              '${companyArticles.where((a) => a.workflowStatus == 'en_proceso').length}',
-                              'En Proceso',
-                              Colors.orange,
-                            ),
-                            Container(width: 1, height: 40, color: Colors.grey[300]),
-                            _buildStatItem(
-                              '${companyArticles.where((a) => a.workflowStatus == 'completado').length}',
-                              'Recogidos',
-                              Colors.green,
-                            ),
-                            Container(width: 1, height: 40, color: Colors.grey[300]),
-                            _buildStatItem(
-                              '${companyArticles.where((a) => a.workflowStatus == 'vencido').length}',
-                              'Vencidos',
-                              Colors.red,
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
                   const SizedBox(height: 20),
                   // Publications section
                   Expanded(
@@ -429,61 +488,44 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
     );
   }
 
-  Widget _buildStatItem(String value, String label, Color color) {
-    return Expanded(
-      child: Column(
-        children: [
-          Text(
-            value,
-            style: TextStyle(
-              fontSize: 20,
-              fontWeight: FontWeight.bold,
-              color: color,
-            ),
+  Widget _buildObjectStatItem(String value, String label, Color color) {
+    return Column(
+      children: [
+        Text(
+          value,
+          style: TextStyle(
+            fontSize: 18,
+            fontWeight: FontWeight.bold,
+            color: color,
           ),
-          const SizedBox(height: 4),
-          Text(
-            label,
-            style: TextStyle(
-              fontSize: 11,
-              color: Colors.grey[600],
-            ),
-            textAlign: TextAlign.center,
-            maxLines: 2,
+        ),
+        const SizedBox(height: 4),
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: 10,
+            color: Colors.grey[600],
           ),
-        ],
-      ),
+          textAlign: TextAlign.center,
+        ),
+      ],
     );
   }
 
   Widget _buildArticleCard(Article article) {
+    // Simple status based on article state
     Color statusColor;
     String statusText;
     
-    switch (article.workflowStatus?.toLowerCase()) {
-      case 'completado':
-        statusColor = Colors.green;
-        statusText = 'Recogido';
-        break;
-      case 'en_proceso':
-        statusColor = Colors.orange;
-        statusText = 'En Proceso';
-        break;
-      case 'asignado':
-        statusColor = Colors.blue;
-        statusText = 'Asignado';
-        break;
-      case 'sin_asignar':
-        statusColor = Colors.amber;
-        statusText = 'Sin Asignar';
-        break;
-      case 'vencido':
-        statusColor = Colors.red;
-        statusText = 'Vencido';
-        break;
-      default:
-        statusColor = Colors.purple;
-        statusText = 'En Espera';
+    if (article.state == 1) {
+      statusColor = Colors.green;
+      statusText = 'Activo';
+    } else if (article.state == 0) {
+      statusColor = Colors.grey;
+      statusText = 'Inactivo';
+    } else {
+      statusColor = Colors.orange;
+      statusText = 'Desconocido';
     }
 
     final photo = articlePhotos[article.id];
@@ -592,3 +634,5 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
     );
   }
 }
+
+

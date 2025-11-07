@@ -1,87 +1,73 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:reciclaje_app/auth/auth_service.dart';
 import 'package:reciclaje_app/database/media_database.dart';
-import 'package:reciclaje_app/database/users_database.dart';
+import 'package:reciclaje_app/model/company.dart';
 import 'package:reciclaje_app/model/multimedia.dart';
-import 'package:reciclaje_app/model/users.dart';
 import 'package:reciclaje_app/utils/Fixed43Cropper.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-class EditProfileScreen extends StatefulWidget {
-  final Users user;
+class EditCompanyProfileScreen extends StatefulWidget {
+  final Company company;
   
-  const EditProfileScreen({super.key, required this.user});
+  const EditCompanyProfileScreen({super.key, required this.company});
 
   @override
-  State<EditProfileScreen> createState() => _EditProfileScreenState();
+  State<EditCompanyProfileScreen> createState() => _EditCompanyProfileScreenState();
 }
 
-class _EditProfileScreenState extends State<EditProfileScreen> {
+class _EditCompanyProfileScreenState extends State<EditCompanyProfileScreen> {
   final _formKey = GlobalKey<FormState>();
-  final authService = AuthService();
-  final usersDatabase = UsersDatabase();
   final mediaDatabase = MediaDatabase();
   final ImagePicker _picker = ImagePicker();
   
-  late TextEditingController _nameController;
-  late TextEditingController _emailController;
+  late TextEditingController _companyNameController;
   
-  String? _avatarUrl;
-  Multimedia? _currentAvatar; // Current avatar from multimedia table
+  String? _logoUrl;
+  Multimedia? _currentLogo; // Current logo from multimedia table
   bool _isUploading = false;
   bool _isSaving = false;
-  bool _isLoadingAvatar = false;
 
   // Store original values for comparison
   late String _originalName;
-  late String? _originalAvatarUrl;
+  late String? _originalLogoUrl;
 
   @override
   void initState() {
     super.initState();
-    _nameController = TextEditingController(text: widget.user.names);
-    _emailController = TextEditingController(text: widget.user.email);
+    _companyNameController = TextEditingController(text: widget.company.nameCompany);
     
     // Store original values
-    _originalName = widget.user.names ?? '';
+    _originalName = widget.company.nameCompany ?? '';
     
-    // Load avatar from multimedia table
-    _loadAvatar();
+    // Load logo from multimedia table
+    _loadLogo();
   }
 
-  Future<void> _loadAvatar() async {
-    if (widget.user.id == null) return;
-    
-    setState(() => _isLoadingAvatar = true);
+  Future<void> _loadLogo() async {
+    if (widget.company.companyId == null) return;
     
     try {
-      final urlPattern = 'users/${widget.user.id}/avatars/';
-      final avatar = await mediaDatabase.getMainPhotoByPattern(urlPattern);
+      final logoPattern = 'empresa/${widget.company.companyId}/avatar/';
+      final logo = await mediaDatabase.getMainPhotoByPattern(logoPattern);
       
       if (mounted) {
         setState(() {
-          _currentAvatar = avatar;
-          _avatarUrl = avatar?.url;
-          _originalAvatarUrl = avatar?.url;
-          _isLoadingAvatar = false;
+          _currentLogo = logo;
+          _logoUrl = logo?.url;
+          _originalLogoUrl = logo?.url;
         });
         
-        print('✅ Avatar loaded: ${avatar?.url}');
+        print('✅ Company logo loaded: ${logo?.url}');
       }
     } catch (e) {
-      print('❌ Error loading avatar: $e');
-      if (mounted) {
-        setState(() => _isLoadingAvatar = false);
-      }
+      print('❌ Error loading company logo: $e');
     }
   }
 
   @override
   void dispose() {
-    _nameController.dispose();
-    _emailController.dispose();
+    _companyNameController.dispose();
     super.dispose();
   }
 
@@ -119,7 +105,6 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
       XFile finalImage;
 
       if (shouldCrop) {
-        // Step 3: Crop with Fixed43Cropper (1:1 ratio for profile pictures)
         final croppedFile = await Navigator.push<XFile>(
           context,
           MaterialPageRoute(
@@ -133,8 +118,8 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
         finalImage = pickedFile;
       }
 
-      // Step 4: Upload to Supabase
-      await _uploadAvatar(finalImage);
+      // Step 3: Upload to Supabase
+      await _uploadLogo(finalImage);
 
     } catch (e) {
       print('❌ Error picking/cropping image: $e');
@@ -149,146 +134,78 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     }
   }
 
-  Future<void> _uploadAvatar(XFile imageFile) async {
-    if (_isUploading || widget.user.id == null) return;
+  Future<void> _uploadLogo(XFile imageFile) async {
+    if (_isUploading || widget.company.companyId == null) return;
 
     setState(() => _isUploading = true);
 
     try {
-      final userId = widget.user.id!;
+      final companyId = widget.company.companyId!;
       final timestamp = DateTime.now().millisecondsSinceEpoch;
       
-      print('📸 Processing avatar upload for user: $userId');
-      print('   Path: ${imageFile.path}');
-      print('   Name: ${imageFile.name}');
+      print('🏢 Processing company logo upload for company: $companyId');
 
-      // ✅ Verify file exists before processing
       final imageFileObj = File(imageFile.path);
       if (!await imageFileObj.exists()) {
-        print('❌ File does not exist: ${imageFile.path}');
         throw Exception('El archivo de imagen no existe');
       }
 
-      // ✅ Verify file is readable and not corrupted
       final fileStats = await imageFileObj.stat();
-      print('   File stats:');
-      print('     - Size: ${fileStats.size} bytes');
-      print('     - Modified: ${fileStats.modified}');
-      
       if (fileStats.size == 0) {
         throw Exception('El archivo está vacío (0 bytes)');
       }
 
-      // ✅ Get extension from path (more reliable after cropping)
       final extension = imageFile.path.split('.').last.toLowerCase();
 
-      // Validate file extension
       if (!['jpg', 'jpeg', 'png'].contains(extension)) {
         throw Exception('Formato de imagen no válido: $extension');
       }
 
-      final fileName = 'avatar_${timestamp}.$extension';
-      final filePath = 'users/$userId/avatars/$fileName';
+      final fileName = 'logo_${timestamp}.$extension';
+      final filePath = 'empresa/$companyId/avatar/$fileName';
 
-      print('📤 Uploading avatar to: $filePath');
+      print('📤 Uploading company logo to: $filePath');
 
-      // ✅ Read the file as bytes with error handling
       final bytes = await imageFileObj.readAsBytes();
-      print('   File size: ${bytes.length} bytes (${(bytes.length / 1024 / 1024).toStringAsFixed(2)} MB)');
       
       if (bytes.isEmpty) {
         throw Exception('El archivo está vacío');
       }
 
-      // ✅ Detect correct content type based on extension
       String contentType = 'image/jpeg';
       if (extension == 'png') {
         contentType = 'image/png';
-      } else if (extension == 'jpg' || extension == 'jpeg') {
-        contentType = 'image/jpeg';
       }
 
       final storage = Supabase.instance.client.storage;
 
-      // ✅ Verify bucket exists and is accessible
-      try {
-        print('🔍 Verificando bucket multimedia...');
-        await storage.from('multimedia').list(
-          path: '',
-          searchOptions: const SearchOptions(limit: 1),
-        );
-        print('✅ Bucket multimedia accesible');
-      } catch (e) {
-        print('⚠️ Advertencia: No se pudo verificar el bucket: $e');
-      }
+      await storage
+          .from('multimedia')
+          .uploadBinary(
+            filePath,
+            bytes,
+            fileOptions: FileOptions(
+              cacheControl: '3600',
+              upsert: true,
+              contentType: contentType,
+            ),
+          )
+          .timeout(
+            const Duration(seconds: 60),
+            onTimeout: () {
+              throw Exception('Timeout de subida - tardó más de 60 segundos');
+            },
+          );
 
-      // Upload to Supabase Storage with timeout and retry logic
-      try {
-        print('⏳ Iniciando subida de avatar con timeout de 60s...');
-        print('   Bucket destino: article-images');
-        print('   Ruta destino: $filePath');
-        print('   Tamaño archivo: ${(bytes.length / 1024 / 1024).toStringAsFixed(2)} MB');
-        
-        await storage
-            .from('multimedia')
-            .uploadBinary(
-              filePath,
-              bytes,
-              fileOptions: FileOptions(
-                cacheControl: '3600',
-                upsert: true,
-                contentType: contentType,
-              ),
-            )
-            .timeout(
-              const Duration(seconds: 60),
-              onTimeout: () {
-                throw Exception('Timeout de subida - tardó más de 60 segundos');
-              },
-            );
-
-        print('✅ Avatar subido exitosamente');
-      } catch (uploadError) {
-        print('❌ Upload error details:');
-        print('   Error type: ${uploadError.runtimeType}');
-        print('   Error message: $uploadError');
-        
-        final errorMessage = uploadError.toString().toLowerCase();
-        
-        if (errorMessage.contains('timeout')) {
-          throw Exception('⏰ La imagen tardó demasiado en subir (>60s). Intenta con una imagen más pequeña.');
-        } else if (errorMessage.contains('clientexception') || 
-                   errorMessage.contains('socketexception') ||
-                   errorMessage.contains('read failed')) {
-          throw Exception('🌐 Error de conexión al subir imagen.\n'
-                          'Verifica:\n'
-                          '• Conexión a internet estable\n'
-                          '• URL de Supabase correcta\n'
-                          '• Bucket configurado correctamente');
-        } else if (errorMessage.contains('413') || errorMessage.contains('too large')) {
-          throw Exception('📏 Imagen demasiado grande: ${(bytes.length / 1024 / 1024).toStringAsFixed(2)} MB');
-        } else if (errorMessage.contains('401') || errorMessage.contains('403') || 
-                   errorMessage.contains('unauthorized') || errorMessage.contains('forbidden')) {
-          throw Exception('🔒 Sin permisos para subir imagen. Verifica las políticas RLS del bucket.');
-        } else if (errorMessage.contains('404') || errorMessage.contains('not found')) {
-          throw Exception('🗂️ Bucket "multimedia" no encontrado. Verifica la configuración de Supabase Storage.');
-        } else {
-          throw Exception('❌ Error desconocido al subir imagen: $uploadError');
-        }
-      }
-
-      // Get public URL
       final publicUrl = storage.from('multimedia').getPublicUrl(filePath);
-      
-      print('🔗 Public URL: $publicUrl');
 
-      // ✅ Delete old avatar from multimedia table if exists
-      if (_currentAvatar != null) {
-        print('🗑️ Deleting old avatar from multimedia table...');
-        await mediaDatabase.deletePhoto(_currentAvatar!);
+      // Delete old logo from multimedia table if exists
+      if (_currentLogo != null) {
+        print('🗑️ Deleting old company logo from multimedia table...');
+        await mediaDatabase.deletePhoto(_currentLogo!);
       }
 
-      // ✅ Create entry in multimedia table
+      // Create entry in multimedia table
       final fileSize = bytes.length;
       final mimeType = contentType;
       
@@ -302,36 +219,30 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
         uploadOrder: 1,
       );
       
-      print('💾 Saving avatar to multimedia table...');
+      print('💾 Saving company logo to multimedia table...');
       await mediaDatabase.createPhoto(newMultimedia);
-      print('✅ Avatar entry created in multimedia table');
+      print('✅ Company logo entry created in multimedia table');
 
-      // Update local state
       setState(() {
-        _avatarUrl = publicUrl;
-        _currentAvatar = newMultimedia;
+        _logoUrl = publicUrl;
+        _currentLogo = newMultimedia;
       });
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Imagen cargada exitosamente'),
+            content: Text('Logo cargado exitosamente'),
             backgroundColor: Colors.green,
           ),
         );
       }
 
-      print('✅ Avatar subido exitosamente');
-      print('   Archivo: $fileName');
-      print('   Tamaño: ${(bytes.length / 1024 / 1024).toStringAsFixed(2)} MB');
-      print('   URL pública: $publicUrl');
-
     } catch (e) {
-      print('❌ Error uploading avatar: $e');
+      print('❌ Error uploading company logo: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Error al cargar imagen: $e'),
+            content: Text('Error al cargar logo: $e'),
             backgroundColor: Colors.red,
           ),
         );
@@ -349,13 +260,9 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     // Check for changes
     bool hasChanges = false;
 
-    // Check if name changed
-    if (_nameController.text.trim() != _originalName) hasChanges = true;
+    if (_companyNameController.text.trim() != _originalName) hasChanges = true;
+    if (_logoUrl != _originalLogoUrl) hasChanges = true;
 
-    // Check if avatar changed
-    if (_avatarUrl != _originalAvatarUrl) hasChanges = true;
-
-    // If no changes, show message and return
     if (!hasChanges) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -369,47 +276,34 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     setState(() => _isSaving = true);
 
     try {
-      // Update user in database (only name and email)
-      final updatedUser = Users(
-        id: widget.user.id,
-        names: _nameController.text.trim(),
-        email: _emailController.text.trim(),
-        role: widget.user.role,
-        state: widget.user.state,
-        lastUpdate: DateTime.now(),
-      );
+      print('💾 Saving company profile update...');
+      print('   Company ID: ${widget.company.companyId}');
+      print('   Company Name: ${_companyNameController.text.trim()}');
 
-      print('💾 Saving profile update...');
-      print('   User ID: ${widget.user.id}');
-      print('   Name: ${updatedUser.names}');
-
-      // Update in Supabase (only user fields, avatar is in multimedia table)
+      // Update in Supabase
       await Supabase.instance.client
-          .from('users')
+          .from('company')
           .update({
-            'names': updatedUser.names,
-            'email': updatedUser.email,
-            'lastUpdate': updatedUser.lastUpdate?.toIso8601String(),
+            'nameCompany': _companyNameController.text.trim(),
           })
-          .eq('idUser', widget.user.id!);
+          .eq('idCompany', widget.company.companyId!);
 
-      print('✅ Profile updated successfully in database');
+      print('✅ Company profile updated successfully in database');
 
       if (mounted) {
-        // Update original values after successful save
-        _originalName = _nameController.text.trim();
-        _originalAvatarUrl = _avatarUrl;
+        _originalName = _companyNameController.text.trim();
+        _originalLogoUrl = _logoUrl;
 
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Perfil actualizado exitosamente'),
+            content: Text('Perfil de empresa actualizado exitosamente'),
             backgroundColor: Colors.green,
           ),
         );
-        Navigator.pop(context, true); // Return true to indicate success
+        Navigator.pop(context, true);
       }
     } catch (e) {
-      print('❌ Error saving profile: $e');
+      print('❌ Error saving company profile: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -452,16 +346,16 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                 _pickAndCropImage(ImageSource.gallery);
               },
             ),
-            if (_avatarUrl != null)
+            if (_logoUrl != null)
               ListTile(
                 leading: const Icon(Icons.delete, color: Colors.red),
                 title: const Text(
-                  'Eliminar foto',
+                  'Eliminar logo',
                   style: TextStyle(color: Colors.red),
                 ),
                 onTap: () {
                   Navigator.pop(context);
-                  _removeAvatar();
+                  _removeLogo();
                 },
               ),
           ],
@@ -470,33 +364,33 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     );
   }
 
-  void _removeAvatar() async {
+  void _removeLogo() async {
     try {
-      if (_currentAvatar != null) {
-        print('🗑️ Deleting avatar from multimedia table...');
-        await mediaDatabase.deletePhoto(_currentAvatar!);
-        print('✅ Avatar deleted successfully');
+      if (_currentLogo != null) {
+        print('🗑️ Deleting company logo from multimedia table...');
+        await mediaDatabase.deletePhoto(_currentLogo!);
+        print('✅ Company logo deleted successfully');
       }
       
       setState(() {
-        _avatarUrl = null;
-        _currentAvatar = null;
+        _logoUrl = null;
+        _currentLogo = null;
       });
       
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Foto de perfil eliminada'),
+            content: Text('Logo de empresa eliminado'),
             backgroundColor: Colors.orange,
           ),
         );
       }
     } catch (e) {
-      print('❌ Error deleting avatar: $e');
+      print('❌ Error deleting company logo: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Error al eliminar foto: $e'),
+            content: Text('Error al eliminar logo: $e'),
             backgroundColor: Colors.red,
           ),
         );
@@ -516,7 +410,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
           onPressed: () => Navigator.pop(context),
         ),
         title: const Text(
-          'Editar Perfil',
+          'Editar Perfil de Empresa',
           style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
         ),
         actions: [
@@ -551,7 +445,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
       body: SingleChildScrollView(
         child: Column(
           children: [
-            // Header section with avatar
+            // Header section with logo
             Container(
               width: double.infinity,
               padding: const EdgeInsets.fromLTRB(25, 30, 25, 40),
@@ -564,10 +458,10 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
               ),
               child: Column(
                 children: [
-                  // Avatar with edit button
+                  // Logo with edit button
                   Stack(
                     children: [
-                      // Avatar circle
+                      // Logo circle
                       Container(
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
@@ -576,12 +470,12 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                         child: CircleAvatar(
                           radius: 70,
                           backgroundColor: Colors.white,
-                          backgroundImage: _avatarUrl != null
-                              ? NetworkImage(_avatarUrl!)
+                          backgroundImage: _logoUrl != null
+                              ? NetworkImage(_logoUrl!)
                               : null,
-                          child: _avatarUrl == null
+                          child: _logoUrl == null
                               ? const Icon(
-                                  Icons.person,
+                                  Icons.business,
                                   size: 80,
                                   color: Color(0xFF2D8A8A),
                                 )
@@ -633,18 +527,16 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                     ],
                   ),
                   const SizedBox(height: 20),
-                  // User role
+                  // Company label
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                     decoration: BoxDecoration(
                       color: Colors.white.withOpacity(0.2),
                       borderRadius: BorderRadius.circular(20),
                     ),
-                    child: Text(
-                      widget.user.role?.toLowerCase() == 'distribuidor'
-                          ? 'Usuario'
-                          : widget.user.role?.toUpperCase() ?? 'USUARIO',
-                      style: const TextStyle(
+                    child: const Text(
+                      'EMPRESA',
+                      style: TextStyle(
                         fontSize: 14,
                         color: Colors.white,
                         fontWeight: FontWeight.w500,
@@ -663,7 +555,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const Text(
-                      'Información Personal',
+                      'Información de la Empresa',
                       style: TextStyle(
                         fontSize: 20,
                         fontWeight: FontWeight.bold,
@@ -671,12 +563,12 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                       ),
                     ),
                     const SizedBox(height: 20),
-                    // Name field
+                    // Company name field
                     TextFormField(
-                      controller: _nameController,
+                      controller: _companyNameController,
                       decoration: InputDecoration(
-                        labelText: 'Nombre completo',
-                        prefixIcon: const Icon(Icons.person_outline, color: Color(0xFF2D8A8A)),
+                        labelText: 'Nombre de la empresa',
+                        prefixIcon: const Icon(Icons.business, color: Color(0xFF2D8A8A)),
                         border: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(12),
                         ),
@@ -687,34 +579,10 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                       ),
                       validator: (value) {
                         if (value == null || value.trim().isEmpty) {
-                          return 'Por favor ingresa tu nombre';
+                          return 'Por favor ingresa el nombre de la empresa';
                         }
                         return null;
                       },
-                    ),
-                    const SizedBox(height: 20),
-                    // Email field (read-only)
-                    TextFormField(
-                      controller: _emailController,
-                      enabled: false,
-                      decoration: InputDecoration(
-                        labelText: 'Correo electrónico',
-                        prefixIcon: const Icon(Icons.email_outlined, color: Colors.grey),
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        filled: true,
-                        fillColor: Colors.grey[100],
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    Text(
-                      'El correo electrónico no se puede modificar',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Colors.grey[600],
-                        fontStyle: FontStyle.italic,
-                      ),
                     ),
                     const SizedBox(height: 30),
                     // Info card
@@ -751,5 +619,3 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     );
   }
 }
-
-

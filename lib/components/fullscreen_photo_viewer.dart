@@ -2,13 +2,13 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:reciclaje_app/model/photo.dart';
+import 'package:reciclaje_app/model/multimedia.dart';
 
 class FullscreenPhotoViewer extends StatefulWidget {
-  final List<Photo> photos;
+  final List<Multimedia> photos;
   final List<XFile> pickedImages;
   final int initialIndex;
-  final Photo? mainPhoto;
+  final Multimedia? mainPhoto;
 
   const FullscreenPhotoViewer({
     super.key,
@@ -73,7 +73,7 @@ class _FullscreenPhotoViewerState extends State<FullscreenPhotoViewer> {
         itemBuilder: (context, index) {
           final item = allDisplayItems[index];
           
-          if (item is Photo) {
+          if (item is Multimedia) {
             // Display existing photo from database
             return Center(
               child: InteractiveViewer(

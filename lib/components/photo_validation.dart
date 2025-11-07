@@ -1,12 +1,12 @@
   import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
-  import 'package:reciclaje_app/model/photo.dart';
+  import 'package:reciclaje_app/model/multimedia.dart';
 
   class PhotoValidation extends StatelessWidget {
-    final List<Photo> allPhotos;
-    final List<Photo> photosToDelete;
+    final List<Multimedia> allPhotos;
+    final List<Multimedia> photosToDelete;
     final List<XFile>? pickedImages;
-    final Photo? mainPhoto;
+    final Multimedia? mainPhoto;
     final int maxPhotos;
 
     const PhotoValidation({
@@ -23,8 +23,8 @@ import 'package:image_picker/image_picker.dart';
       // Calculate unique photos properly
       final uniquePhotos = <int>{};
       
-      // Add main photo ID if exists
-      if (mainPhoto != null) {
+      // Add main Multimedia ID if exists and has valid ID
+      if (mainPhoto != null && mainPhoto!.id != null) {
         uniquePhotos.add(mainPhoto!.id!);
       }
       

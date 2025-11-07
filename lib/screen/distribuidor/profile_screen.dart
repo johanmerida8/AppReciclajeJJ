@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:reciclaje_app/auth/auth_service.dart';
 import 'package:reciclaje_app/database/article_database.dart';
-import 'package:reciclaje_app/database/photo_database.dart';
+import 'package:reciclaje_app/database/media_database.dart';
 import 'package:reciclaje_app/database/users_database.dart';
 import 'package:reciclaje_app/model/article.dart';
-import 'package:reciclaje_app/model/photo.dart';
+import 'package:reciclaje_app/model/multimedia.dart';
 import 'package:reciclaje_app/model/recycling_items.dart';
 import 'package:reciclaje_app/model/users.dart';
 import 'package:reciclaje_app/screen/distribuidor/detail_recycle_screen.dart';
@@ -23,11 +23,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
   final authService = AuthService();
   final usersDatabase = UsersDatabase();
   final articleDatabase = ArticleDatabase();
-  final photoDatabase = PhotoDatabase();
+  final mediaDatabase = MediaDatabase();
 
   Users? currentUser;
+  Multimedia? currentUserAvatar; // User's avatar from multimedia table
   List<Article> userArticles = [];
-  Map<int, Photo?> articlePhotos = {}; // Cache for article photos
+  Map<int, Multimedia?> articlePhotos = {}; // Cache for article photos
   Map<int, String> categoryNames = {}; // Cache for category names
   bool isLoading = true;
 
@@ -49,6 +50,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
         print('✅ Loaded user: ${currentUser?.names} (${currentUser?.email})');
         print('✅ User role from DB: ${currentUser?.role}');
         
+        // Load user avatar from multimedia table
+        if (currentUser?.id != null) {
+          final avatarPattern = 'users/${currentUser!.id}/avatars/';
+          currentUserAvatar = await mediaDatabase.getMainPhotoByPattern(avatarPattern);
+          print('📸 User avatar: ${currentUserAvatar?.url ?? "No avatar"}');
+        }
+        
         // Fetch user's articles
         if (currentUser?.id != null) {
           userArticles = await articleDatabase.getArticlesByUserId(currentUser!.id!);
@@ -56,7 +64,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
           // Load photos and category names for each article
           for (var article in userArticles) {
             if (article.id != null) {
-              final photo = await photoDatabase.getMainPhotoByArticleId(article.id!);
+              print('🔍 Buscando foto principal para artículo ID: ${article.id}');
+              final urlPattern = 'articles/${article.id}';
+              final photo = await mediaDatabase.getMainPhotoByPattern(urlPattern);
               articlePhotos[article.id!] = photo;
               
               // Fetch category name
@@ -136,16 +146,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Future<RecyclingItem?> _convertArticleToRecyclingItem(Article article) async {
     try {
       // Fetch deliver info
-      final deliver = await Supabase.instance.client
-          .from('deliver')
-          .select('address, lat, lng')
-          .eq('idDeliver', article.deliverID!)
-          .single();
+      // final deliver = await Supabase.instance.client
+      //     .from('deliver')
+      //     .select('address, lat, lng')
+      //     .eq('idDeliver', article.deliverID!)
+      //     .single();
 
       return RecyclingItem(
         id: article.id!,
         title: article.name ?? '',
-        deliverID: article.deliverID,
+        // deliverID: article.deliverID,
         description: article.description,
         categoryID: article.categoryID,
         categoryName: categoryNames[article.id] ?? '',
@@ -153,9 +163,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
         ownerUserId: article.userId,
         userName: currentUser?.names ?? '',
         userEmail: currentUser?.email ?? '',
-        latitude: (deliver['lat'] as num).toDouble(),
-        longitude: (deliver['lng'] as num).toDouble(),
-        address: deliver['address'] as String,
+        address: article.address!,
+        latitude: article.lat!,
+        longitude: article.lng!,
+        // latitude: (deliver['lat'] as num).toDouble(),
+        // longitude: (deliver['lng'] as num).toDouble(),
+        // address: deliver['address'] as String,
         availableDays: article.availableDays ?? '',
         availableTimeStart: article.availableTimeStart ?? '',
         availableTimeEnd: article.availableTimeEnd ?? '',
@@ -240,10 +253,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         CircleAvatar(
                           radius: 50,
                           backgroundColor: Colors.white,
-                          backgroundImage: currentUser?.avatarUrl != null
-                              ? NetworkImage(currentUser!.avatarUrl!)
+                          backgroundImage: currentUserAvatar?.url != null
+                              ? NetworkImage(currentUserAvatar!.url!)
                               : null,
-                          child: currentUser?.avatarUrl == null
+                          child: currentUserAvatar?.url == null
                               ? const Icon(
                                   Icons.person,
                                   size: 60,
@@ -308,36 +321,36 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     ),
                   ),
                   // Stats row
-                  Container(
-                    margin: const EdgeInsets.symmetric(horizontal: 25),
-                    padding: const EdgeInsets.all(20),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(15),
-                    ),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceAround,
-                      children: [
-                        _buildStatItem(
-                          '${userArticles.length}',
-                          'Publicados',
-                          Colors.blue,
-                        ),
-                        Container(width: 1, height: 40, color: Colors.grey[300]),
-                        _buildStatItem(
-                          '${userArticles.where((a) => a.workflowStatus == 'en_proceso').length}',
-                          'En Procesos',
-                          Colors.orange,
-                        ),
-                        Container(width: 1, height: 40, color: Colors.grey[300]),
-                        _buildStatItem(
-                          '${userArticles.where((a) => a.workflowStatus == 'completado').length}',
-                          'Recogidos',
-                          Colors.green,
-                        ),
-                      ],
-                    ),
-                  ),
+                  // Container(
+                  //   margin: const EdgeInsets.symmetric(horizontal: 25),
+                  //   padding: const EdgeInsets.all(20),
+                  //   decoration: BoxDecoration(
+                  //     color: Colors.white,
+                  //     borderRadius: BorderRadius.circular(15),
+                  //   ),
+                  //   child: Row(
+                  //     mainAxisAlignment: MainAxisAlignment.spaceAround,
+                  //     children: [
+                  //       _buildStatItem(
+                  //         '${userArticles.length}',
+                  //         'Publicados',
+                  //         Colors.blue,
+                  //       ),
+                  //       Container(width: 1, height: 40, color: Colors.grey[300]),
+                  //       _buildStatItem(
+                  //         '${userArticles.where((a) => a.workflowStatus == 'en_proceso').length}',
+                  //         'En Procesos',
+                  //         Colors.orange,
+                  //       ),
+                  //       Container(width: 1, height: 40, color: Colors.grey[300]),
+                  //       _buildStatItem(
+                  //         '${userArticles.where((a) => a.workflowStatus == 'completado').length}',
+                  //         'Recogidos',
+                  //         Colors.green,
+                  //       ),
+                  //     ],
+                  //   ),
+                  // ),
                   const SizedBox(height: 20),
                   // Publications section
                   Expanded(
@@ -501,26 +514,19 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Widget _buildArticleCard(Article article) {
-    // Determine status color and text
+    // Simple status based on article state
     Color statusColor;
     String statusText;
     
-    switch (article.workflowStatus?.toLowerCase()) {
-      case 'completado':
-        statusColor = Colors.green;
-        statusText = 'Completado';
-        break;
-      case 'en_proceso':
-        statusColor = Colors.orange;
-        statusText = 'En Proceso';
-        break;
-      case 'asignado':
-        statusColor = Colors.blue;
-        statusText = 'Asignado';
-        break;
-      default:
-        statusColor = Colors.grey;
-        statusText = 'Pendiente';
+    if (article.state == 1) {
+      statusColor = Colors.green;
+      statusText = 'Activo';
+    } else if (article.state == 0) {
+      statusColor = Colors.grey;
+      statusText = 'Inactivo';
+    } else {
+      statusColor = Colors.orange;
+      statusText = 'Desconocido';
     }
 
     final photo = articlePhotos[article.id];

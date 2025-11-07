@@ -18,13 +18,11 @@ import 'package:reciclaje_app/components/limit_character_two.dart';
 import 'package:reciclaje_app/components/row_button_2.dart';
 import 'package:reciclaje_app/database/article_database.dart';
 import 'package:reciclaje_app/database/category_database.dart';
-import 'package:reciclaje_app/database/deliver_database.dart';
-import 'package:reciclaje_app/database/photo_database.dart';
+import 'package:reciclaje_app/database/media_database.dart';
 import 'package:reciclaje_app/database/users_database.dart';
 import 'package:reciclaje_app/model/article.dart';
 import 'package:reciclaje_app/model/category.dart';
-import 'package:reciclaje_app/model/deliver.dart';
-import 'package:reciclaje_app/model/photo.dart';
+import 'package:reciclaje_app/model/multimedia.dart';
 import 'package:reciclaje_app/screen/distribuidor/map_picker_screen.dart';
 import 'package:reciclaje_app/services/workflow_service.dart'; // ✅ Nuevo servicio
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -55,8 +53,8 @@ class _RegisterRecycleScreenState extends State<RegisterRecycleScreen> {
   
   final articleDatabase = ArticleDatabase();
   final categoryDatabase = CategoryDatabase();
-  final deliverDatabase = DeliverDatabase();
-  final photoDatabase = PhotoDatabase();
+  // final deliverDatabase = DeliverDatabase();
+  final mediaDatabase = MediaDatabase();
   
   List<Category> _categories = [];
   Category? _selectedCategory;
@@ -235,14 +233,14 @@ class _RegisterRecycleScreenState extends State<RegisterRecycleScreen> {
       }
 
       // 1. create the deliver record
-      final newDeliver = Deliver(
-        address: _selectedAddress ?? 'Ubicación no especificada',
-        lat: _selectedLocation!.latitude,
-        lng: _selectedLocation!.longitude,
-        // state: 1
-      );
+      // final newDeliver = Deliver(
+      //   address: _selectedAddress ?? 'Ubicación no especificada',
+      //   lat: _selectedLocation!.latitude,
+      //   lng: _selectedLocation!.longitude,
+      //   // state: 1
+      // );
 
-      final deliverID = await deliverDatabase.createDeliver(newDeliver);
+      // final deliverID = await deliverDatabase.createDeliver(newDeliver);
 
       final newArticle = Article(
         name: _itemNameController.text.trim(),
@@ -251,10 +249,12 @@ class _RegisterRecycleScreenState extends State<RegisterRecycleScreen> {
         description: _descriptionController.text.trim().isEmpty 
             ? null 
             : _descriptionController.text.trim(),
-        deliverID: deliverID,
+        address: _selectedAddress ?? 'Ubicación no especificada',
+        lat: _selectedLocation!.latitude,
+        lng: _selectedLocation!.longitude,
         userId: currentUser.id,
         state: 1, // Active state
-        workflowStatus: 'pendiente', // ✅ Estado inicial del workflow
+        // workflowStatus: 'pendiente', // ✅ Estado inicial del workflow
 
         // Availability fields
         availableDays: _selectedAvailability?.getDaysForDatabase(),
@@ -548,7 +548,6 @@ class _RegisterRecycleScreenState extends State<RegisterRecycleScreen> {
       
       // Clean the image name and create a unique filename
       final timestamp = DateTime.now().millisecondsSinceEpoch;
-      final cleanUserId = userId.replaceAll(RegExp(r'[^a-zA-Z0-9]'), ''); // Remove special characters
       
       // ✅ Get extension from path instead of name (more reliable after cropping)
       final extension = image.path.split('.').last.toLowerCase();
@@ -559,7 +558,7 @@ class _RegisterRecycleScreenState extends State<RegisterRecycleScreen> {
       }
 
       final fileName = '${timestamp}_${i}_article_${articleId}.$extension';
-      final filePath = 'users/$cleanUserId/articles/$fileName';
+      final filePath = 'articles/$articleId/$fileName';
 
       print('📤 Uploading to: $filePath');
 
@@ -588,7 +587,7 @@ class _RegisterRecycleScreenState extends State<RegisterRecycleScreen> {
         
         // Intentar subida con configuración optimizada
         final response = await storage
-          .from('article-images')
+          .from('multimedia')
           .uploadBinary(
             filePath, 
             bytes,
@@ -639,13 +638,12 @@ class _RegisterRecycleScreenState extends State<RegisterRecycleScreen> {
       }
 
       // Get the public url (this doesn't make a network call, just constructs the URL)
-      final publicUrl = storage.from('article-images').getPublicUrl(filePath);
+      final publicUrl = storage.from('multimedia').getPublicUrl(filePath);
       
       print('🔗 Public URL: $publicUrl');
 
       // Create photo record in the database
-      final newPhoto = Photo(
-        articleID: articleId,
+      final newMedia = Multimedia(
         url: publicUrl,
         fileName: fileName,
         filePath: filePath,
@@ -656,14 +654,14 @@ class _RegisterRecycleScreenState extends State<RegisterRecycleScreen> {
         // lastUpdate: DateTime.now(),
       );
 
-      await photoDatabase.createPhoto(newPhoto);
+      await mediaDatabase.createPhoto(newMedia);
 
       setState(() {
         _uploadedImagesCount = i + 1;
       });
 
       print('✅ Foto ${i + 1}/${pickedImages.length} subida exitosamente');
-      print('   Archivo: ${newPhoto.fileName}');
+      print('   Archivo: ${newMedia.fileName}');
       print('   Tamaño: ${(bytes.length / 1024 / 1024).toStringAsFixed(2)} MB');
       print('   URL pública: $publicUrl');
       

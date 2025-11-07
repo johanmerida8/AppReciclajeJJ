@@ -1,10 +1,10 @@
-import 'package:reciclaje_app/database/photo_database.dart';
+import 'package:reciclaje_app/database/media_database.dart';
 import 'package:reciclaje_app/model/article.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class ArticleDatabase {
   final database = Supabase.instance.client.from('article');
-  final photoDatabase = PhotoDatabase();
+  final mediaDatabase = MediaDatabase();
 
   // create
   Future<int> createArticle(Article newArticle) async {
@@ -103,7 +103,7 @@ class ArticleDatabase {
 
       // 1. Hard delete all photos associated with this article
       print('🗑️ Paso 1: Eliminando fotos asociadas al artículo ${article.id}...');
-      await photoDatabase.deleteAllPhotosForArticle(article.id!); 
+      await mediaDatabase.deleteAllPhotosByPattern('articles/${article.id}'); 
       print('✅ Fotos eliminadas completamente');
 
       // 2. Soft delete the article

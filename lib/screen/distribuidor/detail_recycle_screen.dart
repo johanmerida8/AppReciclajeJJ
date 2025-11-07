@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
+// import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:reciclaje_app/auth/auth_service.dart';
@@ -11,8 +11,8 @@ import 'package:reciclaje_app/components/photo_gallery_widget.dart';
 import 'package:reciclaje_app/components/photo_validation.dart';
 import 'package:reciclaje_app/utils/Fixed43Cropper.dart';
 // import 'package:reciclaje_app/components/row_button_2.dart';
-import 'package:reciclaje_app/database/photo_database.dart';
-import 'package:reciclaje_app/model/photo.dart';
+import 'package:reciclaje_app/database/media_database.dart';
+import 'package:reciclaje_app/model/multimedia.dart';
 import 'package:reciclaje_app/model/recycling_items.dart';
 // import 'package:reciclaje_app/screen/home_screen.dart';
 import 'package:reciclaje_app/components/my_button.dart';
@@ -21,10 +21,10 @@ import 'package:reciclaje_app/components/my_textformfield.dart';
 import 'package:reciclaje_app/components/limit_character_two.dart';
 import 'package:reciclaje_app/database/article_database.dart';
 import 'package:reciclaje_app/database/category_database.dart';
-import 'package:reciclaje_app/database/deliver_database.dart';
+// import 'package:reciclaje_app/database/deliver_database.dart';
 import 'package:reciclaje_app/model/article.dart';
 import 'package:reciclaje_app/model/category.dart';
-import 'package:reciclaje_app/model/deliver.dart';
+// import 'package:reciclaje_app/model/deliver.dart';
 import 'package:reciclaje_app/screen/distribuidor/navigation_screens.dart';
 import 'package:reciclaje_app/services/workflow_service.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -47,24 +47,23 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
   
   final articleDatabase = ArticleDatabase();
   final categoryDatabase = CategoryDatabase();
-  final deliverDatabase = DeliverDatabase();
-  final photoDatabase = PhotoDatabase();  
+  // final deliverDatabase = DeliverDatabase();
+  final mediaDatabase = MediaDatabase();  
   final workflowService = WorkflowService();
 
   final _authService = AuthService();
   String? _currentUserEmail;
   
   List<Category> _categories = [];
-  List<Photo> _photos = [];
-  List<Photo> _photosToDelete = [];
+  List<Multimedia> _photos = [];
+  List<Multimedia> _photosToDelete = [];
   List<XFile> pickedImages = [];
 
-  Photo? _mainPhoto;
+  Multimedia? _mainPhoto;
   bool _isLoadingPhotos = true;
 
   final ImagePicker _imagePicker = ImagePicker();
   bool _isUploadingPhoto = false;
-  int _uploadedPhotoCount = 0;
   
 
   Category? _selectedCategory;
@@ -72,7 +71,6 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
   bool _isLoading = true;
   bool _isSubmitting = false;
   bool _isEditing = false;
-  Set<int> _usedCategoryIds = {};
   Set<int> _disabledCategoryIds = {};
   
   // Location variables
@@ -114,24 +112,25 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
   // ✅ Método debug temporal para verificar la estructura de la DB
   Future<void> _debugDatabaseStructure() async {
     try {
-      print('🔍 DEBUG: Verificando estructura de la tabla photo...');
+      print('🔍 DEBUG: Verificando estructura de la tabla multimedia...');
       
       // Intentar obtener todas las fotos para debug
       final allPhotos = await Supabase.instance.client
-          .from('photo')
+          .from('multimedia')
           .select('*')
           .limit(5);
       
       print('📊 Total fotos en DB (muestra): ${allPhotos.length}');
       for (var photo in allPhotos) {
-        print('   - Foto: ${photo['fileName']} -> Artículo ID: ${photo['article_id']}');
+        print('   - Foto: ${photo['fileName']} -> FilePath: ${photo['filePath']}');
       }
       
-      // Verificar específicamente para este artículo
+      // Verificar específicamente para este artículo usando el patrón
+      final articlePattern = 'articles/${widget.item.id}';
       final articlePhotos = await Supabase.instance.client
-          .from('photo')
+          .from('multimedia')
           .select('*')
-          .eq('article_id', widget.item.id);
+          .like('filePath', '%$articlePattern%');
       
       print('📸 Fotos para artículo ${widget.item.id}: ${articlePhotos.length}');
       for (var photo in articlePhotos) {
@@ -209,9 +208,12 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
 
       print('🔍 Intentando cargar fotos para artículo ID: ${widget.item.id}');
 
-      // load all photos for this article
-      final photos = await photoDatabase.getPhotosByArticleId(widget.item.id);
-      final mainPhoto = await photoDatabase.getMainPhotoByArticleId(widget.item.id);
+      // Build URL pattern for this article (e.g., "articles/5")
+      final urlPattern = 'articles/${widget.item.id}';
+      
+      // load all photos for this article using URL pattern
+      final photos = await mediaDatabase.getPhotosByPattern(urlPattern);
+      final mainPhoto = await mediaDatabase.getMainPhotoByPattern(urlPattern);
 
       setState(() {
         _photos = photos;
@@ -377,7 +379,7 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
         }
         
         // Upload to supabase storage with timeout
-        await storage.from('article-images').uploadBinary(
+        await storage.from('multimedia').uploadBinary(
           filePath, 
           bytes,
           fileOptions: const FileOptions(
@@ -392,7 +394,7 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
         );
 
         // Get the public url
-        final publicUrl = storage.from('article-images').getPublicUrl(filePath);
+        final publicUrl = storage.from('multimedia').getPublicUrl(filePath);
         print('✅ Upload successful: $filePath');
         
         return publicUrl;
@@ -418,19 +420,19 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
   if (pickedImages.isEmpty) return;
 
   setState(() {
-    _isUploadingPhoto = true;
-    _uploadedPhotoCount = 0;
-  });
-
-  // Track successfully uploaded photos for cleanup on failure
+      _isUploadingPhoto = true;
+    });  // Track successfully uploaded photos for cleanup on failure
   List<String> uploadedPaths = [];
 
   try {
+    // Build URL pattern for this article
+    final urlPattern = 'articles/$articleId';
+    
     // Get the current photos count to continue the upload order sequence
-    final existingPhotosCount = await photoDatabase.getPhotosCountByArticleId(articleId);
+    final existingPhotosCount = await mediaDatabase.getPhotosCountByPattern(urlPattern);
     
     // Check if article already has a main photo
-    final bool hasMainPhoto = await photoDatabase.hasMainPhoto(articleId);
+    final bool hasMainPhoto = await mediaDatabase.hasMainPhoto(urlPattern);
 
     for (int i = 0; i < pickedImages.length; i++) {
       final image = pickedImages[i];
@@ -440,7 +442,6 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
       
       // Clean the image name and create a unique filename
       final timestamp = DateTime.now().millisecondsSinceEpoch;
-      final cleanUserId = userId.replaceAll(RegExp(r'[^a-zA-Z0-9]'), ''); // Remove special characters
       final extension = image.name.split('.').last.toLowerCase();
 
       //validate file extension
@@ -450,7 +451,7 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
 
       // Use the calculated upload order in filename
       final fileName = '${timestamp}_${uploadOrder}_article_${articleId}.$extension';
-      final filePath = 'users/$cleanUserId/articles/$fileName';
+      final filePath = 'articles/$articleId/$fileName';
 
       print('📸 Processing photo ${i + 1}/${pickedImages.length}: $fileName');
 
@@ -462,8 +463,7 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
       final bytes = await image.readAsBytes();
 
       // Create photo record in the database
-      final newPhoto = Photo(
-        articleID: articleId,
+      final newMedia = Multimedia(
         url: publicUrl,
         fileName: fileName,
         filePath: filePath,
@@ -473,11 +473,7 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
         uploadOrder: uploadOrder, // Use calculated upload order
       );
 
-      await photoDatabase.createPhoto(newPhoto);
-
-      setState(() {
-        _uploadedPhotoCount = i + 1;
-      });
+      await mediaDatabase.createPhoto(newMedia);
 
       print('✅ Photo ${i + 1}/${pickedImages.length} saved: $fileName (uploadOrder: $uploadOrder)');
     }
@@ -496,7 +492,7 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
       for (final path in uploadedPaths) {
         try {
           await Supabase.instance.client.storage
-              .from('article-images')
+              .from('multimedia')
               .remove([path]);
           print('🗑️ Deleted: $path');
         } catch (deleteError) {
@@ -509,7 +505,6 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
   } finally {
     setState(() {
       _isUploadingPhoto = false;
-      _uploadedPhotoCount = 0;
     });
   }
 }
@@ -575,7 +570,7 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
     }
   }
 
-  Deliver? updatedDeliver;
+  // Deliver? updatedDeliver;
 
   Future<void> _saveChanges() async {
     // if (!_formKey.currentState!.validate()) {
@@ -634,19 +629,20 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
       if (_photosToDelete.isNotEmpty) {
         // check if main photo is being deleted
         bool mainPhotoDeleted = false;
-        for (Photo photo in _photosToDelete) {
-          if (await photoDatabase.isMainPhoto(photo)) {
+        for (Multimedia photo in _photosToDelete) {
+          if (photo.isMain) {
             mainPhotoDeleted = true;
             break;
           }
         }
 
         // delete all marked photos at once
-        await photoDatabase.deleteMultiplePhotos(_photosToDelete);
+        await mediaDatabase.deleteMultiplePhotos(_photosToDelete);
 
         //set new main photo if needed
         if (mainPhotoDeleted) {
-          await photoDatabase.setNewMainPhoto(widget.item.id);
+          final urlPattern = 'articles/${widget.item.id}';
+          await mediaDatabase.setNewMainPhoto(urlPattern);
         }
 
         // update article's lastUpdate after deleting photos
@@ -666,28 +662,28 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
       }
 
       // 3. Update deliver if location or address changed
-      if (_selectedLocation != _originalLocation || 
-          _selectedAddress != _originalAddress) {
+      // if (_selectedLocation != _originalLocation || 
+      //     _selectedAddress != _originalAddress) {
         
-        print('🔄 Detectados cambios en ubicación:');
-        print('   Deliver ID: ${widget.item.deliverID}');
-        print('   Original: ${_originalAddress} (${_originalLocation.latitude}, ${_originalLocation.longitude})');
-        print('   Nueva: ${_selectedAddress} (${_selectedLocation!.latitude}, ${_selectedLocation!.longitude})');
+      //   print('🔄 Detectados cambios en ubicación:');
+      //   print('   Deliver ID: ${widget.item.deliverID}');
+      //   print('   Original: ${_originalAddress} (${_originalLocation.latitude}, ${_originalLocation.longitude})');
+      //   print('   Nueva: ${_selectedAddress} (${_selectedLocation!.latitude}, ${_selectedLocation!.longitude})');
         
-        if (widget.item.deliverID == null) {
-          throw Exception('El deliverID no puede ser nulo al actualizar la ubicación');
-        }
+      //   if (widget.item.deliverID == null) {
+      //     throw Exception('El deliverID no puede ser nulo al actualizar la ubicación');
+      //   }
 
-        Deliver updatedDeliver = Deliver(
-          id: widget.item.deliverID, // ✅ Usar el deliverID correcto
-          address: _selectedAddress ?? 'Ubicación no especificada',
-          lat: _selectedLocation!.latitude,
-          lng: _selectedLocation!.longitude,
-        );
+      //   Deliver updatedDeliver = Deliver(
+      //     id: widget.item.deliverID, // ✅ Usar el deliverID correcto
+      //     address: _selectedAddress ?? 'Ubicación no especificada',
+      //     lat: _selectedLocation!.latitude,
+      //     lng: _selectedLocation!.longitude,
+      //   );
 
-        await deliverDatabase.updateDeliver(updatedDeliver);
-        print('✅ Ubicación actualizada exitosamente en la base de datos');
-      }
+      //   await deliverDatabase.updateDeliver(updatedDeliver);
+      //   print('✅ Ubicación actualizada exitosamente en la base de datos');
+      // }
 
       // 4. Update article
       Article updatedArticle = Article(
@@ -698,12 +694,14 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
             : _descriptionController.text.trim(),
         categoryID: _selectedCategory!.id,
         condition: _selectedCondition,
-        deliverID: widget.item.deliverID, // ✅ Mantener el deliverID original
+        address: _selectedAddress,
+        lat: widget.item.latitude,
+        lng: widget.item.longitude,
         userId: widget.item.ownerUserId,
         availableDays: _selectedAvailability?.getDaysForDatabase(),
         availableTimeStart: _selectedAvailability?.getStartTimeForDatabase(),
         availableTimeEnd: _selectedAvailability?.getEndTimeForDatabase(),
-        workflowStatus: 'pendiente',
+        // workflowStatus: 'pendiente',
         state: 1,
       );
 

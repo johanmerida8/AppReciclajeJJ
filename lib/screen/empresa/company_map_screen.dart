@@ -7,8 +7,8 @@ import 'package:reciclaje_app/model/recycling_items.dart';
 import 'package:reciclaje_app/services/cache_service.dart';
 import 'package:reciclaje_app/services/location_service.dart';
 import 'package:reciclaje_app/services/map_service.dart';
-import 'package:reciclaje_app/database/photo_database.dart';
-import 'package:reciclaje_app/model/photo.dart';
+import 'package:reciclaje_app/database/media_database.dart';
+import 'package:reciclaje_app/model/multimedia.dart';
 import 'package:reciclaje_app/services/marker_cluster.dart';
 import 'package:reciclaje_app/services/recycling_data.dart';
 import 'package:reciclaje_app/utils/category_utils.dart';
@@ -30,7 +30,7 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
   final _cacheService = CacheService();
   final _mapService = MapService();
   final _clusterService = MarkerClusterService();
-  final _photoDatabase = PhotoDatabase();
+  final _mediaDatabase = MediaDatabase();
 
   // Controllers
   final _mapController = MapController();
@@ -687,7 +687,7 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
       enableDrag: true,
       builder: (context) => _CompanyArticleModal(
         item: item,
-        photoDatabase: _photoDatabase,
+        mediaDatabase: _mediaDatabase,
         onAssignEmployee: () {
           Navigator.pop(context);
           _showAssignEmployeeDialog(item);
@@ -1084,13 +1084,13 @@ class _AssignEmployeeDialog extends StatelessWidget {
 // Company Article Modal Widget
 class _CompanyArticleModal extends StatefulWidget {
   final RecyclingItem item;
-  final PhotoDatabase photoDatabase;
+  final MediaDatabase mediaDatabase;
   final VoidCallback onAssignEmployee;
   final Function(RecyclingItem) onNavigateToDetails;
 
   const _CompanyArticleModal({
     required this.item,
-    required this.photoDatabase,
+    required this.mediaDatabase,
     required this.onAssignEmployee,
     required this.onNavigateToDetails,
   });
@@ -1100,7 +1100,7 @@ class _CompanyArticleModal extends StatefulWidget {
 }
 
 class _CompanyArticleModalState extends State<_CompanyArticleModal> {
-  Photo? currentPhoto;
+  Multimedia? currentPhoto;
   bool isLoadingPhoto = false;
 
   @override
@@ -1115,7 +1115,7 @@ class _CompanyArticleModalState extends State<_CompanyArticleModal> {
     });
     
     try {
-      final photo = await widget.photoDatabase.getMainPhotoByArticleId(widget.item.id);
+      final photo = await widget.mediaDatabase.getMainPhotoByPattern('articles/${widget.item.id}');
       if (mounted) {
         setState(() {
           currentPhoto = photo;
@@ -1333,3 +1333,5 @@ class _CompanyArticleModalState extends State<_CompanyArticleModal> {
     );
   }
 }
+
+

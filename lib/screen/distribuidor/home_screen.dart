@@ -17,8 +17,8 @@ import 'package:reciclaje_app/utils/category_utils.dart';
 import 'package:reciclaje_app/widgets/map_marker.dart';
 import 'package:reciclaje_app/widgets/quick_register_dialog.dart';
 import 'package:reciclaje_app/widgets/status_indicator.dart';
-import 'package:reciclaje_app/database/photo_database.dart';
-import 'package:reciclaje_app/model/photo.dart';
+import 'package:reciclaje_app/database/media_database.dart';
+import 'package:reciclaje_app/model/multimedia.dart';
 // import 'package:reciclaje_app/widgets/category_utils.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -37,7 +37,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   final _workflowService = WorkflowService();
   final _mapService = MapService();
   final _clusterService = MarkerClusterService();
-  final _photoDatabase = PhotoDatabase();
+  final _mediaDatabase = MediaDatabase();
 
   // Controllers
   final _mapController = MapController();
@@ -1558,7 +1558,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       enableDrag: true,
       builder: (context) => _SingleArticleModalContent(
         item: item,
-        photoDatabase: _photoDatabase,
+        mediaDatabase: _mediaDatabase,
         onShowDetails: _showItemDetails,
       ),
     ).then((_) {
@@ -1612,7 +1612,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         clusterItems: clusterItems,
         initialClusterIndex: clusterIndex,
         allItems: _myItems,
-        photoDatabase: _photoDatabase,
+        mediaDatabase: _mediaDatabase,
         onIndexChanged: (newClusterIndex) {
           setState(() {
             // Actualizar el índice global basado en el artículo del cluster
@@ -1649,7 +1649,7 @@ class _ArticleModalContent extends StatefulWidget {
   final RecyclingItem initialItem;
   final List<RecyclingItem> myItems;
   final int currentArticleIndex;
-  final PhotoDatabase photoDatabase;
+  final MediaDatabase mediaDatabase;
   final Function(int) onIndexChanged;
   final Function(double, double) onCenterMap;
   final Function(RecyclingItem) onShowDetails;
@@ -1658,7 +1658,7 @@ class _ArticleModalContent extends StatefulWidget {
     required this.initialItem,
     required this.myItems,
     required this.currentArticleIndex,
-    required this.photoDatabase,
+    required this.mediaDatabase,
     required this.onIndexChanged,
     required this.onCenterMap,
     required this.onShowDetails,
@@ -1671,7 +1671,7 @@ class _ArticleModalContent extends StatefulWidget {
 class _ArticleModalContentState extends State<_ArticleModalContent> {
   late int currentModalIndex;
   late RecyclingItem currentItem;
-  Photo? currentPhoto;
+  Multimedia? currentPhoto;
   bool isLoadingPhoto = false;
 
   @override
@@ -1688,7 +1688,8 @@ class _ArticleModalContentState extends State<_ArticleModalContent> {
     });
     
     try {
-      final photo = await widget.photoDatabase.getMainPhotoByArticleId(currentItem.id);
+      final urlPattern = 'articles/${currentItem.id}';
+      final photo = await widget.mediaDatabase.getMainPhotoByPattern(urlPattern);
       if (mounted) {
         setState(() {
           currentPhoto = photo;
@@ -1934,7 +1935,7 @@ class _ClusterModalContent extends StatefulWidget {
   final List<RecyclingItem> clusterItems; // Solo los artículos del cluster
   final int initialClusterIndex;
   final List<RecyclingItem> allItems; // Todos los artículos (para referencia)
-  final PhotoDatabase photoDatabase;
+  final MediaDatabase mediaDatabase;
   final Function(int) onIndexChanged;
   final Function(double, double) onCenterMap;
   final Function(RecyclingItem) onShowDetails;
@@ -1943,7 +1944,7 @@ class _ClusterModalContent extends StatefulWidget {
     required this.clusterItems,
     required this.initialClusterIndex,
     required this.allItems,
-    required this.photoDatabase,
+    required this.mediaDatabase,
     required this.onIndexChanged,
     required this.onCenterMap,
     required this.onShowDetails,
@@ -1956,7 +1957,7 @@ class _ClusterModalContent extends StatefulWidget {
 class _ClusterModalContentState extends State<_ClusterModalContent> {
   late int currentClusterIndex;
   late RecyclingItem currentItem;
-  Photo? currentPhoto;
+  Multimedia? currentPhoto;
   bool isLoadingPhoto = false;
 
   @override
@@ -1973,7 +1974,8 @@ class _ClusterModalContentState extends State<_ClusterModalContent> {
     });
     
     try {
-      final photo = await widget.photoDatabase.getMainPhotoByArticleId(currentItem.id);
+      final urlPattern = 'articles/${currentItem.id}';
+      final photo = await widget.mediaDatabase.getMainPhotoByPattern(urlPattern);
       if (mounted) {
         setState(() {
           currentPhoto = photo;
@@ -2240,12 +2242,12 @@ class _ClusterModalContentState extends State<_ClusterModalContent> {
 // ✅ Simple modal for individual marker (no previous/next buttons)
 class _SingleArticleModalContent extends StatefulWidget {
   final RecyclingItem item;
-  final PhotoDatabase photoDatabase;
+  final MediaDatabase mediaDatabase;
   final Function(RecyclingItem) onShowDetails;
 
   const _SingleArticleModalContent({
     required this.item,
-    required this.photoDatabase,
+    required this.mediaDatabase,
     required this.onShowDetails,
   });
 
@@ -2254,7 +2256,7 @@ class _SingleArticleModalContent extends StatefulWidget {
 }
 
 class _SingleArticleModalContentState extends State<_SingleArticleModalContent> {
-  Photo? currentPhoto;
+  Multimedia? currentPhoto;
   bool isLoadingPhoto = false;
 
   @override
@@ -2269,7 +2271,8 @@ class _SingleArticleModalContentState extends State<_SingleArticleModalContent> 
     });
     
     try {
-      final photo = await widget.photoDatabase.getMainPhotoByArticleId(widget.item.id);
+      final urlPattern = 'articles/${widget.item.id}';
+      final photo = await widget.mediaDatabase.getMainPhotoByPattern(urlPattern);
       if (mounted) {
         setState(() {
           currentPhoto = photo;

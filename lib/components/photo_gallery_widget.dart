@@ -3,18 +3,18 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:reciclaje_app/components/fullscreen_photo_viewer.dart';
-import 'package:reciclaje_app/model/photo.dart';
+import 'package:reciclaje_app/model/multimedia.dart';
 
 class PhotoGalleryWidget extends StatefulWidget {
-  final List<Photo> photos;
-  final Photo? mainPhoto;
+  final List<Multimedia> photos;
+  final Multimedia? mainPhoto;
   final bool isLoading;
   final bool isOwner;
   final VoidCallback? onAddPhoto;
-  final Function(Photo)? onDeletePhoto;
-  final List<Photo> photosToDelete;
+  final Function(Multimedia)? onDeletePhoto;
+  final List<Multimedia> photosToDelete;
   final List<XFile> pickedImages;
-  final Function(List<Photo>)? onPhotosToDeleteChanged;
+  final Function(List<Multimedia>)? onPhotosToDeleteChanged;
   final Function(List<XFile>)? onPickedImagesChanged;
   final int maxPhotos;
   final bool showValidation;
@@ -111,8 +111,8 @@ class _PhotoGalleryWidgetState extends State<PhotoGalleryWidget> {
     );
   }
 
-  void _markPhotoForDeletion(Photo photo) {
-    List<Photo> updatedList = List.from(widget.photosToDelete);
+  void _markPhotoForDeletion(Multimedia photo) {
+    List<Multimedia> updatedList = List.from(widget.photosToDelete);
     
     if (updatedList.any((p) => p.id == photo.id)) {
       // Unmark for deletion
@@ -125,7 +125,7 @@ class _PhotoGalleryWidgetState extends State<PhotoGalleryWidget> {
     widget.onPhotosToDeleteChanged?.call(updatedList);
   }
 
-  bool _isMarkedForDeletion(Photo photo) {
+  bool _isMarkedForDeletion(Multimedia photo) {
     return widget.photosToDelete.any((p) => p.id == photo.id);
   }
 
@@ -167,10 +167,10 @@ class _PhotoGalleryWidgetState extends State<PhotoGalleryWidget> {
 
   @override
 Widget build(BuildContext context) {
-  // Create allDisplayItems list combining both Photo and XFile objects
+  // Create allDisplayItems list combining both Multimedia and XFile objects
   List<dynamic> allDisplayItems = [];
   
-  // Add main photo first if exists
+  // Add main Multimedia first if exists
   if (widget.mainPhoto != null) {
     allDisplayItems.add(widget.mainPhoto!);
   }
@@ -254,7 +254,7 @@ Widget build(BuildContext context) {
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
-        // Photo counter info - More compact
+        // Multimedia counter info - More compact
         Row(
           children: [
             Text(
@@ -278,7 +278,7 @@ Widget build(BuildContext context) {
         ),
         const SizedBox(height: 8),
         
-        // Main photo display
+        // Main Multimedia display
         Container(
           height: 220, // Reduced height
           decoration: BoxDecoration(
@@ -310,7 +310,7 @@ Widget build(BuildContext context) {
                   
                   final item = allDisplayItems[index];
                   
-                  if (item is Photo) {
+                  if (item is Multimedia) {
                     return _buildPhotoWidget(item);
                   } else if (item is XFile) {
                     return _buildPickedImageWidget(item, index);
@@ -320,12 +320,12 @@ Widget build(BuildContext context) {
                 },
               ),
               
-              // Main photo indicator
+              // Main Multimedia indicator
               if (widget.mainPhoto != null && 
                   _currentIndex == 0 && 
                   allDisplayItems.isNotEmpty && 
                   _currentIndex < allDisplayItems.length &&
-                  allDisplayItems[_currentIndex] is Photo)
+                  allDisplayItems[_currentIndex] is Multimedia)
                 Positioned(
                   top: 8,
                   left: 8,
@@ -351,7 +351,7 @@ Widget build(BuildContext context) {
                   widget.onPhotosToDeleteChanged != null && 
                   allDisplayItems.isNotEmpty &&
                   _currentIndex < allDisplayItems.length &&
-                  allDisplayItems[_currentIndex] is Photo)
+                  allDisplayItems[_currentIndex] is Multimedia)
                 Positioned(
                   top: 8,
                   right: 8,
@@ -359,15 +359,15 @@ Widget build(BuildContext context) {
                     width: 32,
                     height: 32,
                     decoration: BoxDecoration(
-                      color: _isMarkedForDeletion(allDisplayItems[_currentIndex] as Photo) 
+                      color: _isMarkedForDeletion(allDisplayItems[_currentIndex] as Multimedia) 
                           ? Colors.green 
                           : Colors.red,
                       borderRadius: BorderRadius.circular(16),
                     ),
                     child: IconButton(
-                      onPressed: () => _markPhotoForDeletion(allDisplayItems[_currentIndex] as Photo),
+                      onPressed: () => _markPhotoForDeletion(allDisplayItems[_currentIndex] as Multimedia),
                       icon: Icon(
-                        _isMarkedForDeletion(allDisplayItems[_currentIndex] as Photo) 
+                        _isMarkedForDeletion(allDisplayItems[_currentIndex] as Multimedia) 
                             ? Icons.undo 
                             : Icons.delete,
                         color: Colors.white,
@@ -432,7 +432,7 @@ Widget build(BuildContext context) {
                     decoration: BoxDecoration(
                       borderRadius: BorderRadius.circular(6),
                       border: Border.all(
-                        color: item is Photo && _isMarkedForDeletion(item)
+                        color: item is Multimedia && _isMarkedForDeletion(item)
                             ? Colors.red
                             : isSelected 
                                 ? const Color(0xFF2D8A8A) 
@@ -442,7 +442,7 @@ Widget build(BuildContext context) {
                     ),
                     child: ClipRRect(
                       borderRadius: BorderRadius.circular(4),
-                      child: item is Photo 
+                      child: item is Multimedia 
                           ? _buildThumbnailPhoto(item)
                           : _buildThumbnailXFile(item as XFile),
                     ),
@@ -493,7 +493,7 @@ Widget build(BuildContext context) {
           ),
         ],
 
-        // Add photo button - More compact and only when there are photos
+        // Add Multimedia button - More compact and only when there are photos
         if (widget.isOwner && widget.onAddPhoto != null && allDisplayItems.isNotEmpty) ...[
           const SizedBox(height: 8),
           SizedBox(
@@ -515,7 +515,7 @@ Widget build(BuildContext context) {
   );
 }
 
-  Widget _buildPhotoWidget(Photo photo) {
+  Widget _buildPhotoWidget(Multimedia photo) {
     final isMarkedForDeletion = _isMarkedForDeletion(photo);
     
     return GestureDetector(
@@ -655,7 +655,7 @@ Widget build(BuildContext context) {
   );
 }
 
-  Widget _buildThumbnailPhoto(Photo photo) {
+  Widget _buildThumbnailPhoto(Multimedia photo) {
     final isMarkedForDeletion = _isMarkedForDeletion(photo);
     
     return Stack(

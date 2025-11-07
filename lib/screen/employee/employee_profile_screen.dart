@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:reciclaje_app/auth/auth_service.dart';
+import 'package:reciclaje_app/database/media_database.dart';
 import 'package:reciclaje_app/database/users_database.dart';
+import 'package:reciclaje_app/model/multimedia.dart';
 import 'package:reciclaje_app/model/users.dart';
 import 'package:reciclaje_app/screen/distribuidor/login_screen.dart';
+import 'package:reciclaje_app/screen/employee/edit_employee_profile_screen.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class EmployeeProfileScreen extends StatefulWidget {
@@ -15,8 +18,10 @@ class EmployeeProfileScreen extends StatefulWidget {
 class _EmployeeProfileScreenState extends State<EmployeeProfileScreen> {
   final AuthService authService = AuthService();
   final UsersDatabase usersDatabase = UsersDatabase();
+  final MediaDatabase mediaDatabase = MediaDatabase();
 
   Users? currentUser;
+  Multimedia? currentUserAvatar; // User's avatar from multimedia table
   List<Map<String, dynamic>> employeeTasks = [];
   bool isLoading = true;
 
@@ -36,6 +41,13 @@ class _EmployeeProfileScreenState extends State<EmployeeProfileScreen> {
         currentUser = await usersDatabase.getUserByEmail(email);
         
         print('✅ Loaded employee: ${currentUser?.names} (${currentUser?.email})');
+        
+        // Load user avatar from multimedia table
+        if (currentUser?.id != null) {
+          final avatarPattern = 'users/${currentUser!.id}/avatars/';
+          currentUserAvatar = await mediaDatabase.getMainPhotoByPattern(avatarPattern);
+          print('📸 User avatar: ${currentUserAvatar?.url ?? "No avatar"}');
+        }
         
         // Fetch employee's assigned tasks
         if (currentUser?.id != null) {
@@ -98,10 +110,16 @@ class _EmployeeProfileScreenState extends State<EmployeeProfileScreen> {
   void _navigateToEditProfile() async {
     if (currentUser == null) return;
     
-    // TODO: Create EditProfileScreen for employee
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Función de editar perfil próximamente')),
+    final result = await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => EditEmployeeProfileScreen(user: currentUser!),
+      ),
     );
+    
+    if (result == true) {
+      await _loadUserData();
+    }
   }
 
   void _showProfileMenu() {
@@ -160,10 +178,10 @@ class _EmployeeProfileScreenState extends State<EmployeeProfileScreen> {
                         CircleAvatar(
                           radius: 50,
                           backgroundColor: Colors.white,
-                          backgroundImage: currentUser?.avatarUrl != null
-                              ? NetworkImage(currentUser!.avatarUrl!)
+                          backgroundImage: currentUserAvatar?.url != null
+                              ? NetworkImage(currentUserAvatar!.url!)
                               : null,
-                          child: currentUser?.avatarUrl == null
+                          child: currentUserAvatar?.url == null
                               ? const Icon(
                                   Icons.person,
                                   size: 60,
@@ -225,37 +243,6 @@ class _EmployeeProfileScreenState extends State<EmployeeProfileScreen> {
                       ],
                     ),
                   ),
-                  // Stats row - 3 stats for empleado
-                  Container(
-                    margin: const EdgeInsets.symmetric(horizontal: 25),
-                    padding: const EdgeInsets.all(20),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(15),
-                    ),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceAround,
-                      children: [
-                        _buildStatItem(
-                          '${employeeTasks.where((t) => t['status'] == 'asignado').length}',
-                          'Asignado',
-                          Colors.blue,
-                        ),
-                        Container(width: 1, height: 40, color: Colors.grey[300]),
-                        _buildStatItem(
-                          '${employeeTasks.where((t) => t['status'] == 'en_proceso').length}',
-                          'En Procesos',
-                          Colors.orange,
-                        ),
-                        Container(width: 1, height: 40, color: Colors.grey[300]),
-                        _buildStatItem(
-                          '${employeeTasks.where((t) => t['status'] == 'completado').length}',
-                          'Recogidos',
-                          Colors.green,
-                        ),
-                      ],
-                    ),
-                  ),
                   const SizedBox(height: 20),
                   // Tasks section
                   Expanded(
@@ -303,7 +290,7 @@ class _EmployeeProfileScreenState extends State<EmployeeProfileScreen> {
                           Padding(
                             padding: const EdgeInsets.symmetric(horizontal: 25),
                             child: Text(
-                              'Total ${employeeTasks.length} tareas',
+                              'Total ${employeeTasks.length} finalizadas',
                               style: TextStyle(
                                 fontSize: 13,
                                 color: Colors.grey[600],
@@ -363,29 +350,6 @@ class _EmployeeProfileScreenState extends State<EmployeeProfileScreen> {
                 ],
               ),
       ),
-    );
-  }
-
-  Widget _buildStatItem(String value, String label, Color color) {
-    return Column(
-      children: [
-        Text(
-          value,
-          style: TextStyle(
-            fontSize: 24,
-            fontWeight: FontWeight.bold,
-            color: color,
-          ),
-        ),
-        const SizedBox(height: 4),
-        Text(
-          label,
-          style: TextStyle(
-            fontSize: 12,
-            color: Colors.grey[600],
-          ),
-        ),
-      ],
     );
   }
 

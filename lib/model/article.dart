@@ -1,31 +1,35 @@
 class Article {
   int? id;
-  String? name;
+  int? userId;
   int? categoryID;
+  String? name;
   String? condition;
   String? description;
+  String? address;
+  double? lat;
+  double? lng;
   String? availableDays;
   String? availableTimeStart;
   String? availableTimeEnd;
-  int? deliverID;
-  int? userId;
+  // int? deliverID;
   int? state;
-  String? workflowStatus; // ✅ 'pendiente', 'asignado', 'en_proceso', 'completado'
   DateTime? lastUpdate;
 
   Article ({
     this.id,
-    this.name,
+    this.userId,
     this.categoryID,
+    this.name,
     this.condition,
     this.description,
-    this.deliverID,
-    this.userId,
+    this.address,
+    this.lat,
+    this.lng,
+    // this.deliverID,
     this.availableDays,
     this.availableTimeStart,
     this.availableTimeEnd,
     this.state,
-    this.workflowStatus,
     this.lastUpdate,
   });
 
@@ -36,13 +40,15 @@ class Article {
       categoryID: map['categoryID'] as int?,
       condition: map['condition'] as String?,
       description: map['description'] as String?,
-      deliverID: map['deliverID'] as int?,
+      address: map['address'] as String,
+      lat: (map['lat'] as num?)?.toDouble(),
+      lng: (map['lng'] as num?)?.toDouble(),
+      // deliverID: map['deliverID'] as int?,
       userId: map['userID'] as int?,
       availableDays: map['availableDays'] as String?,
       availableTimeStart: map['availableTimeStart'] as String?,
       availableTimeEnd: map['availableTimeEnd'] as String?,
       state: map['state'] as int?,
-      workflowStatus: map['workflowStatus'] as String?,
       lastUpdate: map['lastUpdate'] != null ? DateTime.parse(map['lastUpdate']) : null,
     );
   }
@@ -53,19 +59,21 @@ class Article {
       'categoryID': categoryID,
       'condition': condition,
       'description': description,
-      'deliverID': deliverID,
+      'address': address,
+      'lat': lat,
+      'lng': lng,
+      // 'deliverID': deliverID,
       'userID': userId,
       'availableDays': availableDays,
       'availableTimeStart': availableTimeStart,
       'availableTimeEnd': availableTimeEnd,
       'state': state,
-      'workflowStatus': workflowStatus,
       'lastUpdate': lastUpdate?.toIso8601String(),
     };
   }
 
   @override
   String toString() {
-    return 'Article{id: $id, name: $name, categoryID: $categoryID, condition: $condition, description: $description, deliverID: $deliverID, userID: $userId, availableDays: $availableDays, availableTimeStart: $availableTimeStart, availableTimeEnd: $availableTimeEnd, state: $state, lastUpdate: $lastUpdate}';
+    return 'Article{id: $id, name: $name, categoryID: $categoryID, condition: $condition, description: $description, address: $address, lat: $lat, lng: $lng, userID: $userId, availableDays: $availableDays, availableTimeStart: $availableTimeStart, availableTimeEnd: $availableTimeEnd, state: $state, lastUpdate: $lastUpdate}';
   }
 }

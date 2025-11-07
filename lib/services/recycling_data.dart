@@ -10,7 +10,7 @@ import 'package:reciclaje_app/model/recycling_items.dart';
 class RecyclingDataService {
   final ArticleDatabase articleDatabase = ArticleDatabase();
   final CategoryDatabase categoryDatabase = CategoryDatabase();
-  final DeliverDatabase deliverDatabase = DeliverDatabase();
+  // final DeliverDatabase deliverDatabase = DeliverDatabase();
   final UsersDatabase userDatabase = UsersDatabase();
 
   /// Load all articles and convert to RecyclingItems
@@ -23,8 +23,7 @@ class RecyclingDataService {
     for (Article article in articles) {
       if (article.state == 1 && 
           article.id != null && 
-          article.name != null && 
-          article.deliverID != null) {
+          article.name != null) {
         try {
           final item = await _convertArticleToRecyclingItem(article, categories);
           if (item != null) {
@@ -60,13 +59,13 @@ class RecyclingDataService {
       }
 
       // Get deliver info
-      final deliver = await deliverDatabase.getDeliverById(article.deliverID!);
-      if (deliver == null || 
-          deliver.lat == null || 
-          deliver.lng == null || 
-          deliver.address == null) {
-        return null;
-      }
+      // final deliver = await deliverDatabase.getDeliverById(article.deliverID!);
+      // if (deliver == null || 
+      //     deliver.lat == null || 
+      //     deliver.lng == null || 
+      //     deliver.address == null) {
+      //   return null;
+      // }
 
       // Get user info
       final user = article.userId != null 
@@ -79,7 +78,7 @@ class RecyclingDataService {
       return RecyclingItem(
         id: article.id!,
         title: article.name!,
-        deliverID: article.deliverID,
+        // deliverID: article.deliverID,
         description: article.description,
         categoryID: article.categoryID,
         categoryName: category.name ?? 'Sin categoria',
@@ -87,14 +86,14 @@ class RecyclingDataService {
         ownerUserId: article.userId,
         userName: userName,
         userEmail: userEmail,
-        latitude: deliver.lat!,
-        longitude: deliver.lng!,
-        address: deliver.address!,
+        latitude: article.lat!,
+        longitude: article.lng!,
+        address: article.address!,
         availableDays: article.availableDays ?? '',
         availableTimeStart: article.availableTimeStart ?? '',
         availableTimeEnd: article.availableTimeEnd ?? '',
         createdAt: DateTime.now(),
-        workflowStatus: article.workflowStatus,
+        // workflowStatus: article.workflowStatus,
       );
     } catch (e) {
       print('Error converting article to RecyclingItem: $e');
