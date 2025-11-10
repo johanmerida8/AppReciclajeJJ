@@ -138,6 +138,7 @@ class _EditEmployeeProfileScreenState extends State<EditEmployeeProfileScreen> {
 
     try {
       final userId = widget.user.id!;
+      final userRole = widget.user.role?.toLowerCase() ?? 'user';
       final timestamp = DateTime.now().millisecondsSinceEpoch;
       
       print('📸 Processing avatar upload for user: $userId');
@@ -160,7 +161,7 @@ class _EditEmployeeProfileScreenState extends State<EditEmployeeProfileScreen> {
       }
 
       final fileName = 'avatar_${timestamp}.$extension';
-      final filePath = 'users/$userId/avatars/$fileName';
+      final filePath = 'users/$userRole/$userId/avatars/$fileName';
 
       print('📤 Uploading avatar to: $filePath');
 
@@ -213,6 +214,8 @@ class _EditEmployeeProfileScreenState extends State<EditEmployeeProfileScreen> {
         mimeType: mimeType,
         isMain: true,
         uploadOrder: 1,
+        entityType: 'empleado',
+        entityId: userId,
       );
       
       print('💾 Saving avatar to multimedia table...');

@@ -4,6 +4,11 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:reciclaje_app/auth/auth_service.dart';
 import 'package:reciclaje_app/model/recycling_items.dart';
+import 'package:reciclaje_app/model/request.dart';
+import 'package:reciclaje_app/database/request_database.dart';
+import 'package:reciclaje_app/database/users_database.dart'; // ✅ Add UsersDatabase
+import 'package:reciclaje_app/database/task_database.dart'; // ✅ Add TaskDatabase
+import 'package:reciclaje_app/model/task.dart'; // ✅ Add Task model
 import 'package:reciclaje_app/services/cache_service.dart';
 import 'package:reciclaje_app/services/location_service.dart';
 import 'package:reciclaje_app/services/map_service.dart';
@@ -13,6 +18,7 @@ import 'package:reciclaje_app/services/marker_cluster.dart';
 import 'package:reciclaje_app/services/recycling_data.dart';
 import 'package:reciclaje_app/utils/category_utils.dart';
 import 'package:reciclaje_app/screen/distribuidor/detail_recycle_screen.dart';
+import 'package:reciclaje_app/screen/empresa/company_notifications_screen.dart'; // ✅ Add import
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class CompanyMapScreen extends StatefulWidget {
@@ -31,6 +37,8 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
   final _mapService = MapService();
   final _clusterService = MarkerClusterService();
   final _mediaDatabase = MediaDatabase();
+  final _requestDatabase = RequestDatabase();
+  final _taskDatabase = TaskDatabase(); // ✅ Add TaskDatabase
 
   // Controllers
   final _mapController = MapController();
@@ -41,6 +49,7 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
   List<Map<String, dynamic>> _employees = [];
   int? _currentUserId;
   int? _companyId;
+  int _approvedRequestCount = 0; // ✅ Notification count for approved requests
   
   // Filter states
   Set<String> _selectedStatuses = {'publicados', 'en_espera', 'sin_asignar', 'en_proceso', 'recogidos', 'vencidos'};
@@ -112,6 +121,7 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
   Future<void> _initialize() async {
     await _loadUserData();
     await _loadEmployees();
+    await _loadApprovedRequestCount(); // ✅ Load notification count
     await _loadData();
     await _checkLocationServices();
     
@@ -131,14 +141,35 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
       // Load company ID
       if (_currentUserId != null) {
         try {
-          final companyData = await Supabase.instance.client
+          // Try to get company ID from empresa table (if user is admin-empresa)
+          Map<String, dynamic>? companyData = await Supabase.instance.client
               .from('company')
               .select('idCompany')
               .eq('adminUserID', _currentUserId!)
-              .single();
-          setState(() {
-            _companyId = companyData['idCompany'] as int?;
-          });
+              .maybeSingle();
+          
+          int? foundCompanyId;
+          
+          // If not found in empresa table, try employees table (if user is employee)
+          if (companyData == null) {
+            companyData = await Supabase.instance.client
+                .from('employees')
+                .select('companyID')
+                .eq('userID', _currentUserId!)
+                .maybeSingle();
+            
+            if (companyData != null) {
+              foundCompanyId = companyData['companyID'] as int?;
+            }
+          } else {
+            foundCompanyId = companyData['idCompany'] as int?;
+          }
+          
+          if (foundCompanyId != null) {
+            setState(() {
+              _companyId = foundCompanyId;
+            });
+          }
         } catch (e) {
           print('❌ Error loading company: $e');
         }
@@ -152,15 +183,39 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
     try {
       final employees = await Supabase.instance.client
           .from('employees')
-          .select('*, users:userID(*)')
+          .select('idEmployee, userID, users:userID(names, email)')
           .eq('companyID', _companyId!);
       
-      setState(() {
-        _employees = List<Map<String, dynamic>>.from(employees);
-      });
-      print('✅ Loaded ${_employees.length} employees');
+      if (mounted) {
+        setState(() {
+          _employees = List<Map<String, dynamic>>.from(employees);
+        });
+        print('✅ Loaded ${_employees.length} employees');
+      }
     } catch (e) {
       print('❌ Error loading employees: $e');
+    }
+  }
+
+  /// ✅ Load count of approved requests for company
+  Future<void> _loadApprovedRequestCount() async {
+    if (_companyId == null) return;
+    
+    try {
+      final approvedRequests = await Supabase.instance.client
+          .from('request')
+          .select('idRequest')
+          .eq('companyID', _companyId!)
+          .eq('status', 'aprobado');
+      
+      if (mounted) {
+        setState(() {
+          _approvedRequestCount = approvedRequests.length;
+        });
+      }
+      print('✅ Loaded $_approvedRequestCount approved requests');
+    } catch (e) {
+      print('❌ Error loading approved request count: $e');
     }
   }
 
@@ -201,27 +256,31 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
       final items = await _dataService.loadRecyclingItems();
       final categories = await _dataService.loadCategories();
 
-      setState(() {
-        _allItems = items;
-        _applyFilters();
-        _hasError = false;
-        _isLoading = false;
-      });
-
-      await _cacheService.saveCache(items, categories, _currentUserId);
-      print('✅ Loaded ${items.length} items fresh');
-
-      if (_filteredItems.isNotEmpty) {
-        Future.delayed(const Duration(milliseconds: 300), () {
-          if (mounted) _fitMapToShowAllArticles();
+      if (mounted) {
+        setState(() {
+          _allItems = items;
+          _applyFilters();
+          _hasError = false;
+          _isLoading = false;
         });
+
+        await _cacheService.saveCache(items, categories, _currentUserId);
+        print('✅ Loaded ${items.length} items fresh');
+
+        if (_filteredItems.isNotEmpty) {
+          Future.delayed(const Duration(milliseconds: 300), () {
+            if (mounted) _fitMapToShowAllArticles();
+          });
+        }
       }
     } catch (e) {
-      setState(() {
-        _errorMessage = e.toString();
-        _hasError = true;
-        _isLoading = false;
-      });
+      if (mounted) {
+        setState(() {
+          _errorMessage = e.toString();
+          _hasError = true;
+          _isLoading = false;
+        });
+      }
       print('❌ Error loading fresh data: $e');
     }
   }
@@ -310,8 +369,9 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
     if (status == 'completado') return 'recogidos';
     if (status == 'en_proceso') return 'en_proceso';
     if (status == 'asignado') return 'sin_asignar';
+    if (status == 'solicitado') return 'en_espera'; // Request sent, waiting for distributor approval
     if (status == 'vencido') return 'vencidos';
-    if (status == 'pendiente' || status == 'publicados') return 'en_espera';
+    if (status == 'pendiente' || status == 'publicados') return 'publicados';
     
     return 'publicados';
   }
@@ -320,6 +380,7 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
     await _cacheService.clearCache();
     await _loadData(forceRefresh: true);
     await _loadEmployees();
+    await _loadApprovedRequestCount(); // ✅ Refresh notification count
 
     final lastLocation = _locationService.lastKnownLocation ?? _userLocation;
     if (lastLocation != null) {
@@ -329,6 +390,18 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
         }
       });
     }
+  }
+
+  /// ✅ Navigate to company notifications screen
+  Future<void> _navigateToNotifications() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => const CompanyNotificationsScreen(),
+      ),
+    );
+    // Refresh count after returning from notifications
+    await _loadApprovedRequestCount();
   }
 
   void _fitMapToShowAllArticles() {
@@ -359,60 +432,214 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
     );
   }
 
-  void _showAssignEmployeeDialog(RecyclingItem item) {
-    showModalBottomSheet(
+  /// ✅ Show employee assignment dialog (when request is approved)
+  void _showAssignEmployeeDialogWithRequest(RecyclingItem item, Request approvedRequest) {
+    showDialog(
       context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (context) => _AssignEmployeeDialog(
-        item: item,
-        employees: _employees,
-        onAssign: (employeeId) async {
-          await _assignArticleToEmployee(item, employeeId);
-        },
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+        contentPadding: EdgeInsets.zero,
+        content: _AssignEmployeeDialog(
+          item: item,
+          employees: _employees,
+          approvedRequest: approvedRequest,
+          onAssign: (employeeId) async {
+            await _assignArticleToEmployee(item, employeeId, approvedRequest);
+          },
+        ),
       ),
     );
   }
 
-  Future<void> _assignArticleToEmployee(RecyclingItem item, int employeeId) async {
+  /// ✅ Show request dialog (when no request exists)
+  void _showSendRequestDialog(RecyclingItem item) {
+    // Changed from "Asignar" to "Solicitar"
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: const Color(0xFF2D8A8A).withOpacity(0.1),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(Icons.send, color: Color(0xFF2D8A8A), size: 24),
+            ),
+            const SizedBox(width: 12),
+            const Expanded(
+              child: Text(
+                'Solicitar Artículo',
+                style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+              ),
+            ),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '¿Deseas enviar una solicitud al distribuidor para recoger este artículo?',
+              style: TextStyle(fontSize: 15, color: Colors.grey[700]),
+            ),
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.blue[50],
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.info_outline, color: Colors.blue, size: 20),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'El distribuidor recibirá una notificación y podrá aprobar o rechazar tu solicitud.',
+                      style: TextStyle(fontSize: 13, color: Colors.blue[900]),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text('Cancelar', style: TextStyle(color: Colors.grey[600])),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              // Store navigator and scaffold messenger references before async operations
+              final navigator = Navigator.of(context);
+              final scaffoldMessenger = ScaffoldMessenger.of(context);
+              
+              // Close the confirmation dialog first
+              navigator.pop();
+              
+              // Show loading indicator
+              showDialog(
+                context: context,
+                barrierDismissible: false,
+                builder: (context) => const Center(
+                  child: CircularProgressIndicator(
+                    color: Color(0xFF2D8A8A),
+                  ),
+                ),
+              );
+              
+              // Send request
+              try {
+                await _sendRequestToDistributor(item);
+                
+                // Close loading indicator only
+                navigator.pop(); // Close loading indicator
+                
+                // Show success message
+                scaffoldMessenger.showSnackBar(
+                  const SnackBar(
+                    content: Text('✅ Solicitud enviada al distribuidor'),
+                    backgroundColor: Colors.green,
+                    duration: Duration(seconds: 3),
+                  ),
+                );
+              } catch (e) {
+                // Close loading indicator only
+                navigator.pop(); // Close loading indicator
+                
+                // Show error message
+                scaffoldMessenger.showSnackBar(
+                  SnackBar(
+                    content: Text('❌ Error: $e'),
+                    backgroundColor: Colors.red,
+                    duration: const Duration(seconds: 3),
+                  ),
+                );
+              }
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF2D8A8A),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+            child: const Text('Enviar Solicitud', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _sendRequestToDistributor(RecyclingItem item) async {
     try {
-      // Create task for employee
-      await Supabase.instance.client.from('tasks').insert({
-        'employeeID': employeeId,
-        'articleID': item.id,
-        'companyID': _companyId,
-        'assignedBy': _currentUserId,
-        'status': 'asignado',
-        'priority': 'media',
-        'assignedDate': DateTime.now().toIso8601String(),
-      });
+      // Create request with status "pendiente"
+      final newRequest = Request(
+        articleId: item.id,
+        companyId: _companyId,
+        status: 'pendiente',
+        requestDate: DateTime.now(),
+        state: 1, // Active
+        lastUpdate: DateTime.now(),
+      );
+
+      await _requestDatabase.createRequest(newRequest);
       
-      // Update article workflow status
-      await Supabase.instance.client
-          .from('article')
-          .update({'workflowStatus': 'asignado'})
-          .eq('idArticle', item.id);
+      // Success - no need to refresh map as the request is on the distributor side
+      print('✅ Request sent successfully to distributor');
+    } catch (e) {
+      print('❌ Error sending request: $e');
+      rethrow; // Re-throw to handle in calling code
+    }
+  }
+
+  /// ✅ Assign employee to approved request and create task
+  Future<void> _assignArticleToEmployee(
+    RecyclingItem item, 
+    int employeeId, 
+    Request approvedRequest,
+  ) async {
+    try {
+      if (_companyId == null) {
+        throw Exception('Company ID not found');
+      }
+
+      // Create task with requestID linking to the approved request
+      final task = Task(
+        employeeId: employeeId,
+        articleId: item.id,
+        companyId: _companyId,
+        requestId: approvedRequest.id, // ✅ Link to request with schedule
+        assignedDate: DateTime.now(),
+        workflowStatus: 'asignado',
+        state: 1,
+        lastUpdate: DateTime.now(),
+      );
+
+      await _taskDatabase.createTask(task);
       
+      print('✅ Task created successfully - Employee: $employeeId, Article: ${item.id}, Request: ${approvedRequest.id}');
+
       if (mounted) {
-        Navigator.pop(context); // Close employee selection dialog
-        Navigator.pop(context); // Close article detail modal
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('✅ Artículo asignado exitosamente'),
+            content: Text('✅ Tarea asignada exitosamente'),
             backgroundColor: Colors.green,
-            duration: Duration(seconds: 2),
           ),
         );
-        _refreshData();
       }
+
+      // Refresh data
+      await _loadApprovedRequestCount();
+      await _loadData(forceRefresh: true);
     } catch (e) {
-      print('❌ Error assigning article: $e');
+      print('❌ Error assigning employee: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('❌ Error al asignar: $e'),
+            content: Text('❌ Error al asignar empleado: $e'),
             backgroundColor: Colors.red,
-            duration: const Duration(seconds: 3),
           ),
         );
       }
@@ -690,7 +917,11 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
         mediaDatabase: _mediaDatabase,
         onAssignEmployee: () {
           Navigator.pop(context);
-          _showAssignEmployeeDialog(item);
+          _showSendRequestDialog(item);
+        },
+        onAssignEmployeeApproved: (article, request) {
+          Navigator.pop(context);
+          _showAssignEmployeeDialogWithRequest(article, request);
         },
         onNavigateToDetails: (RecyclingItem article) {
           Navigator.push(
@@ -844,6 +1075,42 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
                   ),
                 ],
               ),
+            ),
+            // ✅ Notification bell with badge
+            Stack(
+              clipBehavior: Clip.none,
+              children: [
+                IconButton(
+                  icon: const Icon(Icons.notifications_outlined, color: Colors.white),
+                  onPressed: _navigateToNotifications,
+                  tooltip: 'Notificaciones',
+                ),
+                if (_approvedRequestCount > 0)
+                  Positioned(
+                    right: 8,
+                    top: 8,
+                    child: Container(
+                      padding: const EdgeInsets.all(4),
+                      decoration: const BoxDecoration(
+                        color: Colors.red,
+                        shape: BoxShape.circle,
+                      ),
+                      constraints: const BoxConstraints(
+                        minWidth: 18,
+                        minHeight: 18,
+                      ),
+                      child: Text(
+                        _approvedRequestCount > 99 ? '99+' : '$_approvedRequestCount',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  ),
+              ],
             ),
             IconButton(
               icon: const Icon(Icons.refresh, color: Colors.white),
@@ -1016,17 +1283,122 @@ class _FilterDialogState extends State<_FilterDialog> {
   }
 }
 
-// Assign Employee Dialog Widget
-class _AssignEmployeeDialog extends StatelessWidget {
+// ✅ Assign Employee Dialog Widget with Schedule Confirmation
+class _AssignEmployeeDialog extends StatefulWidget {
   final RecyclingItem item;
   final List<Map<String, dynamic>> employees;
+  final Request approvedRequest;
   final Function(int) onAssign;
 
   const _AssignEmployeeDialog({
     required this.item,
     required this.employees,
+    required this.approvedRequest,
     required this.onAssign,
   });
+
+  @override
+  State<_AssignEmployeeDialog> createState() => _AssignEmployeeDialogState();
+}
+
+class _AssignEmployeeDialogState extends State<_AssignEmployeeDialog> {
+  String _formatTime(String timeStr) {
+    try {
+      final parts = timeStr.split(':');
+      if (parts.length >= 2) {
+        return '${parts[0]}:${parts[1]}';
+      }
+      return timeStr;
+    } catch (e) {
+      return timeStr;
+    }
+  }
+
+  void _showConfirmationDialog(Map<String, dynamic> employee) {
+    final user = employee['users'] as Map<String, dynamic>?;
+    final name = user?['names'] ?? 'Empleado';
+    
+    final scheduledDay = widget.approvedRequest.scheduledDay ?? 'No especificado';
+    final scheduledTime = widget.approvedRequest.scheduledTime != null
+        ? _formatTime(widget.approvedRequest.scheduledTime!)
+        : 'No especificado';
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Confirmar Asignación'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Asignar tarea a: $name',
+              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+            ),
+            const SizedBox(height: 16),
+            const Divider(),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                const Icon(Icons.article, color: Color(0xFF2D8A8A), size: 20),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    widget.item.title,
+                    style: const TextStyle(fontSize: 15),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                const Icon(Icons.calendar_today, color: Color(0xFF2D8A8A), size: 20),
+                const SizedBox(width: 8),
+                Text(
+                  'Día: $scheduledDay',
+                  style: const TextStyle(fontSize: 15),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                const Icon(Icons.access_time, color: Color(0xFF2D8A8A), size: 20),
+                const SizedBox(width: 8),
+                Text(
+                  'Hora: $scheduledTime',
+                  style: const TextStyle(fontSize: 15),
+                ),
+              ],
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancelar'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(ctx); // Close confirmation dialog
+              Navigator.pop(context); // Close employee list dialog
+              final employeeId = employee['idEmployee'] as int?;
+              if (employeeId != null) {
+                widget.onAssign(employeeId);
+              } else {
+                print('❌ Error: employeeId is null');
+              }
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF2D8A8A),
+            ),
+            child: const Text('Asignar', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1045,11 +1417,11 @@ class _AssignEmployeeDialog extends StatelessWidget {
             style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: 20),
-          Text('Artículo: ${item.title}'),
+          Text('Artículo: ${widget.item.title}'),
           const SizedBox(height: 20),
           const Text('Selecciona un empleado:', style: TextStyle(fontWeight: FontWeight.bold)),
           const SizedBox(height: 10),
-          if (employees.isEmpty)
+          if (widget.employees.isEmpty)
             const Center(
               child: Padding(
                 padding: EdgeInsets.all(20),
@@ -1057,7 +1429,7 @@ class _AssignEmployeeDialog extends StatelessWidget {
               ),
             )
           else
-            ...employees.map((employee) {
+            ...widget.employees.map((employee) {
               final user = employee['users'] as Map<String, dynamic>?;
               final name = user?['names'] ?? 'Empleado';
               final email = user?['email'] ?? '';
@@ -1069,10 +1441,7 @@ class _AssignEmployeeDialog extends StatelessWidget {
                 ),
                 title: Text(name),
                 subtitle: Text(email),
-                onTap: () {
-                  onAssign(employee['employeeId'] as int);
-                  Navigator.pop(context);
-                },
+                onTap: () => _showConfirmationDialog(employee),
               );
             }).toList(),
         ],
@@ -1086,12 +1455,14 @@ class _CompanyArticleModal extends StatefulWidget {
   final RecyclingItem item;
   final MediaDatabase mediaDatabase;
   final VoidCallback onAssignEmployee;
+  final Function(RecyclingItem, Request) onAssignEmployeeApproved; // ✅ Add callback with request
   final Function(RecyclingItem) onNavigateToDetails;
 
   const _CompanyArticleModal({
     required this.item,
     required this.mediaDatabase,
     required this.onAssignEmployee,
+    required this.onAssignEmployeeApproved,
     required this.onNavigateToDetails,
   });
 
@@ -1102,11 +1473,15 @@ class _CompanyArticleModal extends StatefulWidget {
 class _CompanyArticleModalState extends State<_CompanyArticleModal> {
   Multimedia? currentPhoto;
   bool isLoadingPhoto = false;
+  Request? _existingRequest; // ✅ Track request status
+  bool _isLoadingRequest = false; // ✅ Loading request status
+  int? _companyId;
 
   @override
   void initState() {
     super.initState();
     _loadPhoto();
+    _loadRequestStatus(); // ✅ Load request status
   }
 
   Future<void> _loadPhoto() async {
@@ -1132,9 +1507,76 @@ class _CompanyArticleModalState extends State<_CompanyArticleModal> {
     }
   }
 
+  /// ✅ Load request status for this article
+  Future<void> _loadRequestStatus() async {
+    setState(() => _isLoadingRequest = true);
+
+    try {
+      final authService = AuthService();
+      final usersDatabase = UsersDatabase();
+      final email = authService.getCurrentUserEmail();
+      
+      if (email != null) {
+        final user = await usersDatabase.getUserByEmail(email);
+        
+        if (user != null) {
+          // Get company ID
+          var companyData = await Supabase.instance.client
+              .from('company')
+              .select('idCompany')
+              .eq('adminUserID', user.id!)
+              .limit(1)
+              .maybeSingle();
+          
+          if (companyData == null) {
+            companyData = await Supabase.instance.client
+                .from('employees')
+                .select('companyID')
+                .eq('userID', user.id!)
+                .limit(1)
+                .maybeSingle();
+            
+            if (companyData != null) {
+              _companyId = companyData['companyID'] as int?;
+            }
+          } else {
+            _companyId = companyData['idCompany'] as int?;
+          }
+
+          // Check for existing request
+          if (_companyId != null) {
+            final existingRequest = await Supabase.instance.client
+                .from('request')
+                .select()
+                .eq('articleID', widget.item.id)
+                .eq('companyID', _companyId!)
+                .order('lastUpdate', ascending: false)
+                .limit(1)
+                .maybeSingle();
+
+            if (existingRequest != null && mounted) {
+              setState(() {
+                _existingRequest = Request.fromMap(existingRequest);
+              });
+            }
+          }
+        }
+      }
+    } catch (e) {
+      print('❌ Error loading request status: $e');
+    } finally {
+      if (mounted) {
+        setState(() => _isLoadingRequest = false);
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Container(
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.of(context).size.height * 0.70,
+      ),
       decoration: const BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
@@ -1151,11 +1593,12 @@ class _CompanyArticleModalState extends State<_CompanyArticleModal> {
               borderRadius: BorderRadius.circular(3),
             ),
           ),
-          Padding(
-            padding: const EdgeInsets.all(20),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
+          Expanded(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
                 if (isLoadingPhoto)
                   const Center(child: CircularProgressIndicator())
                 else if (currentPhoto?.url != null)
@@ -1275,43 +1718,129 @@ class _CompanyArticleModalState extends State<_CompanyArticleModal> {
                 const SizedBox(height: 20),
                 
                 // Action buttons
-                Row(
-                  children: [
-                    // View Details button
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        onPressed: () {
-                          Navigator.pop(context);
-                          widget.onNavigateToDetails(widget.item);
-                        },
-                        icon: const Icon(Icons.info_outline),
-                        label: const Text('Ver Detalles'),
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: const Color(0xFF2D8A8A),
-                          side: const BorderSide(color: Color(0xFF2D8A8A)),
-                          padding: const EdgeInsets.symmetric(vertical: 16),
+                if (_isLoadingRequest)
+                  const Center(
+                    child: CircularProgressIndicator(
+                      color: Color(0xFF2D8A8A),
+                    ),
+                  )
+                else
+                  Row(
+                    children: [
+                      // View Details button
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: () {
+                            Navigator.pop(context);
+                            widget.onNavigateToDetails(widget.item);
+                          },
+                          icon: const Icon(Icons.info_outline),
+                          label: const Text('Ver Detalles'),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: const Color(0xFF2D8A8A),
+                            side: const BorderSide(color: Color(0xFF2D8A8A)),
+                            padding: const EdgeInsets.symmetric(vertical: 16),
+                          ),
                         ),
                       ),
-                    ),
-                    const SizedBox(width: 12),
-                    // Assign Employee button
-                    Expanded(
-                      child: ElevatedButton.icon(
-                        onPressed: widget.onAssignEmployee,
-                        icon: const Icon(Icons.person_add),
-                        label: const Text('Asignar'),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFF2D8A8A),
-                          padding: const EdgeInsets.symmetric(vertical: 16),
-                        ),
+                      const SizedBox(width: 12),
+                      // Dynamic button based on request status
+                      Expanded(
+                        child: _buildActionButton(),
                       ),
-                    ),
-                  ],
-                ),
+                    ],
+                  ),
               ],
             ),
           ),
+        ),
         ],
+      ),
+    );
+  }
+
+  /// ✅ Build action button based on request status
+  Widget _buildActionButton() {
+    if (_existingRequest == null) {
+      // No request exists - show "Solicitar" button
+      return ElevatedButton.icon(
+        onPressed: widget.onAssignEmployee,
+        icon: const Icon(Icons.send),
+        label: const Text('Solicitar'),
+        style: ElevatedButton.styleFrom(
+          backgroundColor: const Color(0xFF2D8A8A),
+          padding: const EdgeInsets.symmetric(vertical: 16),
+        ),
+      );
+    } else if (_existingRequest!.status == 'pendiente') {
+      // Request is pending - show yellow "Pendiente" button (disabled)
+      return Container(
+        padding: const EdgeInsets.symmetric(vertical: 16),
+        decoration: BoxDecoration(
+          color: Colors.orange.withOpacity(0.1),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: Colors.orange.withOpacity(0.3)),
+        ),
+        child: const Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.pending, color: Colors.orange, size: 20),
+            SizedBox(width: 8),
+            Text(
+              'Solicitud Pendiente',
+              style: TextStyle(
+                color: Colors.orange,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ],
+        ),
+      );
+    } else if (_existingRequest!.status == 'aprobado') {
+      // Request approved - show green "Asignar Empleado" button
+      return ElevatedButton.icon(
+        onPressed: () => widget.onAssignEmployeeApproved(widget.item, _existingRequest!),
+        icon: const Icon(Icons.assignment_ind),
+        label: const Text('Asignar Empleado'),
+        style: ElevatedButton.styleFrom(
+          backgroundColor: Colors.green,
+          padding: const EdgeInsets.symmetric(vertical: 16),
+        ),
+      );
+    } else if (_existingRequest!.status == 'rechazado') {
+      // Request rejected - show red "Rechazada" button (disabled)
+      return Container(
+        padding: const EdgeInsets.symmetric(vertical: 16),
+        decoration: BoxDecoration(
+          color: Colors.red.withOpacity(0.1),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: Colors.red.withOpacity(0.3)),
+        ),
+        child: const Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.cancel, color: Colors.red, size: 20),
+            SizedBox(width: 8),
+            Text(
+              'Solicitud Rechazada',
+              style: TextStyle(
+                color: Colors.red,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+    
+    // Fallback - show default "Solicitar" button
+    return ElevatedButton.icon(
+      onPressed: widget.onAssignEmployee,
+      icon: const Icon(Icons.send),
+      label: const Text('Solicitar'),
+      style: ElevatedButton.styleFrom(
+        backgroundColor: const Color(0xFF2D8A8A),
+        padding: const EdgeInsets.symmetric(vertical: 16),
       ),
     );
   }

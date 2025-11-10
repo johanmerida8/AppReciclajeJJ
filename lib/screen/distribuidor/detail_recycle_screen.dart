@@ -9,11 +9,17 @@ import 'package:reciclaje_app/components/condition_selector.dart';
 import 'package:reciclaje_app/components/location_map_preview.dart';
 import 'package:reciclaje_app/components/photo_gallery_widget.dart';
 import 'package:reciclaje_app/components/photo_validation.dart';
+import 'package:reciclaje_app/components/schedule_pickup_dialog.dart'; // ✅ Add import
 import 'package:reciclaje_app/utils/Fixed43Cropper.dart';
 // import 'package:reciclaje_app/components/row_button_2.dart';
 import 'package:reciclaje_app/database/media_database.dart';
+import 'package:reciclaje_app/database/request_database.dart'; // ✅ Add request database
+import 'package:reciclaje_app/database/users_database.dart'; // ✅ Add users database
+import 'package:reciclaje_app/database/task_database.dart'; // ✅ Add task database
 import 'package:reciclaje_app/model/multimedia.dart';
 import 'package:reciclaje_app/model/recycling_items.dart';
+import 'package:reciclaje_app/model/request.dart'; // ✅ Add request model
+import 'package:reciclaje_app/model/task.dart'; // ✅ Add task model
 // import 'package:reciclaje_app/screen/home_screen.dart';
 import 'package:reciclaje_app/components/my_button.dart';
 import 'package:reciclaje_app/components/category_tags.dart';
@@ -50,14 +56,25 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
   // final deliverDatabase = DeliverDatabase();
   final mediaDatabase = MediaDatabase();  
   final workflowService = WorkflowService();
+  final requestDatabase = RequestDatabase(); // ✅ Add request database
+  final usersDatabase = UsersDatabase(); // ✅ Add users database
+  final taskDatabase = TaskDatabase(); // ✅ Add task database
 
   final _authService = AuthService();
   String? _currentUserEmail;
+  String? _currentUserRole; // ✅ Track user role
+  int? _currentUserId; // ✅ Track user ID
+  int? _companyId; // ✅ Track company ID for admin-empresa
+  Request? _existingRequest; // ✅ Track request status for this article
+  bool _isLoadingRequest = false; // ✅ Loading request status
+  List<Map<String, dynamic>> _employees = []; // ✅ Add employees list for company
+  Set<int> _assignedEmployeeIds = {}; // ✅ Track employees with active tasks
   
   List<Category> _categories = [];
   List<Multimedia> _photos = [];
   List<Multimedia> _photosToDelete = [];
   List<XFile> pickedImages = [];
+  List<Map<String, dynamic>> _pendingRequests = []; // ✅ Add pending requests list
 
   Multimedia? _mainPhoto;
   bool _isLoadingPhotos = true;
@@ -99,6 +116,9 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
     _debugDatabaseStructure(); // ✅ Debug temporal
 
     _currentUserEmail = _authService.getCurrentUserEmail();
+    _loadUserRoleAndRequest(); // ✅ Load user role and check for existing request
+    _loadPendingRequests(); // ✅ Load pending requests for this article
+    // ❌ DON'T load employees here - they need _companyId to be set first
   }
 
   // ✅ Método para refrescar categorías bloqueadas cuando se necesite
@@ -143,6 +163,643 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
   }
 
   bool get _isOwner => widget.item.userEmail == _currentUserEmail;
+  
+  /// ✅ Check if current user is admin-empresa
+  bool get _isCompanyAdmin => _currentUserRole?.toLowerCase() == 'admin-empresa';
+
+  /// ✅ Load user role and check for existing request
+  Future<void> _loadUserRoleAndRequest() async {
+    if (_currentUserEmail == null) return;
+
+    setState(() => _isLoadingRequest = true);
+
+    try {
+      // Get user info
+      final user = await usersDatabase.getUserByEmail(_currentUserEmail!);
+      
+      if (user != null) {
+        setState(() {
+          _currentUserId = user.id;
+          _currentUserRole = user.role;
+        });
+
+        // If user is admin-empresa, load company ID and check for existing request
+        if (_isCompanyAdmin && _currentUserId != null) {
+          // Try to get company ID from empresa table (if user is admin-empresa)
+          var companyData = await Supabase.instance.client
+              .from('company')
+              .select('idCompany')
+              .eq('adminUserID', _currentUserId!)
+              .limit(1)
+              .maybeSingle();
+          
+          print('🔍 Company query result: $companyData');
+          
+          // If not found in empresa table, try employees table (if user is employee)
+          if (companyData == null) {
+            companyData = await Supabase.instance.client
+                .from('employees')
+                .select('companyID')
+                .eq('userID', _currentUserId!)
+                .limit(1)
+                .maybeSingle();
+            
+            print('🔍 Employee query result: $companyData');
+            
+            if (companyData != null) {
+              _companyId = companyData['companyID'] as int?;
+            }
+          } else {
+            _companyId = companyData['idCompany'] as int?;
+          }
+
+          print('🔍 Final company ID: $_companyId');
+
+          // Check for existing request for this article
+          if (_companyId != null) {
+            final existingRequest = await Supabase.instance.client
+                .from('request')
+                .select()
+                .eq('articleID', widget.item.id)
+                .eq('companyID', _companyId!)
+                .order('lastUpdate', ascending: false) // Get most recent first
+                .limit(1)
+                .maybeSingle();
+
+            if (existingRequest != null) {
+              setState(() {
+                _existingRequest = Request.fromMap(existingRequest);
+              });
+              print('✅ Found existing request with status: ${_existingRequest!.status}');
+            } else {
+              print('ℹ️ No existing request found for this article');
+            }
+          }
+        }
+      }
+    } catch (e) {
+      print('❌ Error loading user role and request: $e');
+    } finally {
+      setState(() => _isLoadingRequest = false);
+      
+      // ✅ Load employees AFTER user role and company ID are set
+      await _loadEmployees();
+    }
+  }
+
+  /// ✅ Load pending requests for this article
+  Future<void> _loadPendingRequests() async {
+    if (!_isOwner) return; // Only owner can see requests
+
+    try {
+      final requests = await Supabase.instance.client
+          .from('request')
+          .select('''
+            *,
+            company:companyID (
+              idCompany,
+              nameCompany
+            )
+          ''')
+          .eq('articleID', widget.item.id)
+          .eq('status', 'pendiente')
+          .order('requestDate', ascending: false);
+
+      // Load company logos
+      for (var request in requests) {
+        final company = request['company'] as Map<String, dynamic>?;
+        if (company != null) {
+          final companyId = company['idCompany'];
+          final companyName = company['nameCompany'];
+          final logoPattern = 'empresa/$companyName/$companyId/avatar/';
+          final logo = await mediaDatabase.getMainPhotoByPattern(logoPattern);
+          request['companyLogo'] = logo;
+        }
+      }
+
+      setState(() {
+        _pendingRequests = requests;
+      });
+    } catch (e) {
+      print('❌ Error loading pending requests: $e');
+    }
+  }
+
+  /// ✅ Load employees for company (if admin-empresa)
+  Future<void> _loadEmployees() async {
+    if (!_isCompanyAdmin || _companyId == null) return;
+
+    try {
+      final employees = await Supabase.instance.client
+          .from('employees')
+          .select('employeeId:idEmployee, userID, users:userID(names, email)')
+          .eq('companyID', _companyId!);
+
+      if (mounted) {
+        setState(() {
+          _employees = List<Map<String, dynamic>>.from(employees);
+        });
+        print('✅ Loaded ${_employees.length} employees for company $_companyId');
+        
+        // Load assigned employees for this article
+        await _loadAssignedEmployees();
+      }
+    } catch (e) {
+      print('❌ Error loading employees: $e');
+    }
+  }
+
+  /// ✅ Load employees who already have active tasks for this article
+  Future<void> _loadAssignedEmployees() async {
+    try {
+      final tasks = await Supabase.instance.client
+          .from('tasks')
+          .select('employeeID')
+          .eq('articleID', widget.item.id)
+          .inFilter('workflowStatus', ['asignado', 'en_proceso']); // Active tasks
+
+      final assignedIds = tasks.map((task) => task['employeeID'] as int).toSet();
+      
+      if (mounted) {
+        setState(() {
+          _assignedEmployeeIds = assignedIds;
+        });
+        print('✅ Found ${_assignedEmployeeIds.length} employees with active tasks for this article');
+      }
+    } catch (e) {
+      print('❌ Error loading assigned employees: $e');
+    }
+  }
+
+  /// ✅ Handle accept request - now with employee assignment option
+  Future<void> _handleAcceptRequest(Map<String, dynamic> requestData) async {
+    try {
+      final requestId = requestData['idRequest'];
+
+      await Supabase.instance.client
+          .from('request')
+          .update({
+            'status': 'aprobado',
+            'lastUpdate': DateTime.now().toIso8601String(),
+          })
+          .eq('idRequest', requestId);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('✅ Solicitud aprobada'),
+            backgroundColor: Colors.green,
+          ),
+        );
+        _loadPendingRequests(); // Refresh list
+      }
+    } catch (e) {
+      print('❌ Error accepting request: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('❌ Error: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  /// ✅ Handle reject request
+  Future<void> _handleRejectRequest(Map<String, dynamic> requestData) async {
+    try {
+      final requestId = requestData['idRequest'];
+
+      await Supabase.instance.client
+          .from('request')
+          .update({
+            'status': 'rechazado',
+            'lastUpdate': DateTime.now().toIso8601String(),
+          })
+          .eq('idRequest', requestId);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('❌ Solicitud rechazada'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+        _loadPendingRequests(); // Refresh list
+      }
+    } catch (e) {
+      print('❌ Error rejecting request: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('❌ Error: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  String _formatTime(String timeStr) {
+    try {
+      final parts = timeStr.split(':');
+      if (parts.length >= 2) {
+        final hour = int.parse(parts[0]);
+        final minute = parts[1].padLeft(2, '0');
+        return '$hour:$minute';
+      }
+      return timeStr;
+    } catch (e) {
+      return timeStr;
+    }
+  }
+
+  /// ✅ Show employee assignment dialog for already approved request
+  void _showAssignEmployeeDialog(Request approvedRequest) {
+    // Debug: Check employee list before showing dialog
+    print('🔍 DEBUG: _employees.length = ${_employees.length}');
+    print('🔍 DEBUG: _employees.isEmpty = ${_employees.isEmpty}');
+    print('🔍 DEBUG: _employees = $_employees');
+    
+    final scheduledDay = approvedRequest.scheduledDay ?? 'No especificado';
+    final scheduledTime = approvedRequest.scheduledTime;
+    final formattedTime = scheduledTime != null ? _formatTime(scheduledTime) : 'No especificado';
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Asignar Empleado'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Selecciona un empleado para esta tarea:',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+              ),
+              const SizedBox(height: 16),
+              const Divider(),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  const Icon(Icons.article, color: Color(0xFF2D8A8A), size: 20),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      widget.item.title,
+                      style: const TextStyle(fontSize: 15),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  const Icon(Icons.calendar_today, color: Color(0xFF2D8A8A), size: 20),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Día: $scheduledDay',
+                    style: const TextStyle(fontSize: 15),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  const Icon(Icons.access_time, color: Color(0xFF2D8A8A), size: 20),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Hora: $formattedTime',
+                    style: const TextStyle(fontSize: 15),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              const Divider(),
+              const SizedBox(height: 12),
+              if (_employees.isEmpty)
+                const Center(
+                  child: Padding(
+                    padding: EdgeInsets.symmetric(vertical: 20),
+                    child: Text('No hay empleados disponibles'),
+                  ),
+                )
+              else
+                ..._employees.map((employee) {
+                  final user = employee['users'] as Map<String, dynamic>?;
+                  final name = user?['names'] ?? 'Empleado';
+                  final email = user?['email'] ?? '';
+                  final employeeId = employee['employeeId'] as int?;
+                  final isAssigned = employeeId != null && _assignedEmployeeIds.contains(employeeId);
+                  
+                  return ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: CircleAvatar(
+                      backgroundColor: isAssigned ? Colors.grey : const Color(0xFF2D8A8A),
+                      child: Text(name[0].toUpperCase()),
+                    ),
+                    title: Text(
+                      name,
+                      style: TextStyle(
+                        color: isAssigned ? Colors.grey : Colors.black,
+                      ),
+                    ),
+                    subtitle: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          email,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: isAssigned ? Colors.grey : Colors.black54,
+                          ),
+                        ),
+                        if (isAssigned)
+                          const Text(
+                            'Ya asignado a esta tarea',
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: Colors.orange,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                      ],
+                    ),
+                    enabled: !isAssigned,
+                    onTap: isAssigned ? null : () async {
+                      if (employeeId != null) {
+                        // Show confirmation dialog
+                        final confirmed = await showDialog<bool>(
+                          context: context,
+                          builder: (confirmCtx) => AlertDialog(
+                            title: const Text('Confirmar Asignación'),
+                            content: Text(
+                              '¿Deseas asignar a $name para recoger "${widget.item.title}"?\n\n'
+                              'Día: $scheduledDay\n'
+                              'Hora: $formattedTime',
+                            ),
+                            actions: [
+                              TextButton(
+                                onPressed: () => Navigator.pop(confirmCtx, false),
+                                child: const Text('Cancelar'),
+                              ),
+                              ElevatedButton(
+                                onPressed: () => Navigator.pop(confirmCtx, true),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: const Color(0xFF2D8A8A),
+                                ),
+                                child: const Text('Asignar'),
+                              ),
+                            ],
+                          ),
+                        );
+
+                        if (confirmed == true) {
+                          Navigator.pop(ctx); // Close employee selector
+                          
+                          // Convert Request to Map format for _acceptAndAssignEmployee
+                          final requestData = {
+                            'idRequest': approvedRequest.id,
+                            'scheduledDay': approvedRequest.scheduledDay,
+                            'scheduledTime': approvedRequest.scheduledTime,
+                          };
+                          
+                          await _acceptAndAssignEmployee(requestData, employeeId);
+                        }
+                      } else {
+                        print('❌ Error: employeeId is null');
+                      }
+                    },
+                  );
+                }).toList(),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancelar'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// ✅ Show employee assignment confirmation dialog
+  void _showAssignEmployeeConfirmation(Map<String, dynamic> request) {
+    final scheduledDay = request['scheduledDay'] as String? ?? 'No especificado';
+    final scheduledTime = request['scheduledTime'] as String?;
+    final formattedTime = scheduledTime != null ? _formatTime(scheduledTime) : 'No especificado';
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Asignar empleado antes de aprobar'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Selecciona un empleado para esta tarea:',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+              ),
+              const SizedBox(height: 16),
+              const Divider(),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  const Icon(Icons.article, color: Color(0xFF2D8A8A), size: 20),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      widget.item.title,
+                      style: const TextStyle(fontSize: 15),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  const Icon(Icons.calendar_today, color: Color(0xFF2D8A8A), size: 20),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Día: $scheduledDay',
+                    style: const TextStyle(fontSize: 15),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  const Icon(Icons.access_time, color: Color(0xFF2D8A8A), size: 20),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Hora: $formattedTime',
+                    style: const TextStyle(fontSize: 15),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              const Divider(),
+              const SizedBox(height: 12),
+              if (_employees.isEmpty)
+                const Center(
+                  child: Padding(
+                    padding: EdgeInsets.symmetric(vertical: 20),
+                    child: Text('No hay empleados disponibles'),
+                  ),
+                )
+              else
+                ..._employees.map((employee) {
+                  final user = employee['users'] as Map<String, dynamic>?;
+                  final name = user?['names'] ?? 'Empleado';
+                  final email = user?['email'] ?? '';
+                  final employeeId = employee['employeeId'] as int?;
+                  final isAssigned = employeeId != null && _assignedEmployeeIds.contains(employeeId);
+                  
+                  return ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: CircleAvatar(
+                      backgroundColor: isAssigned ? Colors.grey : const Color(0xFF2D8A8A),
+                      child: Text(name[0].toUpperCase()),
+                    ),
+                    title: Text(
+                      name,
+                      style: TextStyle(
+                        color: isAssigned ? Colors.grey : Colors.black,
+                      ),
+                    ),
+                    subtitle: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          email,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: isAssigned ? Colors.grey : Colors.black54,
+                          ),
+                        ),
+                        if (isAssigned)
+                          const Text(
+                            'Ya asignado a esta tarea',
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: Colors.orange,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                      ],
+                    ),
+                    enabled: !isAssigned,
+                    onTap: isAssigned ? null : () async {
+                      if (employeeId != null) {
+                        // Show confirmation dialog
+                        final confirmed = await showDialog<bool>(
+                          context: context,
+                          builder: (confirmCtx) => AlertDialog(
+                            title: const Text('Confirmar Asignación'),
+                            content: Text(
+                              '¿Deseas asignar a $name para recoger "${widget.item.title}"?\n\n'
+                              'Día: $scheduledDay\n'
+                              'Hora: $formattedTime',
+                            ),
+                            actions: [
+                              TextButton(
+                                onPressed: () => Navigator.pop(confirmCtx, false),
+                                child: const Text('Cancelar'),
+                              ),
+                              ElevatedButton(
+                                onPressed: () => Navigator.pop(confirmCtx, true),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: const Color(0xFF2D8A8A),
+                                ),
+                                child: const Text('Asignar'),
+                              ),
+                            ],
+                          ),
+                        );
+
+                        if (confirmed == true) {
+                          Navigator.pop(ctx); // Close employee selector
+                          await _acceptAndAssignEmployee(request, employeeId);
+                        }
+                      } else {
+                        print('❌ Error: employeeId is null');
+                      }
+                    },
+                  );
+                }).toList(),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancelar'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// ✅ Accept request and assign employee to task
+  Future<void> _acceptAndAssignEmployee(Map<String, dynamic> requestData, int employeeId) async {
+    try {
+      final requestId = requestData['idRequest'] as int;
+      
+      // First approve the request - update via Supabase directly
+      await Supabase.instance.client
+          .from('request')
+          .update({'status': 'aprobado', 'lastUpdate': DateTime.now().toIso8601String()})
+          .eq('idRequest', requestId);
+
+      // Create task with requestID linking to the approved request
+      final task = Task(
+        employeeId: employeeId,
+        articleId: widget.item.id,
+        companyId: _companyId,
+        requestId: requestId, // ✅ Link to request with schedule
+        assignedDate: DateTime.now(),
+        workflowStatus: 'asignado',
+        state: 1,
+        lastUpdate: DateTime.now(),
+      );
+
+      await taskDatabase.createTask(task);
+      
+      print('✅ Task created - Employee: $employeeId, Article: ${widget.item.id}, Request: $requestId');
+
+      // ✅ Refresh assigned employees list
+      await _loadAssignedEmployees();
+
+      setState(() {
+        _pendingRequests.removeWhere((r) => r['idRequest'] == requestId);
+      });
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('✅ Solicitud aprobada y empleado asignado'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      print('❌ Error accepting and assigning: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('❌ Error: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
   
 
   void _initializeData() {
@@ -471,6 +1128,8 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
         mimeType: 'image/$extension',
         isMain: !hasMainPhoto && i == 0, // First new image becomes main only if no main photo exists
         uploadOrder: uploadOrder, // Use calculated upload order
+        entityType: 'article', // ✅ Identificar tipo de entidad
+        entityId: articleId,    // ✅ ID del artículo
       );
 
       await mediaDatabase.createPhoto(newMedia);
@@ -811,11 +1470,236 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
     }
   }
 
+  /// ✅ Send request to distributor (for admin-empresa)
+  Future<void> _sendRequestToDistributor() async {
+    if (_companyId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('❌ Error: No se pudo obtener la información de la empresa'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
+    // ✅ Show scheduling dialog to select day and time
+    final scheduleData = await showDialog<Map<String, String>>(
+      context: context,
+      builder: (context) => SchedulePickupDialog(
+        availableDays: widget.item.availableDays,
+        availableTimeStart: widget.item.availableTimeStart,
+        availableTimeEnd: widget.item.availableTimeEnd,
+        articleName: widget.item.title,
+      ),
+    );
+
+    if (scheduleData == null) return; // User cancelled
+
+    // Store navigator reference before async operation
+    final navigator = Navigator.of(context);
+    
+    // Show loading indicator
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const Center(
+        child: CircularProgressIndicator(
+          color: Color(0xFF2D8A8A),
+        ),
+      ),
+    );
+
+    try {
+      // Parse the time string (HH:MM) and format as HH:MM:SS for database
+      final timeParts = scheduleData['time']!.split(':');
+      final scheduledTimeFormatted = '${timeParts[0].padLeft(2, '0')}:${timeParts[1].padLeft(2, '0')}:00';
+
+      // Create request with scheduled day and time
+      final newRequest = Request(
+        articleId: widget.item.id,
+        companyId: _companyId,
+        status: 'pendiente',
+        requestDate: DateTime.now(),
+        state: 1,
+        lastUpdate: DateTime.now(),
+        scheduledDay: scheduleData['day'],
+        scheduledTime: scheduledTimeFormatted,
+      );
+
+      await requestDatabase.createRequest(newRequest);
+      
+      // Reload request status
+      await _loadUserRoleAndRequest();
+      
+      navigator.pop(); // Close loading indicator
+      
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('✅ Solicitud enviada para ${scheduleData['day']} a las ${scheduleData['time']}'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      navigator.pop(); // Close loading indicator
+      
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('❌ Error al enviar solicitud: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+      print('❌ Error sending request: $e');
+    }
+  }
+
   @override
   void dispose() {
     _itemNameController.dispose();
     _descriptionController.dispose();
     super.dispose();
+  }
+
+  /// ✅ Build request card widget
+  Widget _buildRequestCard(Map<String, dynamic> request) {
+    final company = request['company'] as Map<String, dynamic>?;
+    final companyLogo = request['companyLogo'] as Multimedia?;
+    final scheduledDay = request['scheduledDay'] as String?;
+    final scheduledTime = request['scheduledTime'] as String?;
+    final companyName = company?['nameCompany'] ?? 'Empresa';
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.grey[300]!),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.grey.withOpacity(0.1),
+            blurRadius: 4,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Company info
+            Row(
+              children: [
+                // Company logo
+                Container(
+                  width: 48,
+                  height: 48,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF2D8A8A).withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(12),
+                    image: companyLogo?.url != null
+                        ? DecorationImage(
+                            image: NetworkImage(companyLogo!.url!),
+                            fit: BoxFit.cover,
+                          )
+                        : null,
+                  ),
+                  child: companyLogo?.url == null
+                      ? const Icon(
+                          Icons.business,
+                          color: Color(0xFF2D8A8A),
+                          size: 24,
+                        )
+                      : null,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        companyName,
+                        style: const TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFF2D8A8A),
+                        ),
+                      ),
+                      if (scheduledDay != null && scheduledTime != null)
+                        Text(
+                          '$scheduledDay a las ${_formatTime(scheduledTime)}',
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: Colors.grey[600],
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            // Action buttons
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: () => _handleRejectRequest(request),
+                    style: OutlinedButton.styleFrom(
+                      side: BorderSide(color: Colors.grey[400]!),
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                    ),
+                    child: Text(
+                      'Rechazar',
+                      style: TextStyle(
+                        color: Colors.grey[700],
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: () {
+                      // If company admin with employees, show assignment dialog
+                      // Otherwise, just accept the request
+                      if (_isCompanyAdmin && _employees.isNotEmpty) {
+                        _showAssignEmployeeConfirmation(request);
+                      } else {
+                        _handleAcceptRequest(request);
+                      }
+                    },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF2D8A8A),
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                    ),
+                    child: Text(
+                      _isCompanyAdmin && _employees.isNotEmpty ? 'Asignar' : 'Aceptar',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
@@ -1057,6 +1941,29 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
                 ),
               ],
 
+              // ✅ Pending requests section (only for owner)
+              if (_isOwner && !_isEditing && _pendingRequests.isNotEmpty) ...[
+                const SizedBox(height: 24),
+                const Text(
+                  'Solicitudes',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    color: Color(0xFF2D8A8A),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Tienes ${_pendingRequests.length} ${_pendingRequests.length == 1 ? 'solicitud pendiente' : 'solicitudes pendientes'}',
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: Colors.grey[600],
+                  ),
+                ),
+                const SizedBox(height: 12),
+                ..._pendingRequests.map((request) => _buildRequestCard(request)),
+              ],
+
               const SizedBox(height: 24),
 
               // Action buttons
@@ -1124,6 +2031,81 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
                     ),
                   ],
                 ),
+              ],
+
+              // ✅ Action buttons for admin-empresa (non-owner)
+              if (!_isOwner && _isCompanyAdmin) ...[
+                if (_isLoadingRequest)
+                  const Center(
+                    child: CircularProgressIndicator(
+                      color: Color(0xFF2D8A8A),
+                    ),
+                  )
+                else if (_existingRequest == null)
+                  // Show "Solicitar Artículo" button
+                  MyButton(
+                    onTap: _sendRequestToDistributor,
+                    text: 'Solicitar Artículo',
+                    color: const Color(0xFF2D8A8A),
+                  )
+                else if (_existingRequest!.status == 'pendiente')
+                  // Show "Solicitud Pendiente" button (disabled)
+                  Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: Colors.orange.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.orange.withOpacity(0.3)),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Icon(Icons.pending, color: Colors.orange),
+                        const SizedBox(width: 8),
+                        const Text(
+                          'Solicitud Pendiente',
+                          style: TextStyle(
+                            color: Colors.orange,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                  )
+                else if (_existingRequest!.status == 'aprobado')
+                  // Show "Asignar Empleado" button
+                  MyButton(
+                    onTap: () {
+                      // ✅ Show employee assignment dialog
+                      _showAssignEmployeeDialog(_existingRequest!);
+                    },
+                    text: 'Asignar Empleado',
+                    color: Colors.green,
+                  )
+                else if (_existingRequest!.status == 'rechazado')
+                  // Show "Solicitud Rechazada" message
+                  Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: Colors.red.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.red.withOpacity(0.3)),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Icon(Icons.cancel, color: Colors.red),
+                        const SizedBox(width: 8),
+                        const Text(
+                          'Solicitud Rechazada',
+                          style: TextStyle(
+                            color: Colors.red,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
               ],
             ],
           ),

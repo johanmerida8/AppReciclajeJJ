@@ -4,13 +4,21 @@ import 'package:image_picker/image_picker.dart';
 import 'package:reciclaje_app/database/media_database.dart';
 import 'package:reciclaje_app/model/company.dart';
 import 'package:reciclaje_app/model/multimedia.dart';
+import 'package:reciclaje_app/model/users.dart';
 import 'package:reciclaje_app/utils/Fixed43Cropper.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class EditCompanyProfileScreen extends StatefulWidget {
-  final Company company;
+  final Company? company;
+  final Users? adminUser;
+  final bool isEditingCompany; // true = company logo, false = admin avatar
   
-  const EditCompanyProfileScreen({super.key, required this.company});
+  const EditCompanyProfileScreen({
+    super.key,
+    this.company,
+    this.adminUser,
+    required this.isEditingCompany,
+  });
 
   @override
   State<EditCompanyProfileScreen> createState() => _EditCompanyProfileScreenState();
@@ -35,21 +43,41 @@ class _EditCompanyProfileScreenState extends State<EditCompanyProfileScreen> {
   @override
   void initState() {
     super.initState();
-    _companyNameController = TextEditingController(text: widget.company.nameCompany);
     
-    // Store original values
-    _originalName = widget.company.nameCompany ?? '';
+    // Initialize controller based on profile type
+    if (widget.isEditingCompany) {
+      _companyNameController = TextEditingController(text: widget.company?.nameCompany);
+      _originalName = widget.company?.nameCompany ?? '';
+    } else {
+      _companyNameController = TextEditingController(text: widget.adminUser?.names);
+      _originalName = widget.adminUser?.names ?? '';
+    }
     
-    // Load logo from multimedia table
+    // Load avatar/logo from multimedia table
     _loadLogo();
   }
 
   Future<void> _loadLogo() async {
-    if (widget.company.companyId == null) return;
-    
     try {
-      final logoPattern = 'empresa/${widget.company.companyId}/avatar/';
-      final logo = await mediaDatabase.getMainPhotoByPattern(logoPattern);
+      String? pattern;
+      
+      if (widget.isEditingCompany) {
+        // Load company logo
+        if (widget.company?.companyId == null) return;
+        final companyName = widget.company!.nameCompany!;
+        final companyId = widget.company!.companyId!;
+        pattern = 'empresa/$companyName/$companyId/avatar/';
+        print('📂 Loading company logo with pattern: $pattern');
+      } else {
+        // Load admin user avatar
+        if (widget.adminUser?.id == null) return;
+        final userRole = widget.adminUser!.role?.toLowerCase() ?? 'user';
+        final userId = widget.adminUser!.id!;
+        pattern = 'users/$userRole/$userId/avatars/';
+        print('📂 Loading admin avatar with pattern: $pattern');
+      }
+      
+      final logo = await mediaDatabase.getMainPhotoByPattern(pattern);
       
       if (mounted) {
         setState(() {
@@ -58,10 +86,10 @@ class _EditCompanyProfileScreenState extends State<EditCompanyProfileScreen> {
           _originalLogoUrl = logo?.url;
         });
         
-        print('✅ Company logo loaded: ${logo?.url}');
+        print('✅ ${widget.isEditingCompany ? "Company logo" : "Admin avatar"} loaded: ${logo?.url}');
       }
     } catch (e) {
-      print('❌ Error loading company logo: $e');
+      print('❌ Error loading ${widget.isEditingCompany ? "company logo" : "admin avatar"}: $e');
     }
   }
 
@@ -135,16 +163,16 @@ class _EditCompanyProfileScreenState extends State<EditCompanyProfileScreen> {
   }
 
   Future<void> _uploadLogo(XFile imageFile) async {
-    if (_isUploading || widget.company.companyId == null) return;
+    if (_isUploading) return;
+    
+    // Validate entity exists
+    if (widget.isEditingCompany && widget.company?.companyId == null) return;
+    if (!widget.isEditingCompany && widget.adminUser?.id == null) return;
 
     setState(() => _isUploading = true);
 
     try {
-      final companyId = widget.company.companyId!;
-      final timestamp = DateTime.now().millisecondsSinceEpoch;
-      
-      print('🏢 Processing company logo upload for company: $companyId');
-
+      // Get file extension early
       final imageFileObj = File(imageFile.path);
       if (!await imageFileObj.exists()) {
         throw Exception('El archivo de imagen no existe');
@@ -161,10 +189,36 @@ class _EditCompanyProfileScreenState extends State<EditCompanyProfileScreen> {
         throw Exception('Formato de imagen no válido: $extension');
       }
 
-      final fileName = 'logo_${timestamp}.$extension';
-      final filePath = 'empresa/$companyId/avatar/$fileName';
+      final timestamp = DateTime.now().millisecondsSinceEpoch;
+      
+      String filePath;
+      String entityType;
+      int entityId;
+      String fileName;
+      
+      if (widget.isEditingCompany) {
+        // Upload company logo
+        final companyId = widget.company!.companyId!;
+        final companyName = widget.company!.nameCompany!;
+        print('🏢 Processing company logo upload for company: $companyId');
+        
+        fileName = 'logo_${timestamp}.$extension';
+        filePath = 'empresa/$companyName/$companyId/avatar/$fileName';
+        entityType = 'empresa';
+        entityId = companyId;
+      } else {
+        // Upload admin user avatar
+        final userId = widget.adminUser!.id!;
+        final userRole = widget.adminUser!.role?.toLowerCase() ?? 'user';
+        print('👤 Processing admin avatar upload for user: $userId (role: $userRole)');
+        
+        fileName = 'avatar_${timestamp}.$extension';
+        filePath = 'users/$userRole/$userId/avatars/$fileName';
+        entityType = userRole;
+        entityId = userId;
+      }
 
-      print('📤 Uploading company logo to: $filePath');
+      print('📤 Uploading to: $filePath');
 
       final bytes = await imageFileObj.readAsBytes();
       
@@ -199,9 +253,9 @@ class _EditCompanyProfileScreenState extends State<EditCompanyProfileScreen> {
 
       final publicUrl = storage.from('multimedia').getPublicUrl(filePath);
 
-      // Delete old logo from multimedia table if exists
+      // Delete old logo/avatar from multimedia table if exists
       if (_currentLogo != null) {
-        print('🗑️ Deleting old company logo from multimedia table...');
+        print('🗑️ Deleting old ${widget.isEditingCompany ? "logo" : "avatar"} from multimedia table...');
         await mediaDatabase.deletePhoto(_currentLogo!);
       }
 
@@ -217,11 +271,13 @@ class _EditCompanyProfileScreenState extends State<EditCompanyProfileScreen> {
         mimeType: mimeType,
         isMain: true,
         uploadOrder: 1,
+        entityType: entityType,
+        entityId: entityId,
       );
       
-      print('💾 Saving company logo to multimedia table...');
+      print('💾 Saving ${widget.isEditingCompany ? "logo" : "avatar"} to multimedia table...');
       await mediaDatabase.createPhoto(newMultimedia);
-      print('✅ Company logo entry created in multimedia table');
+      print('✅ ${widget.isEditingCompany ? "Logo" : "Avatar"} entry created in multimedia table');
 
       setState(() {
         _logoUrl = publicUrl;
@@ -230,19 +286,19 @@ class _EditCompanyProfileScreenState extends State<EditCompanyProfileScreen> {
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Logo cargado exitosamente'),
+          SnackBar(
+            content: Text(widget.isEditingCompany ? 'Logo cargado exitosamente' : 'Foto cargada exitosamente'),
             backgroundColor: Colors.green,
           ),
         );
       }
 
     } catch (e) {
-      print('❌ Error uploading company logo: $e');
+      print('❌ Error uploading ${widget.isEditingCompany ? "logo" : "avatar"}: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Error al cargar logo: $e'),
+            content: Text('Error al cargar ${widget.isEditingCompany ? "logo" : "imagen"}: $e'),
             backgroundColor: Colors.red,
           ),
         );
@@ -276,34 +332,64 @@ class _EditCompanyProfileScreenState extends State<EditCompanyProfileScreen> {
     setState(() => _isSaving = true);
 
     try {
-      print('💾 Saving company profile update...');
-      print('   Company ID: ${widget.company.companyId}');
-      print('   Company Name: ${_companyNameController.text.trim()}');
+      if (widget.isEditingCompany) {
+        // Update company
+        final companyId = widget.company?.companyId;
+        if (companyId == null) {
+          throw Exception('Company ID is null');
+        }
+        
+        print('💾 Saving company profile update...');
+        print('   Company ID: $companyId');
+        print('   Company Name: ${_companyNameController.text.trim()}');
 
-      // Update in Supabase
-      await Supabase.instance.client
-          .from('company')
-          .update({
-            'nameCompany': _companyNameController.text.trim(),
-          })
-          .eq('idCompany', widget.company.companyId!);
+        // Update in Supabase
+        await Supabase.instance.client
+            .from('company')
+            .update({
+              'nameCompany': _companyNameController.text.trim(),
+            })
+            .eq('idCompany', companyId);
 
-      print('✅ Company profile updated successfully in database');
+        print('✅ Company profile updated successfully in database');
+      } else {
+        // Update admin user
+        final userId = widget.adminUser?.id;
+        if (userId == null) {
+          throw Exception('User ID is null');
+        }
+        
+        print('💾 Saving admin user profile update...');
+        print('   User ID: $userId');
+        print('   User Name: ${_companyNameController.text.trim()}');
+
+        // Update in Supabase
+        await Supabase.instance.client
+            .from('users')
+            .update({
+              'names': _companyNameController.text.trim(),
+            })
+            .eq('id', userId);
+
+        print('✅ Admin user profile updated successfully in database');
+      }
 
       if (mounted) {
         _originalName = _companyNameController.text.trim();
         _originalLogoUrl = _logoUrl;
 
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Perfil de empresa actualizado exitosamente'),
+          SnackBar(
+            content: Text(widget.isEditingCompany 
+              ? 'Perfil de empresa actualizado exitosamente' 
+              : 'Perfil actualizado exitosamente'),
             backgroundColor: Colors.green,
           ),
         );
         Navigator.pop(context, true);
       }
     } catch (e) {
-      print('❌ Error saving company profile: $e');
+      print('❌ Error saving profile: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -349,9 +435,9 @@ class _EditCompanyProfileScreenState extends State<EditCompanyProfileScreen> {
             if (_logoUrl != null)
               ListTile(
                 leading: const Icon(Icons.delete, color: Colors.red),
-                title: const Text(
-                  'Eliminar logo',
-                  style: TextStyle(color: Colors.red),
+                title: Text(
+                  widget.isEditingCompany ? 'Eliminar logo' : 'Eliminar foto',
+                  style: const TextStyle(color: Colors.red),
                 ),
                 onTap: () {
                   Navigator.pop(context);
@@ -379,18 +465,20 @@ class _EditCompanyProfileScreenState extends State<EditCompanyProfileScreen> {
       
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Logo de empresa eliminado'),
+          SnackBar(
+            content: Text(widget.isEditingCompany 
+              ? 'Logo de empresa eliminado' 
+              : 'Foto de perfil eliminada'),
             backgroundColor: Colors.orange,
           ),
         );
       }
     } catch (e) {
-      print('❌ Error deleting company logo: $e');
+      print('❌ Error deleting ${widget.isEditingCompany ? "logo" : "avatar"}: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Error al eliminar logo: $e'),
+            content: Text('Error al eliminar ${widget.isEditingCompany ? "logo" : "foto"}: $e'),
             backgroundColor: Colors.red,
           ),
         );
@@ -409,9 +497,11 @@ class _EditCompanyProfileScreenState extends State<EditCompanyProfileScreen> {
           icon: const Icon(Icons.arrow_back, color: Colors.white),
           onPressed: () => Navigator.pop(context),
         ),
-        title: const Text(
-          'Editar Perfil de Empresa',
-          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+        title: Text(
+          widget.isEditingCompany 
+            ? 'Editar Perfil de Empresa' 
+            : 'Editar Perfil',
+          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
         ),
         actions: [
           if (_isSaving)
@@ -474,10 +564,10 @@ class _EditCompanyProfileScreenState extends State<EditCompanyProfileScreen> {
                               ? NetworkImage(_logoUrl!)
                               : null,
                           child: _logoUrl == null
-                              ? const Icon(
-                                  Icons.business,
+                              ? Icon(
+                                  widget.isEditingCompany ? Icons.business : Icons.person,
                                   size: 80,
-                                  color: Color(0xFF2D8A8A),
+                                  color: const Color(0xFF2D8A8A),
                                 )
                               : null,
                         ),
@@ -527,16 +617,16 @@ class _EditCompanyProfileScreenState extends State<EditCompanyProfileScreen> {
                     ],
                   ),
                   const SizedBox(height: 20),
-                  // Company label
+                  // Entity label (EMPRESA or ADMINISTRADOR)
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                     decoration: BoxDecoration(
                       color: Colors.white.withOpacity(0.2),
                       borderRadius: BorderRadius.circular(20),
                     ),
-                    child: const Text(
-                      'EMPRESA',
-                      style: TextStyle(
+                    child: Text(
+                      widget.isEditingCompany ? 'EMPRESA' : 'ADMINISTRADOR',
+                      style: const TextStyle(
                         fontSize: 14,
                         color: Colors.white,
                         fontWeight: FontWeight.w500,
@@ -554,21 +644,28 @@ class _EditCompanyProfileScreenState extends State<EditCompanyProfileScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text(
-                      'Información de la Empresa',
-                      style: TextStyle(
+                    Text(
+                      widget.isEditingCompany 
+                        ? 'Información de la Empresa' 
+                        : 'Información Personal',
+                      style: const TextStyle(
                         fontSize: 20,
                         fontWeight: FontWeight.bold,
                         color: Color(0xFF2D8A8A),
                       ),
                     ),
                     const SizedBox(height: 20),
-                    // Company name field
+                    // Name field (company or personal)
                     TextFormField(
                       controller: _companyNameController,
                       decoration: InputDecoration(
-                        labelText: 'Nombre de la empresa',
-                        prefixIcon: const Icon(Icons.business, color: Color(0xFF2D8A8A)),
+                        labelText: widget.isEditingCompany 
+                          ? 'Nombre de la empresa' 
+                          : 'Nombre completo',
+                        prefixIcon: Icon(
+                          widget.isEditingCompany ? Icons.business : Icons.person, 
+                          color: const Color(0xFF2D8A8A)
+                        ),
                         border: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(12),
                         ),
@@ -579,7 +676,9 @@ class _EditCompanyProfileScreenState extends State<EditCompanyProfileScreen> {
                       ),
                       validator: (value) {
                         if (value == null || value.trim().isEmpty) {
-                          return 'Por favor ingresa el nombre de la empresa';
+                          return widget.isEditingCompany 
+                            ? 'Por favor ingresa el nombre de la empresa'
+                            : 'Por favor ingresa tu nombre completo';
                         }
                         return null;
                       },

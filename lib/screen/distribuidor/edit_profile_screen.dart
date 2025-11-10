@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:reciclaje_app/auth/auth_service.dart';
 import 'package:reciclaje_app/database/media_database.dart';
@@ -32,7 +33,6 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   Multimedia? _currentAvatar; // Current avatar from multimedia table
   bool _isUploading = false;
   bool _isSaving = false;
-  bool _isLoadingAvatar = false;
 
   // Store original values for comparison
   late String _originalName;
@@ -54,10 +54,11 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   Future<void> _loadAvatar() async {
     if (widget.user.id == null) return;
     
-    setState(() => _isLoadingAvatar = true);
-    
     try {
-      final urlPattern = 'users/${widget.user.id}/avatars/';
+      final userId = widget.user.id!;
+      final userRole = widget.user.role?.toLowerCase() ?? 'user';
+      final urlPattern = 'users/$userRole/$userId/avatars/';
+      
       final avatar = await mediaDatabase.getMainPhotoByPattern(urlPattern);
       
       if (mounted) {
@@ -65,16 +66,12 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
           _currentAvatar = avatar;
           _avatarUrl = avatar?.url;
           _originalAvatarUrl = avatar?.url;
-          _isLoadingAvatar = false;
         });
         
         print('✅ Avatar loaded: ${avatar?.url}');
       }
     } catch (e) {
       print('❌ Error loading avatar: $e');
-      if (mounted) {
-        setState(() => _isLoadingAvatar = false);
-      }
     }
   }
 
@@ -156,9 +153,10 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
 
     try {
       final userId = widget.user.id!;
+      final userRole = widget.user.role?.toLowerCase() ?? 'user';
       final timestamp = DateTime.now().millisecondsSinceEpoch;
       
-      print('📸 Processing avatar upload for user: $userId');
+      print('📸 Processing avatar upload for user: $userId (role: $userRole)');
       print('   Path: ${imageFile.path}');
       print('   Name: ${imageFile.name}');
 
@@ -188,7 +186,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
       }
 
       final fileName = 'avatar_${timestamp}.$extension';
-      final filePath = 'users/$userId/avatars/$fileName';
+      final filePath = 'users/$userRole/$userId/avatars/$fileName';
 
       print('📤 Uploading avatar to: $filePath');
 
@@ -225,7 +223,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
       // Upload to Supabase Storage with timeout and retry logic
       try {
         print('⏳ Iniciando subida de avatar con timeout de 60s...');
-        print('   Bucket destino: article-images');
+        print('   Bucket destino: multimedia');
         print('   Ruta destino: $filePath');
         print('   Tamaño archivo: ${(bytes.length / 1024 / 1024).toStringAsFixed(2)} MB');
         
@@ -300,6 +298,8 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
         mimeType: mimeType,
         isMain: true,
         uploadOrder: 1,
+        entityType: userRole, // ✅ Use role as entity type (distribuidor, employee, admin-empresa)
+        entityId: userId,
       );
       
       print('💾 Saving avatar to multimedia table...');
@@ -576,16 +576,31 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                         child: CircleAvatar(
                           radius: 70,
                           backgroundColor: Colors.white,
-                          backgroundImage: _avatarUrl != null
-                              ? NetworkImage(_avatarUrl!)
-                              : null,
-                          child: _avatarUrl == null
-                              ? const Icon(
+                          child: _avatarUrl != null
+                              ? ClipOval(
+                                  child: CachedNetworkImage(
+                                    imageUrl: _avatarUrl!,
+                                    width: 140,
+                                    height: 140,
+                                    fit: BoxFit.cover,
+                                    placeholder: (context, url) => const Center(
+                                      child: CircularProgressIndicator(
+                                        color: Color(0xFF2D8A8A),
+                                        strokeWidth: 3,
+                                      ),
+                                    ),
+                                    errorWidget: (context, url, error) => const Icon(
+                                      Icons.person,
+                                      size: 80,
+                                      color: Color(0xFF2D8A8A),
+                                    ),
+                                  ),
+                                )
+                              : const Icon(
                                   Icons.person,
                                   size: 80,
                                   color: Color(0xFF2D8A8A),
-                                )
-                              : null,
+                                ),
                         ),
                       ),
                       // Loading overlay
@@ -642,7 +657,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                     ),
                     child: Text(
                       widget.user.role?.toLowerCase() == 'distribuidor'
-                          ? 'Usuario'
+                          ? 'Distribuidor'
                           : widget.user.role?.toUpperCase() ?? 'USUARIO',
                       style: const TextStyle(
                         fontSize: 14,

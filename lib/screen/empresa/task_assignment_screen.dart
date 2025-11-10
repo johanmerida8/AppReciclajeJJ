@@ -121,16 +121,19 @@ class _TaskAssignmentScreenState extends State<TaskAssignmentScreen> {
   Future<void> _loadTasks() async {
     if (_companyId == null) return;
     
-    final tasks = await _taskDatabase.getTasksByCompany(_companyId!);
+    // Use stream to get all tasks, then filter by companyId
+    final allTasks = await _taskDatabase.stream.first;
+    final companyTasks = allTasks.where((task) => task.companyId == _companyId).toList();
+    
     setState(() {
-      _existingTasks = tasks;
+      _existingTasks = companyTasks;
       _updateAvailableArticles();
     });
   }
   
   void _updateAvailableArticles() {
     final assignedArticleIds = _existingTasks
-        .where((task) => task.status != 'cancelado' && task.status != 'completado')
+        .where((task) => task.workflowStatus != 'cancelado' && task.workflowStatus != 'completado')
         .map((task) => task.articleId)
         .toSet();
     
@@ -147,7 +150,7 @@ class _TaskAssignmentScreenState extends State<TaskAssignmentScreen> {
         return _availableArticles;
       case 'assigned':
         final assignedIds = _existingTasks
-            .where((task) => task.status != 'cancelado' && task.status != 'completado')
+            .where((task) => task.workflowStatus != 'cancelado' && task.workflowStatus != 'completado')
             .map((task) => task.articleId)
             .toSet();
         return _allArticles.where((a) => assignedIds.contains(a.id)).toList();
@@ -164,22 +167,20 @@ class _TaskAssignmentScreenState extends State<TaskAssignmentScreen> {
     
     setState(() => _isLoading = true);
     
-    final task = Task(
-      employeeId: _selectedEmployee!.idEmployee,
-      articleId: _selectedArticle!.id,
-      companyId: _companyId,
-      assignedBy: _currentUserId,
-      status: 'asignado',
-      priority: _selectedPriority,
-      notes: _notesController.text.trim(),
-      dueDate: _selectedDueDate,
-      estimatedDuration: 30, // Default 30 minutes
-    );
-    
-    final result = await _taskDatabase.createTask(task);
-    
-    if (result != null) {
-      _showSnackBar('✅ Tarea asignada exitosamente a ${_selectedEmployee!.userId}');
+    try {
+      final task = Task(
+        employeeId: _selectedEmployee!.idEmployee,
+        articleId: _selectedArticle!.id,
+        companyId: _companyId,
+        assignedDate: DateTime.now(),
+        workflowStatus: 'asignado',
+        state: 1,
+        lastUpdate: DateTime.now(),
+      );
+      
+      await _taskDatabase.createTask(task);
+      
+      _showSnackBar('✅ Tarea asignada exitosamente');
       
       // Reset selection
       setState(() {
@@ -192,8 +193,9 @@ class _TaskAssignmentScreenState extends State<TaskAssignmentScreen> {
       
       // Reload data
       await _loadTasks();
-    } else {
-      _showSnackBar('❌ Error al asignar la tarea', isError: true);
+    } catch (e) {
+      print('❌ Error assigning task: $e');
+      _showSnackBar('❌ Error al asignar la tarea: $e', isError: true);
     }
     
     setState(() => _isLoading = false);
@@ -301,9 +303,9 @@ class _TaskAssignmentScreenState extends State<TaskAssignmentScreen> {
         children: [
           _buildStatCard('Artículos Disponibles', _availableArticles.length, Colors.blue),
           _buildStatCard('Empleados Activos', _employees.length, Colors.orange),
-          _buildStatCard('Tareas Asignadas', _existingTasks.where((t) => t.status == 'asignado').length, Colors.purple),
-          _buildStatCard('En Proceso', _existingTasks.where((t) => t.status == 'en_proceso').length, Colors.amber),
-          _buildStatCard('Completadas', _existingTasks.where((t) => t.status == 'completado').length, Colors.green),
+          _buildStatCard('Tareas Asignadas', _existingTasks.where((t) => t.workflowStatus == 'asignado').length, Colors.purple),
+          _buildStatCard('En Proceso', _existingTasks.where((t) => t.workflowStatus == 'en_proceso').length, Colors.amber),
+          _buildStatCard('Completadas', _existingTasks.where((t) => t.workflowStatus == 'completado').length, Colors.green),
         ],
       ),
     );
@@ -350,8 +352,8 @@ class _TaskAssignmentScreenState extends State<TaskAssignmentScreen> {
             final isSelected = _selectedArticle?.id == article.id;
             final isAssigned = _existingTasks.any((task) => 
               task.articleId == article.id && 
-              task.status != 'cancelado' && 
-              task.status != 'completado'
+              task.workflowStatus != 'cancelado' && 
+              task.workflowStatus != 'completado'
             );
             
             return Marker(

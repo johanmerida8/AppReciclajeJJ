@@ -7,6 +7,8 @@ class StatusIndicators extends StatelessWidget {
   final bool hasCheckedLocation;
   final VoidCallback onGpsTap;
   final VoidCallback onRefreshTap;
+  final VoidCallback? onNotificationTap;
+  final int notificationCount;
 
   const StatusIndicators({
     Key? key,
@@ -16,6 +18,8 @@ class StatusIndicators extends StatelessWidget {
     required this.hasCheckedLocation,
     required this.onGpsTap,
     required this.onRefreshTap,
+    this.onNotificationTap,
+    this.notificationCount = 0,
   }) : super(key: key);
 
   @override
@@ -105,30 +109,62 @@ class StatusIndicators extends StatelessWidget {
         ),
 
         // Notification button
-        IconButton(
-          onPressed: () {},
-          icon: CircleAvatar(
-            radius: 20,
-            backgroundColor: Colors.white,
-            child: Container(
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                border: Border.all(
-                  color: const Color(0xFF2D8A8A),
-                  width: 2,
-                ),
-              ),
-              child: const CircleAvatar(
-                radius: 18,
+        Stack(
+          clipBehavior: Clip.none,
+          children: [
+            IconButton(
+              onPressed: onNotificationTap,
+              icon: CircleAvatar(
+                radius: 20,
                 backgroundColor: Colors.white,
-                child: Icon(
-                  Icons.notifications,
-                  color: Color(0xFF2D8A8A),
-                  size: 18,
+                child: Container(
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color: const Color(0xFF2D8A8A),
+                      width: 2,
+                    ),
+                  ),
+                  child: const CircleAvatar(
+                    radius: 18,
+                    backgroundColor: Colors.white,
+                    child: Icon(
+                      Icons.notifications,
+                      color: Color(0xFF2D8A8A),
+                      size: 18,
+                    ),
+                  ),
                 ),
               ),
             ),
-          ),
+            if (notificationCount > 0)
+              Positioned(
+                right: 8,
+                top: 8,
+                child: Container(
+                  padding: const EdgeInsets.all(4),
+                  decoration: const BoxDecoration(
+                    color: Colors.red,
+                    shape: BoxShape.circle,
+                  ),
+                  constraints: const BoxConstraints(
+                    minWidth: 18,
+                    minHeight: 18,
+                  ),
+                  child: Center(
+                    child: Text(
+                      notificationCount > 9 ? '9+' : '$notificationCount',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                ),
+              ),
+          ],
         ),
       ],
     );

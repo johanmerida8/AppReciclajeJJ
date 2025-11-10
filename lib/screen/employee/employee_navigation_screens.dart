@@ -1,8 +1,11 @@
 import 'package:curved_navigation_bar/curved_navigation_bar.dart';
 import 'package:flutter/material.dart';
+// import 'package:reciclaje_app/screen/distribuidor/edit_profile_screen.dart';
+import 'package:reciclaje_app/screen/distribuidor/profile_screen.dart';
 import 'package:reciclaje_app/screen/employee/employee_home_screen.dart';
 import 'package:reciclaje_app/screen/employee/employee_tasks_screen.dart';
-import 'package:reciclaje_app/screen/employee/employee_profile_screen.dart';
+import 'package:reciclaje_app/screen/employee/employee_map_screen.dart';
+// import 'package:reciclaje_app/screen/employee/employee_profile_screen.dart';
 
 class EmployeeNavigationScreens extends StatefulWidget {
   const EmployeeNavigationScreens({super.key});
@@ -16,14 +19,17 @@ class _EmployeeNavigationScreensState extends State<EmployeeNavigationScreens> {
   
   // List of screens to navigate between
   final List<Widget> _screens = [
+    const EmployeeMapScreen(),
     const EmployeeHomeScreen(),
-    const EmployeeTasksScreen(),
-    const EmployeeProfileScreen(),
+    // const EmployeeTasksScreen(),
+    // const EmployeeProfileScreen(),
+    const ProfileScreen(),
   ];
 
   final List<Widget> _navigationItems = [
-    const Icon(Icons.home, size: 30, color: Colors.white),
+    const Icon(Icons.map, size: 30, color: Colors.white),
     const Icon(Icons.assignment, size: 30, color: Colors.white),
+    // const Icon(Icons.assignment, size: 30, color: Colors.white),
     const Icon(Icons.person, size: 30, color: Colors.white),
   ];
 

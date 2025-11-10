@@ -3,42 +3,22 @@ class Task {
   int? employeeId;
   int? articleId;
   int? companyId;
-  int? assignedBy; // userId of admin-empresa who assigned
-  String? status; // 'sin_asignar', 'asignado', 'en_proceso', 'completado', 'cancelado'
-  String? priority; // 'baja', 'media', 'alta', 'urgente'
+  int? requestId;
   DateTime? assignedDate;
-  DateTime? startDate;
-  DateTime? completedDate;
-  DateTime? dueDate;
-  String? notes; // Admin notes
-  String? employeeNotes; // Employee notes
-  int? estimatedDuration; // Minutes
-  int? actualDuration; // Minutes
-  double? collectionLatitude;
-  double? collectionLongitude;
+  String? workflowStatus; // 'asignado', 'en_proceso', 'completado', 'cancelado'
+  int? state; // 1 = active, 0 = deleted
   DateTime? lastUpdate;
-  DateTime? createdAt;
 
   Task({
     this.idTask,
     this.employeeId,
     this.articleId,
     this.companyId,
-    this.assignedBy,
-    this.status,
-    this.priority,
+    this.requestId,
     this.assignedDate,
-    this.startDate,
-    this.completedDate,
-    this.dueDate,
-    this.notes,
-    this.employeeNotes,
-    this.estimatedDuration,
-    this.actualDuration,
-    this.collectionLatitude,
-    this.collectionLongitude,
+    this.workflowStatus,
+    this.state,
     this.lastUpdate,
-    this.createdAt,
   });
 
   factory Task.fromMap(Map<String, dynamic> map) {
@@ -47,32 +27,14 @@ class Task {
       employeeId: map['employeeID'] as int?,
       articleId: map['articleID'] as int?,
       companyId: map['companyID'] as int?,
-      assignedBy: map['assignedBy'] as int?,
-      status: map['status'] as String?,
-      priority: map['priority'] as String?,
+      requestId: map['requestID'] as int?,
       assignedDate: map['assignedDate'] != null 
           ? DateTime.parse(map['assignedDate']) 
           : null,
-      startDate: map['startDate'] != null 
-          ? DateTime.parse(map['startDate']) 
-          : null,
-      completedDate: map['completedDate'] != null 
-          ? DateTime.parse(map['completedDate']) 
-          : null,
-      dueDate: map['dueDate'] != null 
-          ? DateTime.parse(map['dueDate']) 
-          : null,
-      notes: map['notes'] as String?,
-      employeeNotes: map['employeeNotes'] as String?,
-      estimatedDuration: map['estimatedDuration'] as int?,
-      actualDuration: map['actualDuration'] as int?,
-      collectionLatitude: (map['collectionLatitude'] as num?)?.toDouble(),
-      collectionLongitude: (map['collectionLongitude'] as num?)?.toDouble(),
+      workflowStatus: map['workflowStatus'] as String?,
+      state: map['state'] as int?,
       lastUpdate: map['lastUpdate'] != null 
           ? DateTime.parse(map['lastUpdate']) 
-          : null,
-      createdAt: map['createdAt'] != null 
-          ? DateTime.parse(map['createdAt']) 
           : null,
     );
   }
@@ -82,154 +44,105 @@ class Task {
       if (employeeId != null) 'employeeID': employeeId,
       if (articleId != null) 'articleID': articleId,
       if (companyId != null) 'companyID': companyId,
-      if (assignedBy != null) 'assignedBy': assignedBy,
-      if (status != null) 'status': status,
-      if (priority != null) 'priority': priority,
+      if (requestId != null) 'requestID': requestId,
       if (assignedDate != null) 'assignedDate': assignedDate!.toIso8601String(),
-      if (startDate != null) 'startDate': startDate!.toIso8601String(),
-      if (completedDate != null) 'completedDate': completedDate!.toIso8601String(),
-      if (dueDate != null) 'dueDate': dueDate!.toIso8601String(),
-      if (notes != null) 'notes': notes,
-      if (employeeNotes != null) 'employeeNotes': employeeNotes,
-      if (estimatedDuration != null) 'estimatedDuration': estimatedDuration,
-      if (actualDuration != null) 'actualDuration': actualDuration,
-      if (collectionLatitude != null) 'collectionLatitude': collectionLatitude,
-      if (collectionLongitude != null) 'collectionLongitude': collectionLongitude,
+      if (workflowStatus != null) 'workflowStatus': workflowStatus,
+      if (state != null) 'state': state,
+      if (lastUpdate != null) 'lastUpdate': lastUpdate!.toIso8601String(),
     };
   }
 
   @override
   String toString() {
-    return 'Task{idTask: $idTask, employeeId: $employeeId, articleId: $articleId, status: $status, priority: $priority}';
+    return 'Task{idTask: $idTask, employeeId: $employeeId, articleId: $articleId, companyId: $companyId, requestId: $requestId, workflowStatus: $workflowStatus, state: $state}';
   }
 }
 
-/// ✅ Detailed task with joined data from related tables
-class TaskDetailed {
-  int idTask;
-  String status;
-  String? priority;
-  DateTime? assignedDate;
-  DateTime? startDate;
-  DateTime? completedDate;
-  DateTime? dueDate;
-  String? notes;
-  String? employeeNotes;
-  int? estimatedDuration;
-  int? actualDuration;
+/// ✅ Detailed task with joined data from related tables (for display purposes)
+// class TaskDetailed {
+//   int idTask;
+//   int employeeId;
+//   int articleId;
+//   int companyId;
+//   int requestId;
+//   DateTime? assignedDate;
+//   String workflowStatus;
   
-  // Employee info
-  int employeeId;
-  String employeeName;
-  String employeeEmail;
-  String? employeePhone;
+//   // Employee info
+//   String employeeName;
+//   String employeeEmail;
   
-  // Article info
-  int articleId;
-  String articleName;
-  int? categoryId;
-  String? articleCondition;
-  String? articleDescription;
+//   // Article info
+//   String articleName;
+//   String? articleCondition;
+//   String? articleDescription;
+//   String articleAddress;
+//   double articleLatitude;
+//   double articleLongitude;
   
-  // Article location
-  String articleAddress;
-  double articleLatitude;
-  double articleLongitude;
+//   // Article owner info
+//   String articleOwnerName;
+//   String articleOwnerEmail;
   
-  // Article owner info
-  String articleOwnerName;
-  String articleOwnerEmail;
-  String? articleOwnerPhone;
+//   // Company info
+//   String companyName;
   
-  // Company info
-  int companyId;
-  String companyName;
-  String? companyEmail;
-  
-  // Assigned by info
-  String assignedByName;
-  String assignedByEmail;
+//   // Request schedule info
+//   String? scheduledDay;
+//   String? scheduledTime;
 
-  TaskDetailed({
-    required this.idTask,
-    required this.status,
-    this.priority,
-    this.assignedDate,
-    this.startDate,
-    this.completedDate,
-    this.dueDate,
-    this.notes,
-    this.employeeNotes,
-    this.estimatedDuration,
-    this.actualDuration,
-    required this.employeeId,
-    required this.employeeName,
-    required this.employeeEmail,
-    this.employeePhone,
-    required this.articleId,
-    required this.articleName,
-    this.categoryId,
-    this.articleCondition,
-    this.articleDescription,
-    required this.articleAddress,
-    required this.articleLatitude,
-    required this.articleLongitude,
-    required this.articleOwnerName,
-    required this.articleOwnerEmail,
-    this.articleOwnerPhone,
-    required this.companyId,
-    required this.companyName,
-    this.companyEmail,
-    required this.assignedByName,
-    required this.assignedByEmail,
-  });
+//   TaskDetailed({
+//     required this.idTask,
+//     required this.employeeId,
+//     required this.articleId,
+//     required this.companyId,
+//     required this.requestId,
+//     this.assignedDate,
+//     required this.workflowStatus,
+//     required this.employeeName,
+//     required this.employeeEmail,
+//     required this.articleName,
+//     this.articleCondition,
+//     this.articleDescription,
+//     required this.articleAddress,
+//     required this.articleLatitude,
+//     required this.articleLongitude,
+//     required this.articleOwnerName,
+//     required this.articleOwnerEmail,
+//     required this.companyName,
+//     this.scheduledDay,
+//     this.scheduledTime,
+//   });
 
-  factory TaskDetailed.fromMap(Map<String, dynamic> map) {
-    return TaskDetailed(
-      idTask: map['idtask'] as int,
-      status: map['status'] as String,
-      priority: map['priority'] as String?,
-      assignedDate: map['assigneddate'] != null 
-          ? DateTime.parse(map['assigneddate']) 
-          : null,
-      startDate: map['startdate'] != null 
-          ? DateTime.parse(map['startdate']) 
-          : null,
-      completedDate: map['completeddate'] != null 
-          ? DateTime.parse(map['completeddate']) 
-          : null,
-      dueDate: map['duedate'] != null 
-          ? DateTime.parse(map['duedate']) 
-          : null,
-      notes: map['notes'] as String?,
-      employeeNotes: map['employeenotes'] as String?,
-      estimatedDuration: map['estimatedduration'] as int?,
-      actualDuration: map['actualduration'] as int?,
-      employeeId: map['idemployee'] as int,
-      employeeName: map['employeename'] as String,
-      employeeEmail: map['employeeemail'] as String,
-      employeePhone: map['employeephone'] as String?,
-      articleId: map['idarticle'] as int,
-      articleName: map['articlename'] as String,
-      categoryId: map['categoryid'] as int?,
-      articleCondition: map['articlecondition'] as String?,
-      articleDescription: map['articledescription'] as String?,
-      articleAddress: map['articleaddress'] as String,
-      articleLatitude: (map['articlelatitude'] as num).toDouble(),
-      articleLongitude: (map['articlelongitude'] as num).toDouble(),
-      articleOwnerName: map['articleownername'] as String,
-      articleOwnerEmail: map['articleowneremail'] as String,
-      articleOwnerPhone: map['articleownerphone'] as String?,
-      companyId: map['idcompany'] as int,
-      companyName: map['companyname'] as String,
-      companyEmail: map['companyemail'] as String?,
-      assignedByName: map['assignedbyname'] as String,
-      assignedByEmail: map['assignedbyemail'] as String,
-    );
-  }
+//   factory TaskDetailed.fromMap(Map<String, dynamic> map) {
+//     return TaskDetailed(
+//       idTask: map['idTask'] as int,
+//       employeeId: map['employeeID'] as int,
+//       articleId: map['articleID'] as int,
+//       companyId: map['companyID'] as int,
+//       requestId: map['requestID'] as int,
+//       assignedDate: map['assignedDate'] != null 
+//           ? DateTime.parse(map['assignedDate']) 
+//           : null,
+//       workflowStatus: map['workflowStatus'] as String,
+//       employeeName: map['employeeName'] as String,
+//       employeeEmail: map['employeeEmail'] as String,
+//       articleName: map['articleName'] as String,
+//       articleCondition: map['articleCondition'] as String?,
+//       articleDescription: map['articleDescription'] as String?,
+//       articleAddress: map['articleAddress'] as String,
+//       articleLatitude: (map['articleLatitude'] as num).toDouble(),
+//       articleLongitude: (map['articleLongitude'] as num).toDouble(),
+//       articleOwnerName: map['articleOwnerName'] as String,
+//       articleOwnerEmail: map['articleOwnerEmail'] as String,
+//       companyName: map['companyName'] as String,
+//       scheduledDay: map['scheduledDay'] as String?,
+//       scheduledTime: map['scheduledTime'] as String?,
+//     );
+//   }
 
-  @override
-  String toString() {
-    return 'TaskDetailed{idTask: $idTask, status: $status, articleName: $articleName, employeeName: $employeeName}';
-  }
-}
+//   @override
+//   String toString() {
+//     return 'TaskDetailed{idTask: $idTask, workflowStatus: $workflowStatus, articleName: $articleName, employeeName: $employeeName, scheduledDay: $scheduledDay, scheduledTime: $scheduledTime}';
+//   }
+// }

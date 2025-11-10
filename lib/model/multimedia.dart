@@ -7,6 +7,8 @@ class Multimedia {
   String? mimeType;
   bool isMain;
   int uploadOrder;
+  String? entityType;
+  int? entityId;
 
   Multimedia({
     this.id,
@@ -17,6 +19,8 @@ class Multimedia {
     this.mimeType,
     this.isMain = false,
     this.uploadOrder = 0,
+    this.entityType,
+    this.entityId,
   });
 
   factory Multimedia.fromMap(Map<String, dynamic> map) {
@@ -29,6 +33,8 @@ class Multimedia {
       mimeType: map['mimeType'] as String?,
       isMain: map['isMain'] as bool? ?? false,
       uploadOrder: map['uploadOrder'] as int? ?? 0,
+      entityType: map['entityType'] as String?,
+      entityId: map['entityID'] as int?
     );
   }
 
@@ -41,11 +47,13 @@ class Multimedia {
       'mimeType': mimeType,
       'isMain': isMain,
       'uploadOrder': uploadOrder,
+      'entityType': entityType,
+      'entityID': entityId,
     };
   }
 
   @override
   String toString() {
-    return 'Photo{id: $id, url: $url, fileName: $fileName, filePath: $filePath, fileSize: $fileSize, mimeType: $mimeType, isMain: $isMain, uploadOrder: $uploadOrder}';
+    return 'Photo{id: $id, url: $url, fileName: $fileName, filePath: $filePath, fileSize: $fileSize, mimeType: $mimeType, isMain: $isMain, uploadOrder: $uploadOrder, entityType: $entityType, entityID: $entityId}';
   }
 }

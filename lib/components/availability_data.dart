@@ -257,15 +257,7 @@ class _AvailabilityPickerDialogState extends State<_AvailabilityPickerDialog> {
   TimeOfDay? _startTime;
   TimeOfDay? _endTime;
 
-  final List<Map<String, String>> _weekDays = [
-    {'short': 'Lun', 'full': 'Lunes'},
-    {'short': 'Mar', 'full': 'Martes'},
-    {'short': 'Mié', 'full': 'Miércoles'},
-    {'short': 'Jue', 'full': 'Jueves'},
-    {'short': 'Vie', 'full': 'Viernes'},
-    {'short': 'Sáb', 'full': 'Sábado'},
-    {'short': 'Dom', 'full': 'Domingo'},
-  ];
+  final List<Map<String, dynamic>> _weekDays = [];
 
   @override
   void initState() {
@@ -273,6 +265,30 @@ class _AvailabilityPickerDialogState extends State<_AvailabilityPickerDialog> {
     _selectedDays = widget.initialAvailability?.selectedDays ?? [];
     _startTime = widget.initialAvailability?.startTime;
     _endTime = widget.initialAvailability?.endTime;
+    _buildWeekDays();
+  }
+
+  void _buildWeekDays() {
+    final today = DateTime.now();
+    final currentWeekday = today.weekday; // 1 = Monday, 7 = Sunday
+    
+    // Start from Monday of current week
+    final monday = today.subtract(Duration(days: currentWeekday - 1));
+    
+    final dayNames = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
+    final shortNames = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
+    final monthNames = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
+    
+    for (int i = 0; i < 7; i++) {
+      final date = monday.add(Duration(days: i));
+      _weekDays.add({
+        'full': dayNames[i],
+        'short': shortNames[i],
+        'dayNumber': date.day,
+        'month': monthNames[date.month - 1],
+        'date': date,
+      });
+    }
   }
 
   @override
@@ -323,35 +339,52 @@ class _AvailabilityPickerDialogState extends State<_AvailabilityPickerDialog> {
               const SizedBox(height: 24),
 
               // Days Section
-              const Text(
-                'Días Disponibles',
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                  color: Color(0xFF2D8A8A),
-                ),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text(
+                    'Días Disponibles',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF2D8A8A),
+                    ),
+                  ),
+                  if (_weekDays.isNotEmpty)
+                    Text(
+                      _weekDays.first['month'].toString(),
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
+                        color: Colors.grey[600],
+                      ),
+                    ),
+                ],
               ),
               const SizedBox(height: 12),
 
-              // Days Grid
+              // Days Grid with dates
               Wrap(
                 spacing: 8,
                 runSpacing: 8,
                 children: _weekDays.map((day) {
                   final isSelected = _selectedDays.contains(day['full']);
+                  final dayNumber = day['dayNumber'];
+                  final shortName = day['short'];
+                  
                   return GestureDetector(
                     onTap: () {
                       setState(() {
                         if (isSelected) {
                           _selectedDays.remove(day['full']);
                         } else {
-                          _selectedDays.add(day['full']!);
+                          _selectedDays.add(day['full'] as String);
                         }
                       });
                     },
                     child: Container(
                       width: 70,
-                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
                       decoration: BoxDecoration(
                         color: isSelected 
                             ? const Color(0xFF2D8A8A) 
@@ -367,18 +400,30 @@ class _AvailabilityPickerDialogState extends State<_AvailabilityPickerDialog> {
                       child: Column(
                         children: [
                           Text(
-                            day['short']!,
+                            shortName.toString(),
                             style: TextStyle(
                               color: isSelected ? Colors.white : Colors.grey.shade700,
                               fontWeight: FontWeight.bold,
-                              fontSize: 14,
+                              fontSize: 13,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            dayNumber.toString(),
+                            style: TextStyle(
+                              color: isSelected ? Colors.white : Colors.grey.shade800,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 18,
                             ),
                           ),
                           if (isSelected)
-                            const Icon(
-                              Icons.check_circle,
-                              color: Colors.white,
-                              size: 16,
+                            const Padding(
+                              padding: EdgeInsets.only(top: 2),
+                              child: Icon(
+                                Icons.check_circle,
+                                color: Colors.white,
+                                size: 14,
+                              ),
                             ),
                         ],
                       ),
@@ -423,6 +468,35 @@ class _AvailabilityPickerDialogState extends State<_AvailabilityPickerDialog> {
               ),
 
               const SizedBox(height: 24),
+
+              // Warning message for single day selection
+              if (_selectedDays.length == 1)
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  margin: const EdgeInsets.only(bottom: 16),
+                  decoration: BoxDecoration(
+                    color: Colors.orange.shade50,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.orange.shade300),
+                  ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(Icons.info_outline, color: Colors.orange.shade700, size: 20),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Recomendamos seleccionar al menos 2-3 días para dar más flexibilidad a las empresas de reciclaje al programar la recolección.',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Colors.orange.shade900,
+                            height: 1.3,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
 
               // Confirm Button
               ElevatedButton(

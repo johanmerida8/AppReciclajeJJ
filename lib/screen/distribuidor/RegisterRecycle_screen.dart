@@ -319,7 +319,8 @@ class _RegisterRecycleScreenState extends State<RegisterRecycleScreen> {
   void _showCannotPublishDialog() {
     showDialog(
       context: context,
-      builder: (BuildContext context) {
+      barrierDismissible: false,
+      builder: (BuildContext dialogContext) {
         return AlertDialog(
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
           title: Row(
@@ -381,8 +382,19 @@ class _RegisterRecycleScreenState extends State<RegisterRecycleScreen> {
             ],
           ),
           actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
+            ElevatedButton(
+              onPressed: () {
+                // ✅ Cerrar el diálogo
+                Navigator.of(dialogContext).pop();
+                
+                // ✅ Volver a la pantalla anterior (HomeScreen)
+                Navigator.of(context).pop();
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.orange,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+              ),
               child: const Text('Entendido'),
             ),
           ],
@@ -472,16 +484,11 @@ class _RegisterRecycleScreenState extends State<RegisterRecycleScreen> {
           actions: [
             ElevatedButton(
               onPressed: () {
-                // ✅ Cerrar el diálogo primero usando dialogContext
+                // ✅ Cerrar el diálogo
                 Navigator.of(dialogContext).pop();
                 
-                // ✅ Luego volver a HomeScreen usando el context original
-                // Necesitamos un pequeño delay para evitar conflictos
-                Future.microtask(() {
-                  if (mounted) {
-                    Navigator.of(context).pop(true); // ✅ Volver con resultado true
-                  }
-                });
+                // ✅ Volver a la pantalla anterior (HomeScreen) con resultado
+                Navigator.of(context).pop(true);
               },
               style: ElevatedButton.styleFrom(
                 backgroundColor: const Color(0xFF2D8A8A),
@@ -509,12 +516,12 @@ class _RegisterRecycleScreenState extends State<RegisterRecycleScreen> {
     
     // ✅ Verify bucket exists and is accessible
     try {
-      print('🔍 Verificando bucket article-images...');
-      final files = await storage.from('article-images').list(
+      print('🔍 Verificando bucket multimedia...');
+      final files = await storage.from('multimedia').list(
         path: '',
         searchOptions: const SearchOptions(limit: 1),
       );
-      print('✅ Bucket article-images accesible (${files.length} items encontrados)');
+      print('✅ Bucket multimedia accesible (${files.length} items encontrados)');
     } catch (e) {
       print('⚠️ Advertencia: No se pudo verificar el bucket: $e');
       // Continuar anyway, el bucket existe según tu captura
@@ -558,7 +565,7 @@ class _RegisterRecycleScreenState extends State<RegisterRecycleScreen> {
       }
 
       final fileName = '${timestamp}_${i}_article_${articleId}.$extension';
-      final filePath = 'articles/$articleId/$fileName';
+      final filePath = 'articles/$articleId/$fileName'; // ✅ Simple path without article name
 
       print('📤 Uploading to: $filePath');
 
@@ -573,7 +580,7 @@ class _RegisterRecycleScreenState extends State<RegisterRecycleScreen> {
       // Upload to supabase storage with timeout and retry logic
       try {
         print('⏳ Iniciando subida con timeout de 60s...');
-        print('   Bucket destino: article-images');
+        print('   Bucket destino: multimedia');
         print('   Ruta destino: $filePath');
         print('   Tamaño archivo: ${(bytes.length / 1024 / 1024).toStringAsFixed(2)} MB');
         
@@ -651,6 +658,8 @@ class _RegisterRecycleScreenState extends State<RegisterRecycleScreen> {
         mimeType: 'image/$extension',
         isMain: i == 0, // First image as main
         uploadOrder: i,
+        entityType: 'article', // ✅ Identificar tipo de entidad
+        entityId: articleId,    // ✅ ID del artículo
         // lastUpdate: DateTime.now(),
       );
 

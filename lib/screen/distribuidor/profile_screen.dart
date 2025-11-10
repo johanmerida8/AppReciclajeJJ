@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:reciclaje_app/auth/auth_service.dart';
 import 'package:reciclaje_app/database/article_database.dart';
 import 'package:reciclaje_app/database/media_database.dart';
@@ -52,7 +53,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
         
         // Load user avatar from multimedia table
         if (currentUser?.id != null) {
-          final avatarPattern = 'users/${currentUser!.id}/avatars/';
+          final userRole = currentUser!.role?.toLowerCase() ?? 'user';
+          final avatarPattern = 'users/$userRole/${currentUser!.id}/avatars/';
           currentUserAvatar = await mediaDatabase.getMainPhotoByPattern(avatarPattern);
           print('📸 User avatar: ${currentUserAvatar?.url ?? "No avatar"}');
         }
@@ -253,16 +255,31 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         CircleAvatar(
                           radius: 50,
                           backgroundColor: Colors.white,
-                          backgroundImage: currentUserAvatar?.url != null
-                              ? NetworkImage(currentUserAvatar!.url!)
-                              : null,
-                          child: currentUserAvatar?.url == null
-                              ? const Icon(
+                          child: currentUserAvatar?.url != null
+                              ? ClipOval(
+                                  child: CachedNetworkImage(
+                                    imageUrl: currentUserAvatar!.url!,
+                                    width: 100,
+                                    height: 100,
+                                    fit: BoxFit.cover,
+                                    placeholder: (context, url) => const Center(
+                                      child: CircularProgressIndicator(
+                                        color: Color(0xFF2D8A8A),
+                                        strokeWidth: 2,
+                                      ),
+                                    ),
+                                    errorWidget: (context, url, error) => const Icon(
+                                      Icons.person,
+                                      size: 60,
+                                      color: Color(0xFF2D8A8A),
+                                    ),
+                                  ),
+                                )
+                              : const Icon(
                                   Icons.person,
                                   size: 60,
                                   color: Color(0xFF2D8A8A),
-                                )
-                              : null,
+                                ),
                         ),
                         const SizedBox(width: 20),
                         // Name and role on the right
@@ -304,11 +321,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                 ],
                               ),
                               const SizedBox(height: 4),
-                              // User role (not "Usuario" badge)
+                              // User role badge
                               Text(
-                                currentUser?.role?.toLowerCase() == 'distribuidor'
-                                    ? 'Distribuidor'
-                                    : currentUser?.role?.toUpperCase() ?? 'USUARIO',
+                                currentUser?.role?.toUpperCase() ?? 'USUARIO',
                                 style: const TextStyle(
                                   fontSize: 14,
                                   color: Colors.white70,
@@ -535,16 +550,40 @@ class _ProfileScreenState extends State<ProfileScreen> {
     return Container(
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(12),
-        image: imageUrl != null
-            ? DecorationImage(
-                image: NetworkImage(imageUrl),
-                fit: BoxFit.cover,
-              )
-            : null,
         color: imageUrl == null ? Colors.grey[300] : null,
       ),
       child: Stack(
         children: [
+          // Image with cached network image
+          if (imageUrl != null)
+            ClipRRect(
+              borderRadius: BorderRadius.circular(12),
+              child: CachedNetworkImage(
+                imageUrl: imageUrl,
+                width: double.infinity,
+                height: double.infinity,
+                fit: BoxFit.cover,
+                placeholder: (context, url) => Container(
+                  color: Colors.grey[300],
+                  child: const Center(
+                    child: CircularProgressIndicator(
+                      color: Color(0xFF2D8A8A),
+                      strokeWidth: 2,
+                    ),
+                  ),
+                ),
+                errorWidget: (context, url, error) => Container(
+                  color: Colors.grey[300],
+                  child: Center(
+                    child: Icon(
+                      Icons.image_not_supported,
+                      size: 40,
+                      color: Colors.grey[600],
+                    ),
+                  ),
+                ),
+              ),
+            ),
           // Gradient overlay for better text visibility
           Container(
             decoration: BoxDecoration(

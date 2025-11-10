@@ -12,6 +12,7 @@ import 'package:reciclaje_app/services/workflow_service.dart';
 import 'package:reciclaje_app/services/map_service.dart';
 import 'package:reciclaje_app/screen/distribuidor/RegisterRecycle_screen.dart';
 import 'package:reciclaje_app/screen/distribuidor/detail_recycle_screen.dart';
+import 'package:reciclaje_app/screen/distribuidor/notifications_screen.dart';
 import 'package:geocoding/geocoding.dart';
 import 'package:reciclaje_app/utils/category_utils.dart';
 import 'package:reciclaje_app/widgets/map_marker.dart';
@@ -19,6 +20,7 @@ import 'package:reciclaje_app/widgets/quick_register_dialog.dart';
 import 'package:reciclaje_app/widgets/status_indicator.dart';
 import 'package:reciclaje_app/database/media_database.dart';
 import 'package:reciclaje_app/model/multimedia.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 // import 'package:reciclaje_app/widgets/category_utils.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -45,6 +47,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   // State variables
   List<RecyclingItem> _items = [];
   int? _currentUserId;
+  int _pendingRequestCount = 0; // Notification count
   
   // ✅ NUEVO: Estado para navegación de artículos
   int _currentArticleIndex = 0;
@@ -73,6 +76,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool _hasLocationPermission = false;
   bool _isLocationServiceEnabled = false;
   bool _hasCheckedLocation = false;
+  // Track if user dismissed the enable-location dialog to prevent showing it again in same session
+  bool _userDismissedLocationDialog = false;
 
   @override
   void initState() {
@@ -96,6 +101,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       print('🔄 App resumed - Verificando estado de ubicación...');
       // Verificar si GPS fue habilitado mientras estábamos en segundo plano
       _recheckLocationAfterResume();
+      // Reload notification count when app resumes
+      _loadPendingRequestCount();
     }
   }
 
@@ -130,20 +137,21 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   /// Initialize all data
   Future<void> _initialize() async {
     await _loadUserData();
+    await _loadPendingRequestCount(); // Load notification count
     await _loadData();
     
     // ✅ Verificar GPS primero antes de intentar cargar ubicación
     await _checkLocationServices();
     
-    // ✅ Si GPS está deshabilitado, mostrar diálogo para activarlo
-    if (!_isLocationServiceEnabled || !_hasLocationPermission) {
+    // ✅ Mostrar diálogo si GPS está deshabilitado (solo si usuario no lo rechazó previamente)
+    if ((!_isLocationServiceEnabled || !_hasLocationPermission) && !_userDismissedLocationDialog) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) {
           _showEnableLocationDialog();
         }
       });
-    } else {
-      // GPS está habilitado, cargar ubicación
+    } else if (_isLocationServiceEnabled && _hasLocationPermission) {
+      // GPS está habilitado, cargar ubicación automáticamente
       await _loadUserLocation();
     }
   }
@@ -157,6 +165,39 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         _currentUserId = userData?.id;
       });
     }
+  }
+
+  /// Load pending request count for notifications
+  Future<void> _loadPendingRequestCount() async {
+    if (_currentUserId == null) return;
+    
+    try {
+      final response = await Supabase.instance.client
+        .from('request')
+        .select('*, article!inner(userID)')
+        .eq('status', 'pendiente')
+        .eq('article.userID', _currentUserId!);
+      
+      if (mounted) {
+        setState(() {
+          _pendingRequestCount = (response as List).length;
+        });
+      }
+    } catch (e) {
+      print('Error loading pending request count: $e');
+    }
+  }
+
+  /// Navigate to notifications screen
+  Future<void> _navigateToNotifications() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => const NotificationsScreen(),
+      ),
+    );
+    // Refresh count after returning from notifications
+    await _loadPendingRequestCount();
   }
 
   /// Load articles
@@ -451,6 +492,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           actions: [
             TextButton(
               onPressed: () {
+                // Mark that user dismissed the dialog so we don't show it again in this session
+                setState(() {
+                  _userDismissedLocationDialog = true;
+                });
                 Navigator.of(context).pop();
                 print('❌ Usuario rechazó activar ubicación');
               },
@@ -837,6 +882,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               hasCheckedLocation: _hasCheckedLocation,
               onGpsTap: _checkLocationServices,
               onRefreshTap: _refreshData,
+              notificationCount: _pendingRequestCount,
+              onNotificationTap: _navigateToNotifications,
             ),
           ),
         ),
@@ -1059,85 +1106,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     // ✅ Primero verificar el estado del GPS
     await _checkLocationServices();
     
-    // Si GPS está deshabilitado o sin permisos, mostrar mensaje con acción para activar
+    // Si GPS está deshabilitado o sin permisos, mostrar diálogo de habilitación
     if (!_isLocationServiceEnabled || !_hasLocationPermission) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              !_isLocationServiceEnabled 
-                  ? '📍 GPS desactivado. Toca "Activar" para habilitarlo'
-                  : '📍 Permisos de ubicación denegados. Toca "Activar"'
-            ),
-            duration: const Duration(seconds: 4),
-            backgroundColor: Colors.orange,
-            action: SnackBarAction(
-              label: 'Activar',
-              textColor: Colors.white,
-              onPressed: () async {
-                print('✅ Usuario quiere activar ubicación desde FAB');
-                
-                // ✅ Solicitar servicio de GPS primero (triggers native dialog)
-                if (!_isLocationServiceEnabled) {
-                  final serviceEnabled = await _locationService.requestLocationService();
-                  if (!serviceEnabled) {
-                    if (mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('⚠️ GPS no activado. Por favor, activa el GPS manualmente'),
-                          duration: Duration(seconds: 3),
-                          backgroundColor: Colors.orange,
-                        ),
-                      );
-                    }
-                    return;
-                  }
-                }
-                
-                // ✅ Solicitar permisos de ubicación (triggers permission dialog)
-                if (!_hasLocationPermission) {
-                  final permissionGranted = await _locationService.requestLocationPermission();
-                  if (!permissionGranted) {
-                    if (mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('⚠️ Permisos denegados. Por favor, otorga permisos de ubicación'),
-                          duration: Duration(seconds: 3),
-                          backgroundColor: Colors.orange,
-                        ),
-                      );
-                    }
-                    return;
-                  }
-                }
-                
-                // Verificar estado actualizado
-                await _checkLocationServices();
-                
-                // Intentar cargar ubicación
-                if (_isLocationServiceEnabled && _hasLocationPermission) {
-                  await _loadUserLocation();
-                  
-                  if (_hasUserLocation && _userLocation != null && mounted) {
-                    // Centrar mapa en ubicación
-                    if (_mapService.isMapReady(_mapController)) {
-                      _mapController.move(_userLocation!, 16.0);
-                    }
-                    
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('✅ Ubicación activada y centrada en el mapa'),
-                        duration: Duration(seconds: 2),
-                        backgroundColor: Colors.green,
-                      ),
-                    );
-                  }
-                }
-              },
-            ),
-          ),
-        );
-      }
+      _showEnableLocationDialog();
       return;
     }
     

@@ -55,14 +55,7 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
         print('✅ Loaded user: ${currentUser?.names} (${currentUser?.email})');
         print('✅ User role from DB: ${currentUser?.role}');
         
-        // Load user avatar from multimedia table
-        if (currentUser?.id != null) {
-          final avatarPattern = 'users/${currentUser!.id}/avatars/';
-          currentUserAvatar = await mediaDatabase.getMainPhotoByPattern(avatarPattern);
-          print('📸 Admin user avatar: ${currentUserAvatar?.url ?? "No avatar"}');
-        }
-        
-        // Fetch company details
+        // Fetch company details first (needed for correct paths)
         if (currentUser?.id != null) {
           // Get company where this user is admin
           final companies = await Supabase.instance.client
@@ -74,11 +67,24 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
           if (companies.isNotEmpty) {
             currentCompany = Company.fromMap(companies.first);
             
-            // Load company avatar/logo from multimedia table
-            if (currentCompany?.companyId != null) {
-              final companyAvatarPattern = 'empresa/${currentCompany!.companyId}/avatar/';
+            // Load admin user avatar from multimedia table (role-based path)
+            if (currentUser?.id != null && currentUser?.role != null) {
+              final userRole = currentUser!.role!.toLowerCase();
+              final userId = currentUser!.id!;
+              final avatarPattern = 'users/$userRole/$userId/avatars/';
+              currentUserAvatar = await mediaDatabase.getMainPhotoByPattern(avatarPattern);
+              print('📸 Admin user avatar pattern: $avatarPattern');
+              print('📸 Admin user avatar: ${currentUserAvatar?.url ?? "No avatar"}');
+            }
+            
+            // Load company logo from multimedia table (company-based path)
+            if (currentCompany?.companyId != null && currentCompany?.nameCompany != null) {
+              final companyName = currentCompany!.nameCompany!;
+              final companyId = currentCompany!.companyId!;
+              final companyAvatarPattern = 'empresa/$companyName/$companyId/avatar/';
               companyAvatar = await mediaDatabase.getMainPhotoByPattern(companyAvatarPattern);
-              print('🏢 Company avatar: ${companyAvatar?.url ?? "No company logo"}');
+              print('🏢 Company logo pattern: $companyAvatarPattern');
+              print('🏢 Company logo: ${companyAvatar?.url ?? "No company logo"}');
             }
             
             // Fetch company's articles
@@ -176,18 +182,42 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
   }
 
   void _navigateToEditCompanyProfile() async {
-    if (currentCompany == null) return;
-    
-    final result = await Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (context) => EditCompanyProfileScreen(company: currentCompany!),
-      ),
-    );
-    
-    if (result == true) {
-      // Reload company data
-      await _loadUserData();
+    if (isViewingCompanyProfile) {
+      // Editing company profile
+      if (currentCompany == null) return;
+      
+      final result = await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => EditCompanyProfileScreen(
+            company: currentCompany,
+            adminUser: null,
+            isEditingCompany: true,
+          ),
+        ),
+      );
+      
+      if (result == true) {
+        await _loadUserData();
+      }
+    } else {
+      // Editing admin personal profile
+      if (currentUser == null) return;
+      
+      final result = await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => EditCompanyProfileScreen(
+            company: null,
+            adminUser: currentUser,
+            isEditingCompany: false,
+          ),
+        ),
+      );
+      
+      if (result == true) {
+        await _loadUserData();
+      }
     }
   }
 
