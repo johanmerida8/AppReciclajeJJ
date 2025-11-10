@@ -1,31 +1,30 @@
 import 'package:curved_navigation_bar/curved_navigation_bar.dart';
 import 'package:flutter/material.dart';
-import 'package:reciclaje_app/screen/distribuidor/RegisterRecycle_screen.dart';
-import 'package:reciclaje_app/screen/distribuidor/home_screen.dart';
-import 'package:reciclaje_app/screen/distribuidor/profile_screen.dart';
+import 'package:reciclaje_app/screen/administrator/companyList.dart';
+import 'package:reciclaje_app/screen/administrator/userList.dart';
 
-class NavigationScreens extends StatefulWidget {
-  const NavigationScreens({super.key});
+class   adminNavigationScreens extends StatefulWidget {
+  const adminNavigationScreens({super.key});
 
   @override
-  State<NavigationScreens> createState() => _NavigationScreensState();
+  State<adminNavigationScreens> createState() => _adminNavigationScreensState();
 }
 
-class _NavigationScreensState extends State<NavigationScreens> {
+class _adminNavigationScreensState extends State<adminNavigationScreens> {
   int _currentIndex = 0;
   
   // List of screens to navigate between
   final List<Widget> _screens = [
-    const HomeScreen(),
-    const RegisterRecycleScreen(), // For registering recycling items
-    const ProfileScreen(),
+
+    const UserList(),
+    const CompanyList(),
     
   ];
 
   final List<Widget> _navigationItems = [
-    const Icon(Icons.home, size: 30, color: Colors.white),
-    const Icon(Icons.add_box, size: 30, color: Colors.white),
-    const Icon(Icons.person, size: 30, color: Colors.white),
+
+    const Icon(Icons.people, size: 30, color: Colors.white),
+    const Icon(Icons.business, size: 30, color: Colors.white),
   ];
 
   @override
@@ -38,7 +37,7 @@ class _NavigationScreensState extends State<NavigationScreens> {
         color: const Color(0xFF2D8A8A), // Your app's teal color
         // buttonBackgroundColor: const Color(0xFF2D8A8A), // Green accent
         buttonBackgroundColor: const Color.fromARGB(255, 45, 138, 138),
-        height: 75,
+        height: 55,
         items: _navigationItems,
         index: _currentIndex,
         animationDuration: const Duration(milliseconds: 300),
