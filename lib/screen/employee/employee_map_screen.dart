@@ -45,7 +45,6 @@ class _EmployeeMapScreenState extends State<EmployeeMapScreen> with WidgetsBindi
   int _currentArticleIndex = 0;
   bool _showArticleNavigation = false;
   double _currentZoom = 13.0;
-  Map<LatLng, bool> _expandedClusters = {};
 
   // Location state
   LatLng? _userLocation;
@@ -450,15 +449,11 @@ class _EmployeeMapScreenState extends State<EmployeeMapScreen> with WidgetsBindi
     List<Marker> markers = [];
 
     for (var cluster in clusters) {
-      final isExpanded = _expandedClusters[cluster.center] ?? false;
-
-      if (cluster.items.length == 1 || isExpanded) {
-        if (isExpanded) {
-          markers.addAll(_buildExpandedClusterMarkers(cluster));
-        } else {
-          markers.add(_buildSingleMarker(cluster.items.first));
-        }
+      if (cluster.items.length == 1) {
+        // Single item - show regular marker
+        markers.add(_buildSingleMarker(cluster.items.first));
       } else {
+        // Multiple items - show cluster marker
         markers.add(_buildClusterMarker(cluster));
       }
     }
@@ -513,10 +508,8 @@ class _EmployeeMapScreenState extends State<EmployeeMapScreen> with WidgetsBindi
       height: 60,
       child: GestureDetector(
         onTap: () {
-          setState(() {
-            _expandedClusters[cluster.center] = true;
-          });
-          _mapController.move(cluster.center, min(_currentZoom + 2, 18));
+          // Show navigation modal with all articles in cluster
+          _showArticleNavigationModal(cluster.items, cluster.items.first);
         },
         child: Container(
           decoration: BoxDecoration(
@@ -546,40 +539,6 @@ class _EmployeeMapScreenState extends State<EmployeeMapScreen> with WidgetsBindi
     );
   }
 
-  List<Marker> _buildExpandedClusterMarkers(MarkerCluster cluster) {
-    List<Marker> markers = [];
-
-    for (var item in cluster.items) {
-      markers.add(_buildSingleMarker(item));
-    }
-
-    markers.add(_buildCollapseMarker(cluster));
-    return markers;
-  }
-
-  Marker _buildCollapseMarker(MarkerCluster cluster) {
-    return Marker(
-      point: cluster.center,
-      width: 40,
-      height: 40,
-      child: GestureDetector(
-        onTap: () {
-          setState(() {
-            _expandedClusters.remove(cluster.center);
-          });
-        },
-        child: Container(
-          decoration: BoxDecoration(
-            color: Colors.red,
-            shape: BoxShape.circle,
-            border: Border.all(color: Colors.white, width: 2),
-          ),
-          child: const Icon(Icons.close, color: Colors.white, size: 20),
-        ),
-      ),
-    );
-  }
-
   void _onMarkerTap(RecyclingItem item) {
     final index = _assignedArticles.indexWhere((i) => i.id == item.id);
     
@@ -592,17 +551,64 @@ class _EmployeeMapScreenState extends State<EmployeeMapScreen> with WidgetsBindi
       _mapController.move(LatLng(item.latitude, item.longitude), 16);
     }
     
-    _showArticleDetailModal(item);
+    // Find nearby articles within 100 meters
+    final nearbyArticles = _findNearbyArticles(item, maxDistance: 100);
+    
+    if (nearbyArticles.length > 1) {
+      // Show navigation modal if there are nearby articles
+      _showArticleNavigationModal(nearbyArticles, item);
+    } else {
+      // Show single article modal if it's alone
+      _showSingleArticleModal(item);
+    }
   }
 
-  void _showArticleDetailModal(RecyclingItem item) async {
+  /// Find articles near the given article
+  List<RecyclingItem> _findNearbyArticles(RecyclingItem item, {required double maxDistance}) {
+    List<RecyclingItem> nearby = [];
+    
+    for (var article in _assignedArticles) {
+      final distance = _calculateDistance(
+        item.latitude, item.longitude,
+        article.latitude, article.longitude,
+      );
+      
+      if (distance <= maxDistance) {
+        nearby.add(article);
+      }
+    }
+    
+    return nearby;
+  }
+
+  /// Calculate distance between two points in meters (Haversine formula)
+  double _calculateDistance(double lat1, double lon1, double lat2, double lon2) {
+    const double earthRadius = 6371000; // meters
+    
+    final dLat = _toRadians(lat2 - lat1);
+    final dLon = _toRadians(lon2 - lon1);
+    
+    final a = sin(dLat / 2) * sin(dLat / 2) +
+        cos(_toRadians(lat1)) * cos(_toRadians(lat2)) *
+        sin(dLon / 2) * sin(dLon / 2);
+    
+    final c = 2 * atan2(sqrt(a), sqrt(1 - a));
+    return earthRadius * c;
+  }
+
+  double _toRadians(double degrees) {
+    return degrees * pi / 180;
+  }
+
+  /// Show single article modal (no navigation)
+  void _showSingleArticleModal(RecyclingItem item) async {
     if (!mounted) return;
 
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (context) => _EmployeeArticleModal(
+      builder: (context) => _EmployeeSingleArticleModal(
         item: item,
         mediaDatabase: _mediaDatabase,
         onNavigateToDetails: (item) {
@@ -613,6 +619,45 @@ class _EmployeeMapScreenState extends State<EmployeeMapScreen> with WidgetsBindi
               builder: (context) => DetailRecycleScreen(item: item),
             ),
           );
+        },
+      ),
+    ).then((_) {
+      if (mounted) {
+        setState(() {
+          _showArticleNavigation = false;
+        });
+      }
+    });
+  }
+
+  /// Show article navigation modal (with anterior/siguiente buttons)
+  void _showArticleNavigationModal(List<RecyclingItem> articles, RecyclingItem currentItem) async {
+    if (!mounted) return;
+
+    final currentIndex = articles.indexWhere((a) => a.id == currentItem.id);
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => _EmployeeArticleNavigationModal(
+        articles: articles,
+        initialIndex: currentIndex >= 0 ? currentIndex : 0,
+        mediaDatabase: _mediaDatabase,
+        onNavigateToDetails: (item) {
+          Navigator.pop(context);
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => DetailRecycleScreen(item: item),
+            ),
+          );
+        },
+        onArticleChange: (item) {
+          // Move map to the new article location
+          if (_mapService.isMapReady(_mapController)) {
+            _mapController.move(LatLng(item.latitude, item.longitude), 16);
+          }
         },
       ),
     ).then((_) {
@@ -837,23 +882,26 @@ class _EmployeeMapScreenState extends State<EmployeeMapScreen> with WidgetsBindi
   }
 }
 
-// Employee Article Modal Widget
-class _EmployeeArticleModal extends StatefulWidget {
+// ============================================================================
+// Single article modal widget (no navigation buttons)
+// ============================================================================
+
+class _EmployeeSingleArticleModal extends StatefulWidget {
   final RecyclingItem item;
   final MediaDatabase mediaDatabase;
   final Function(RecyclingItem) onNavigateToDetails;
 
-  const _EmployeeArticleModal({
+  const _EmployeeSingleArticleModal({
     required this.item,
     required this.mediaDatabase,
     required this.onNavigateToDetails,
   });
 
   @override
-  State<_EmployeeArticleModal> createState() => _EmployeeArticleModalState();
+  State<_EmployeeSingleArticleModal> createState() => _EmployeeSingleArticleModalState();
 }
 
-class _EmployeeArticleModalState extends State<_EmployeeArticleModal> {
+class _EmployeeSingleArticleModalState extends State<_EmployeeSingleArticleModal> {
   Multimedia? currentPhoto;
   bool isLoadingPhoto = false;
 
@@ -897,6 +945,7 @@ class _EmployeeArticleModalState extends State<_EmployeeArticleModal> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
+          // Drag handle
           Container(
             height: 6,
             width: 50,
@@ -912,6 +961,7 @@ class _EmployeeArticleModalState extends State<_EmployeeArticleModal> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  // Photo
                   if (isLoadingPhoto)
                     const Center(child: CircularProgressIndicator())
                   else if (currentPhoto?.url != null)
@@ -927,10 +977,12 @@ class _EmployeeArticleModalState extends State<_EmployeeArticleModal> {
                   else
                     _buildPlaceholder(),
                   const SizedBox(height: 16),
+                  
+                  // Title
                   Text(
                     widget.item.title,
                     style: const TextStyle(
-                      fontSize: 20,
+                      fontSize: 24,
                       fontWeight: FontWeight.bold,
                     ),
                   ),
@@ -939,108 +991,93 @@ class _EmployeeArticleModalState extends State<_EmployeeArticleModal> {
                   // Category
                   Row(
                     children: [
-                      Icon(
-                        CategoryUtils.getCategoryIcon(widget.item.categoryName),
-                        size: 20,
-                        color: const Color(0xFF2D8A8A),
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        widget.item.categoryName,
-                        style: const TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w500,
-                          color: Color(0xFF2D8A8A),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: Colors.blue.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(
+                              CategoryUtils.getCategoryIcon(widget.item.categoryName),
+                              size: 16,
+                              color: Colors.blue,
+                            ),
+                            const SizedBox(width: 6),
+                            Text(
+                              widget.item.categoryName,
+                              style: const TextStyle(
+                                color: Colors.blue,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 8),
-                  
-                  // Condition
-                  if (widget.item.condition != null)
-                    Row(
-                      children: [
-                        Icon(Icons.info_outline, size: 16, color: Colors.grey[600]),
-                        const SizedBox(width: 8),
-                        Text(
-                          'Condición: ${widget.item.condition}',
-                          style: TextStyle(color: Colors.grey[700], fontSize: 14),
-                        ),
-                      ],
-                    ),
-                  if (widget.item.condition != null) const SizedBox(height: 8),
+                  const SizedBox(height: 16),
                   
                   // Description
-                  if (widget.item.description != null)
+                  if (widget.item.description != null) ...[
+                    const Text(
+                      'Descripción:',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
                     Text(
                       widget.item.description!,
-                      style: TextStyle(color: Colors.grey[600]),
-                      maxLines: 3,
-                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 14),
                     ),
-                  if (widget.item.description != null) const SizedBox(height: 12),
+                    const SizedBox(height: 16),
+                  ],
                   
-                  // Divider
-                  Divider(color: Colors.grey[300]),
-                  const SizedBox(height: 12),
-                  
-                  // Owner info
-                  Row(
-                    children: [
-                      Icon(Icons.person_outline, size: 16, color: Colors.grey[600]),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          'Propietario: ${widget.item.userName}',
-                          style: TextStyle(color: Colors.grey[700], fontSize: 14),
-                        ),
-                      ),
-                    ],
+                  // Address
+                  const Text(
+                    'Ubicación:',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
                   const SizedBox(height: 8),
-                  
-                  // Location
                   Row(
                     children: [
-                      Icon(Icons.location_on, size: 16, color: Colors.grey[600]),
+                      const Icon(Icons.location_on, color: Colors.red, size: 20),
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(
                           widget.item.address,
-                          style: TextStyle(color: Colors.grey[600], fontSize: 14),
+                          style: const TextStyle(fontSize: 14),
                         ),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 24),
                   
-                  // Availability
-                  Row(
-                    children: [
-                      Icon(Icons.access_time, size: 16, color: Colors.grey[600]),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          '${widget.item.availableDays} • ${widget.item.availableTimeStart} - ${widget.item.availableTimeEnd}',
-                          style: TextStyle(color: Colors.grey[700], fontSize: 14),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 20),
-                  
-                  // View Details button
+                  // View Details Button
                   SizedBox(
                     width: double.infinity,
-                    child: ElevatedButton.icon(
+                    child: ElevatedButton(
                       onPressed: () => widget.onNavigateToDetails(widget.item),
-                      icon: const Icon(Icons.info_outline),
-                      label: const Text('Ver Detalles Completos'),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: const Color(0xFF2D8A8A),
-                        foregroundColor: Colors.white,
                         padding: const EdgeInsets.symmetric(vertical: 16),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                      child: const Text(
+                        'Ver Detalles Completos',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.white,
+                        ),
                       ),
                     ),
                   ),
@@ -1063,6 +1100,300 @@ class _EmployeeArticleModalState extends State<_EmployeeArticleModal> {
       child: Center(
         child: Icon(
           CategoryUtils.getCategoryIcon(widget.item.categoryName),
+          size: 60,
+          color: Colors.grey[600],
+        ),
+      ),
+    );
+  }
+}
+
+// ============================================================================
+// Article navigation modal widget (with Anterior/Siguiente buttons)
+// ============================================================================
+
+class _EmployeeArticleNavigationModal extends StatefulWidget {
+  final List<RecyclingItem> articles;
+  final int initialIndex;
+  final MediaDatabase mediaDatabase;
+  final Function(RecyclingItem) onNavigateToDetails;
+  final Function(RecyclingItem) onArticleChange;
+
+  const _EmployeeArticleNavigationModal({
+    required this.articles,
+    required this.initialIndex,
+    required this.mediaDatabase,
+    required this.onNavigateToDetails,
+    required this.onArticleChange,
+  });
+
+  @override
+  State<_EmployeeArticleNavigationModal> createState() => _EmployeeArticleNavigationModalState();
+}
+
+class _EmployeeArticleNavigationModalState extends State<_EmployeeArticleNavigationModal> {
+  late int currentIndex;
+  Multimedia? currentPhoto;
+  bool isLoadingPhoto = false;
+
+  @override
+  void initState() {
+    super.initState();
+    currentIndex = widget.initialIndex;
+    _loadPhoto();
+  }
+
+  RecyclingItem get currentItem => widget.articles[currentIndex];
+
+  Future<void> _loadPhoto() async {
+    setState(() => isLoadingPhoto = true);
+    
+    try {
+      final urlPattern = 'articles/${currentItem.id}';
+      final photo = await widget.mediaDatabase.getMainPhotoByPattern(urlPattern);
+      
+      if (mounted) {
+        setState(() {
+          currentPhoto = photo;
+          isLoadingPhoto = false;
+        });
+      }
+    } catch (e) {
+      print('Error loading photo: $e');
+      if (mounted) {
+        setState(() => isLoadingPhoto = false);
+      }
+    }
+  }
+
+  void _goToPrevious() {
+    if (currentIndex > 0) {
+      setState(() {
+        currentIndex--;
+        currentPhoto = null;
+      });
+      _loadPhoto();
+      widget.onArticleChange(currentItem);
+    }
+  }
+
+  void _goToNext() {
+    if (currentIndex < widget.articles.length - 1) {
+      setState(() {
+        currentIndex++;
+        currentPhoto = null;
+      });
+      _loadPhoto();
+      widget.onArticleChange(currentItem);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.of(context).size.height * 0.85,
+      ),
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Drag handle
+          Container(
+            height: 6,
+            width: 50,
+            margin: const EdgeInsets.only(top: 12),
+            decoration: BoxDecoration(
+              color: Colors.grey[300],
+              borderRadius: BorderRadius.circular(3),
+            ),
+          ),
+          
+          // Navigation header
+          if (widget.articles.length > 1)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  IconButton(
+                    onPressed: currentIndex > 0 ? _goToPrevious : null,
+                    icon: const Icon(Icons.arrow_back),
+                    style: IconButton.styleFrom(
+                      backgroundColor: currentIndex > 0 
+                          ? const Color(0xFF2D8A8A).withOpacity(0.1)
+                          : Colors.grey[200],
+                    ),
+                  ),
+                  Text(
+                    '${currentIndex + 1} de ${widget.articles.length} artículos',
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFF2D8A8A),
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: currentIndex < widget.articles.length - 1 ? _goToNext : null,
+                    icon: const Icon(Icons.arrow_forward),
+                    style: IconButton.styleFrom(
+                      backgroundColor: currentIndex < widget.articles.length - 1
+                          ? const Color(0xFF2D8A8A).withOpacity(0.1)
+                          : Colors.grey[200],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          
+          Expanded(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Photo
+                  if (isLoadingPhoto)
+                    const Center(child: CircularProgressIndicator())
+                  else if (currentPhoto?.url != null)
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(12),
+                      child: Image.network(
+                        currentPhoto!.url!,
+                        height: 200,
+                        width: double.infinity,
+                        fit: BoxFit.cover,
+                      ),
+                    )
+                  else
+                    _buildPlaceholder(),
+                  const SizedBox(height: 16),
+                  
+                  // Title
+                  Text(
+                    currentItem.title,
+                    style: const TextStyle(
+                      fontSize: 24,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  
+                  // Category
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: Colors.blue.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(
+                              CategoryUtils.getCategoryIcon(currentItem.categoryName),
+                              size: 16,
+                              color: Colors.blue,
+                            ),
+                            const SizedBox(width: 6),
+                            Text(
+                              currentItem.categoryName,
+                              style: const TextStyle(
+                                color: Colors.blue,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  
+                  // Description
+                  if (currentItem.description != null) ...[
+                    const Text(
+                      'Descripción:',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      currentItem.description!,
+                      style: const TextStyle(fontSize: 14),
+                    ),
+                    const SizedBox(height: 16),
+                  ],
+                  
+                  // Address
+                  const Text(
+                    'Ubicación:',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      const Icon(Icons.location_on, color: Colors.red, size: 20),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          currentItem.address,
+                          style: const TextStyle(fontSize: 14),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 24),
+                  
+                  // View Details Button
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      onPressed: () => widget.onNavigateToDetails(currentItem),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF2D8A8A),
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                      child: const Text(
+                        'Ver Detalles Completos',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPlaceholder() {
+    return Container(
+      height: 200,
+      decoration: BoxDecoration(
+        color: Colors.grey[300],
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Center(
+        child: Icon(
+          CategoryUtils.getCategoryIcon(currentItem.categoryName),
           size: 60,
           color: Colors.grey[600],
         ),

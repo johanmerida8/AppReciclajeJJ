@@ -19,6 +19,7 @@ import 'package:reciclaje_app/services/recycling_data.dart';
 import 'package:reciclaje_app/utils/category_utils.dart';
 import 'package:reciclaje_app/screen/distribuidor/detail_recycle_screen.dart';
 import 'package:reciclaje_app/screen/empresa/company_notifications_screen.dart'; // ✅ Add import
+import 'package:reciclaje_app/components/schedule_pickup_dialog.dart'; // ✅ Add schedule dialog import
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class CompanyMapScreen extends StatefulWidget {
@@ -368,7 +369,7 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
     
     if (status == 'completado') return 'recogidos';
     if (status == 'en_proceso') return 'en_proceso';
-    if (status == 'asignado') return 'sin_asignar';
+    if (status == 'sin_asignar') return 'sin_asignar'; // ✅ Task created but no employee assigned yet
     if (status == 'solicitado') return 'en_espera'; // Request sent, waiting for distributor approval
     if (status == 'vencido') return 'vencidos';
     if (status == 'pendiente' || status == 'publicados') return 'publicados';
@@ -521,23 +522,9 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
               // Close the confirmation dialog first
               navigator.pop();
               
-              // Show loading indicator
-              showDialog(
-                context: context,
-                barrierDismissible: false,
-                builder: (context) => const Center(
-                  child: CircularProgressIndicator(
-                    color: Color(0xFF2D8A8A),
-                  ),
-                ),
-              );
-              
-              // Send request
+              // ✅ Call _sendRequestToDistributor which will show schedule dialog
               try {
                 await _sendRequestToDistributor(item);
-                
-                // Close loading indicator only
-                navigator.pop(); // Close loading indicator
                 
                 // Show success message
                 scaffoldMessenger.showSnackBar(
@@ -547,10 +534,10 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
                     duration: Duration(seconds: 3),
                   ),
                 );
-              } catch (e) {
-                // Close loading indicator only
-                navigator.pop(); // Close loading indicator
                 
+                // Refresh data to update UI
+                await _refreshData();
+              } catch (e) {
                 // Show error message
                 scaffoldMessenger.showSnackBar(
                   SnackBar(
@@ -565,7 +552,7 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
               backgroundColor: const Color(0xFF2D8A8A),
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
             ),
-            child: const Text('Enviar Solicitud', style: TextStyle(color: Colors.white)),
+            child: const Text('Continuar', style: TextStyle(color: Colors.white)),
           ),
         ],
       ),
@@ -573,13 +560,32 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
   }
 
   Future<void> _sendRequestToDistributor(RecyclingItem item) async {
+    // ✅ Show scheduling dialog to select day and time
+    final scheduleData = await showDialog<Map<String, String>>(
+      context: context,
+      builder: (context) => SchedulePickupDialog(
+        availableDays: item.availableDays,
+        availableTimeStart: item.availableTimeStart,
+        availableTimeEnd: item.availableTimeEnd,
+        articleName: item.title,
+      ),
+    );
+
+    if (scheduleData == null) return; // User cancelled
+
     try {
-      // Create request with status "pendiente"
+      // Parse the time string (HH:MM) and format as HH:MM:SS for database
+      final timeParts = scheduleData['time']!.split(':');
+      final scheduledTimeFormatted = '${timeParts[0].padLeft(2, '0')}:${timeParts[1].padLeft(2, '0')}:00';
+
+      // Create request with status "pendiente" and scheduled day/time
       final newRequest = Request(
         articleId: item.id,
         companyId: _companyId,
         status: 'pendiente',
         requestDate: DateTime.now(),
+        scheduledDay: scheduleData['day'], // ✅ Add scheduled day
+        scheduledTime: scheduledTimeFormatted, // ✅ Add scheduled time
         state: 1, // Active
         lastUpdate: DateTime.now(),
       );
@@ -587,14 +593,14 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
       await _requestDatabase.createRequest(newRequest);
       
       // Success - no need to refresh map as the request is on the distributor side
-      print('✅ Request sent successfully to distributor');
+      print('✅ Request sent successfully to distributor with schedule: ${scheduleData['day']} at ${scheduleData['time']}');
     } catch (e) {
       print('❌ Error sending request: $e');
       rethrow; // Re-throw to handle in calling code
     }
   }
 
-  /// ✅ Assign employee to approved request and create task
+  /// ✅ Assign employee to approved request and update task
   Future<void> _assignArticleToEmployee(
     RecyclingItem item, 
     int employeeId, 
@@ -605,21 +611,29 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
         throw Exception('Company ID not found');
       }
 
-      // Create task with requestID linking to the approved request
-      final task = Task(
-        employeeId: employeeId,
+      // ✅ Get existing task created by distributor with "sin_asignar" status
+      final existingTask = await _taskDatabase.getTaskByRequestId(approvedRequest.id!);
+
+      if (existingTask == null) {
+        throw Exception('No se encontró la tarea para esta solicitud');
+      }
+
+      // ✅ Update task to assign employee and change status to "en_proceso"
+      final updatedTask = Task(
+        idTask: existingTask.idTask,
+        employeeId: employeeId, // ✅ Assign employee
         articleId: item.id,
         companyId: _companyId,
-        requestId: approvedRequest.id, // ✅ Link to request with schedule
-        assignedDate: DateTime.now(),
-        workflowStatus: 'asignado',
+        requestId: approvedRequest.id,
+        assignedDate: existingTask.assignedDate,
+        workflowStatus: 'en_proceso', // ✅ Employee starts working immediately
         state: 1,
         lastUpdate: DateTime.now(),
       );
 
-      await _taskDatabase.createTask(task);
+      await _taskDatabase.updateTask(updatedTask);
       
-      print('✅ Task created successfully - Employee: $employeeId, Article: ${item.id}, Request: ${approvedRequest.id}');
+      print('✅ Task updated successfully - Employee: $employeeId assigned and working on Article: ${item.id}');
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -1766,7 +1780,12 @@ class _CompanyArticleModalState extends State<_CompanyArticleModal> {
       return ElevatedButton.icon(
         onPressed: widget.onAssignEmployee,
         icon: const Icon(Icons.send),
-        label: const Text('Solicitar'),
+        label: const Text(
+          'Solicitar',
+          style: TextStyle(
+            color: Colors.white,
+          ),
+        ),
         style: ElevatedButton.styleFrom(
           backgroundColor: const Color(0xFF2D8A8A),
           padding: const EdgeInsets.symmetric(vertical: 16),
@@ -1837,7 +1856,12 @@ class _CompanyArticleModalState extends State<_CompanyArticleModal> {
     return ElevatedButton.icon(
       onPressed: widget.onAssignEmployee,
       icon: const Icon(Icons.send),
-      label: const Text('Solicitar'),
+      label: const Text(
+        'Solicitar',
+        style: TextStyle(
+          color: Colors.white,
+        ),
+      ),
       style: ElevatedButton.styleFrom(
         backgroundColor: const Color(0xFF2D8A8A),
         padding: const EdgeInsets.symmetric(vertical: 16),

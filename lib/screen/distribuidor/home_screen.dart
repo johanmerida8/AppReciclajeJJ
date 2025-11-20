@@ -146,7 +146,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     // ✅ Mostrar diálogo si GPS está deshabilitado (solo si usuario no lo rechazó previamente)
     if ((!_isLocationServiceEnabled || !_hasLocationPermission) && !_userDismissedLocationDialog) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) {
+        // ✅ Verificar que el widget esté montado y sea la ruta activa
+        if (mounted && ModalRoute.of(context)?.isCurrent == true) {
           _showEnableLocationDialog();
         }
       });
@@ -392,6 +393,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   /// ✅ Mostrar diálogo para activar ubicación cuando la app inicia
   void _showEnableLocationDialog() {
+    // ✅ Verificar que la ruta actual sea HomeScreen antes de mostrar el diálogo
+    if (!mounted || ModalRoute.of(context)?.isCurrent != true) {
+      return;
+    }
+    
     showDialog(
       context: context,
       barrierDismissible: false,

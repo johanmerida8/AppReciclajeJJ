@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:reciclaje_app/auth/auth_service.dart';
 import 'package:reciclaje_app/database/users_database.dart';
+import 'package:reciclaje_app/database/media_database.dart';
+import 'package:reciclaje_app/model/multimedia.dart';
 import 'package:reciclaje_app/screen/distribuidor/detail_recycle_screen.dart';
 import 'package:reciclaje_app/model/recycling_items.dart';
 import 'package:reciclaje_app/utils/category_utils.dart';
@@ -18,6 +20,7 @@ class EmployeeNotificationsScreen extends StatefulWidget {
 class _EmployeeNotificationsScreenState extends State<EmployeeNotificationsScreen> {
   final _authService = AuthService();
   final _usersDatabase = UsersDatabase();
+  final _mediaDatabase = MediaDatabase();
 
   List<Map<String, dynamic>> _notifications = [];
   int? _employeeId;
@@ -102,6 +105,22 @@ class _EmployeeNotificationsScreenState extends State<EmployeeNotificationsScree
         });
 
         print('✅ Loaded ${_notifications.length} notifications for employee $_employeeId');
+        
+        // Load article photos for each notification
+        for (var notification in _notifications) {
+          final article = notification['article'] as Map<String, dynamic>?;
+          if (article != null) {
+            final articleId = article['idArticle'];
+            final articlePhotoPattern = 'articles/$articleId';
+            final articlePhoto = await _mediaDatabase.getMainPhotoByPattern(articlePhotoPattern);
+            notification['articlePhoto'] = articlePhoto;
+          }
+        }
+        
+        // Trigger rebuild after photos are loaded
+        if (mounted) {
+          setState(() {});
+        }
       }
     } catch (e) {
       print('❌ Error loading notifications: $e');
@@ -227,6 +246,7 @@ class _EmployeeNotificationsScreenState extends State<EmployeeNotificationsScree
     final request = notification['request'] as Map<String, dynamic>?;
     final category = article?['category'] as Map<String, dynamic>?;
     final assignedDate = notification['assignedDate'] as String?;
+    final articlePhoto = notification['articlePhoto'] as Multimedia?;
 
     // Parse data
     final articleName = article?['name'] ?? 'Artículo sin nombre';
@@ -283,20 +303,33 @@ class _EmployeeNotificationsScreenState extends State<EmployeeNotificationsScree
             // Header: Avatar + Title + Time
             Row(
               children: [
-                // Category icon
-                Container(
-                  width: 40,
-                  height: 40,
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF2D8A8A).withOpacity(0.15),
-                    borderRadius: BorderRadius.circular(20),
+                // Article photo
+                if (articlePhoto?.url != null)
+                  Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(8),
+                      image: DecorationImage(
+                        image: NetworkImage(articlePhoto!.url!),
+                        fit: BoxFit.cover,
+                      ),
+                    ),
+                  )
+                else
+                  Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF2D8A8A).withOpacity(0.15),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Icon(
+                      CategoryUtils.getCategoryIcon(categoryName),
+                      color: const Color(0xFF2D8A8A),
+                      size: 24,
+                    ),
                   ),
-                  child: Icon(
-                    CategoryUtils.getCategoryIcon(categoryName),
-                    color: const Color(0xFF2D8A8A),
-                    size: 24,
-                  ),
-                ),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Column(

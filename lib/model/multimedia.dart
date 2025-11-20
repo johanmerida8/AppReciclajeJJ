@@ -54,6 +54,6 @@ class Multimedia {
 
   @override
   String toString() {
-    return 'Photo{id: $id, url: $url, fileName: $fileName, filePath: $filePath, fileSize: $fileSize, mimeType: $mimeType, isMain: $isMain, uploadOrder: $uploadOrder, entityType: $entityType, entityID: $entityId}';
+    return 'Multimedia{id: $id, url: $url, fileName: $fileName, filePath: $filePath, fileSize: $fileSize, mimeType: $mimeType, isMain: $isMain, uploadOrder: $uploadOrder, entityType: $entityType, entityID: $entityId}';
   }
 }

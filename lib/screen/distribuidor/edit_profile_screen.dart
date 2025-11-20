@@ -57,9 +57,17 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     try {
       final userId = widget.user.id!;
       final userRole = widget.user.role?.toLowerCase() ?? 'user';
-      final urlPattern = 'users/$userRole/$userId/avatars/';
       
-      final avatar = await mediaDatabase.getMainPhotoByPattern(urlPattern);
+      // ✅ Try new path first (with role)
+      String urlPattern = 'users/$userRole/$userId/avatars/';
+      Multimedia? avatar = await mediaDatabase.getMainPhotoByPattern(urlPattern);
+      
+      // ✅ If not found, try old path (without role) for backward compatibility
+      if (avatar == null) {
+        urlPattern = 'users/$userId/avatars/';
+        avatar = await mediaDatabase.getMainPhotoByPattern(urlPattern);
+        print('⚠️ Avatar found using old path structure: $urlPattern');
+      }
       
       if (mounted) {
         setState(() {
@@ -298,8 +306,8 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
         mimeType: mimeType,
         isMain: true,
         uploadOrder: 1,
-        entityType: userRole, // ✅ Use role as entity type (distribuidor, employee, admin-empresa)
-        entityId: userId,
+        entityType: userRole, // ✅ Entity type is 'user' for user avatars
+        entityId: userId,   // ✅ Entity ID is the user's ID
       );
       
       print('💾 Saving avatar to multimedia table...');

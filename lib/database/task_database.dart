@@ -14,6 +14,16 @@ class TaskDatabase {
     primaryKey: ['idTask']
   ).map((data) => data.map((taskMap) => Task.fromMap(taskMap)).toList());
 
+  // ✅ Get task by request ID
+  Future<Task?> getTaskByRequestId(int requestId) async {
+    final response = await database
+        .select()
+        .eq('requestID', requestId)
+        .maybeSingle();
+    
+    return response != null ? Task.fromMap(response) : null;
+  }
+
   // update
   Future updateTask(Task oldTask) async {
     await database.update(oldTask.toMap()).eq('idTask', oldTask.idTask!);

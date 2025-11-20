@@ -115,9 +115,9 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
             t['workflowStatus'] == 'completado'
         ).length;
 
-        // Get today's tasks (assigned or in progress)
+        // Get today's tasks (only in progress for employee view)
         final today = taskList.where((t) => 
-            (t['workflowStatus'] == 'asignado' || t['workflowStatus'] == 'en_proceso')
+            t['workflowStatus'] == 'en_proceso'
         ).toList();
 
         setState(() {

@@ -78,10 +78,10 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
             }
             
             // Load company logo from multimedia table (company-based path)
-            if (currentCompany?.companyId != null && currentCompany?.nameCompany != null) {
-              final companyName = currentCompany!.nameCompany!;
+            if (currentCompany?.companyId != null) {
               final companyId = currentCompany!.companyId!;
-              final companyAvatarPattern = 'empresa/$companyName/$companyId/avatar/';
+              // Use only companyId pattern to avoid issues with special characters in company name
+              final companyAvatarPattern = 'empresa/$companyId/avatar/';
               companyAvatar = await mediaDatabase.getMainPhotoByPattern(companyAvatarPattern);
               print('🏢 Company logo pattern: $companyAvatarPattern');
               print('🏢 Company logo: ${companyAvatar?.url ?? "No company logo"}');

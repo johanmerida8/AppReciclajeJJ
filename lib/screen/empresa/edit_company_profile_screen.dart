@@ -64,9 +64,9 @@ class _EditCompanyProfileScreenState extends State<EditCompanyProfileScreen> {
       if (widget.isEditingCompany) {
         // Load company logo
         if (widget.company?.companyId == null) return;
-        final companyName = widget.company!.nameCompany!;
         final companyId = widget.company!.companyId!;
-        pattern = 'empresa/$companyName/$companyId/avatar/';
+        // Use only companyId pattern to avoid issues with special characters
+        pattern = 'empresa/$companyId/avatar/';
         print('📂 Loading company logo with pattern: $pattern');
       } else {
         // Load admin user avatar
@@ -199,11 +199,11 @@ class _EditCompanyProfileScreenState extends State<EditCompanyProfileScreen> {
       if (widget.isEditingCompany) {
         // Upload company logo
         final companyId = widget.company!.companyId!;
-        final companyName = widget.company!.nameCompany!;
+        // final companyName = widget.company!.nameCompany!;
         print('🏢 Processing company logo upload for company: $companyId');
         
         fileName = 'logo_${timestamp}.$extension';
-        filePath = 'empresa/$companyName/$companyId/avatar/$fileName';
+        filePath = 'empresa/$companyId/avatar/$fileName';
         entityType = 'empresa';
         entityId = companyId;
       } else {

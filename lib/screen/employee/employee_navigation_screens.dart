@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 // import 'package:reciclaje_app/screen/distribuidor/edit_profile_screen.dart';
 import 'package:reciclaje_app/screen/distribuidor/profile_screen.dart';
 import 'package:reciclaje_app/screen/employee/employee_home_screen.dart';
-import 'package:reciclaje_app/screen/employee/employee_tasks_screen.dart';
+// import 'package:reciclaje_app/screen/employee/employee_tasks_screen.dart';
 import 'package:reciclaje_app/screen/employee/employee_map_screen.dart';
 // import 'package:reciclaje_app/screen/employee/employee_profile_screen.dart';
 

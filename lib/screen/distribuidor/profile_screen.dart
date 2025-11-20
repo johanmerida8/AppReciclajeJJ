@@ -54,8 +54,18 @@ class _ProfileScreenState extends State<ProfileScreen> {
         // Load user avatar from multimedia table
         if (currentUser?.id != null) {
           final userRole = currentUser!.role?.toLowerCase() ?? 'user';
-          final avatarPattern = 'users/$userRole/${currentUser!.id}/avatars/';
+          
+          // ✅ Try new path first (with role)
+          String avatarPattern = 'users/$userRole/${currentUser!.id}/avatars/';
           currentUserAvatar = await mediaDatabase.getMainPhotoByPattern(avatarPattern);
+          
+          // ✅ If not found, try old path (without role) for backward compatibility
+          if (currentUserAvatar == null) {
+            avatarPattern = 'users/${currentUser!.id}/avatars/';
+            currentUserAvatar = await mediaDatabase.getMainPhotoByPattern(avatarPattern);
+            print('⚠️ Avatar found using old path structure: $avatarPattern');
+          }
+          
           print('📸 User avatar: ${currentUserAvatar?.url ?? "No avatar"}');
         }
         

@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:reciclaje_app/auth/auth_service.dart';
 import 'package:reciclaje_app/database/media_database.dart';
 import 'package:reciclaje_app/database/users_database.dart';
+import 'package:reciclaje_app/database/task_database.dart'; // ✅ Add task database
 import 'package:reciclaje_app/model/multimedia.dart';
+import 'package:reciclaje_app/model/task.dart'; // ✅ Add task model
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class NotificationsScreen extends StatefulWidget {
@@ -16,6 +18,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   final _authService = AuthService();
   final _usersDatabase = UsersDatabase();
   final _mediaDatabase = MediaDatabase();
+  final _taskDatabase = TaskDatabase(); // ✅ Add task database
 
   List<Map<String, dynamic>> _pendingRequests = [];
   bool _isLoading = true;
@@ -67,8 +70,8 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
             final company = request['company'] as Map<String, dynamic>?;
             if (company != null) {
               final companyId = company['idCompany'];
-              final companyName = company['nameCompany'];
-              final logoPattern = 'empresa/$companyName/$companyId/avatar/';
+              // Use only companyId pattern to avoid issues with special characters
+              final logoPattern = 'empresa/$companyId/avatar/';
               final logo = await _mediaDatabase.getMainPhotoByPattern(logoPattern);
               request['companyLogo'] = logo;
             }
@@ -89,6 +92,12 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   Future<void> _handleAccept(Map<String, dynamic> requestData) async {
     try {
       final requestId = requestData['idRequest'];
+      final articleId = requestData['article']?['idArticle'] as int?;
+      final companyId = requestData['company']?['idCompany'] as int?;
+
+      if (articleId == null || companyId == null) {
+        throw Exception('Missing article or company ID');
+      }
 
       // Update request status to "aprobado"
       await Supabase.instance.client
@@ -98,6 +107,21 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
             'lastUpdate': DateTime.now().toIso8601String(),
           })
           .eq('idRequest', requestId);
+
+      // ✅ Create task with "sin_asignar" status (no employee assigned yet)
+      final task = Task(
+        articleId: articleId,
+        companyId: companyId,
+        requestId: requestId,
+        assignedDate: DateTime.now(),
+        workflowStatus: 'sin_asignar', // ✅ No employee assigned yet
+        state: 1, // Active
+        lastUpdate: DateTime.now(),
+      );
+
+      await _taskDatabase.createTask(task);
+
+      print('✅ Task created with "sin_asignar" status - Article: $articleId, Company: $companyId, Request: $requestId');
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

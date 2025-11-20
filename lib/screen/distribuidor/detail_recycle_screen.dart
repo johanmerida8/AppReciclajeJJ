@@ -32,6 +32,7 @@ import 'package:reciclaje_app/model/article.dart';
 import 'package:reciclaje_app/model/category.dart';
 // import 'package:reciclaje_app/model/deliver.dart';
 import 'package:reciclaje_app/screen/distribuidor/navigation_screens.dart';
+import 'package:reciclaje_app/screen/employee/employee_navigation_screens.dart';
 import 'package:reciclaje_app/services/workflow_service.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -69,6 +70,21 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
   bool _isLoadingRequest = false; // ✅ Loading request status
   List<Map<String, dynamic>> _employees = []; // ✅ Add employees list for company
   Set<int> _assignedEmployeeIds = {}; // ✅ Track employees with active tasks
+  
+  // ✅ Employee task tracking
+  String? _employeeScheduledDay;
+  String? _employeeScheduledTime;
+  int? _employeeTaskId; // Track task ID for updates
+  String? _employeeTaskStatus; // Track task workflow status
+  
+  // ✅ Distributor task tracking (for article owner)
+  int? _distributorTaskId; // Track task ID for distributor
+  String? _distributorTaskStatus; // Track distributor's task workflow status
+  int? _distributorEmployeeId; // Track which employee is assigned (employeeID from employees table)
+  int? _distributorEmployeeUserId; // Track employee's userID for review (userID from users table)
+  
+  // ✅ Real-time subscription for task updates
+  RealtimeChannel? _taskSubscription;
   
   List<Category> _categories = [];
   List<Multimedia> _photos = [];
@@ -118,6 +134,8 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
     _currentUserEmail = _authService.getCurrentUserEmail();
     _loadUserRoleAndRequest(); // ✅ Load user role and check for existing request
     _loadPendingRequests(); // ✅ Load pending requests for this article
+    _loadEmployeeTask(); // ✅ Load employee's task if employee
+    _loadDistributorTask(); // ✅ Load distributor's task if owner
     // ❌ DON'T load employees here - they need _companyId to be set first
   }
 
@@ -166,6 +184,9 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
   
   /// ✅ Check if current user is admin-empresa
   bool get _isCompanyAdmin => _currentUserRole?.toLowerCase() == 'admin-empresa';
+  
+  /// ✅ Check if current user is employee
+  bool get _isEmployee => _currentUserRole?.toLowerCase() == 'empleado';
 
   /// ✅ Load user role and check for existing request
   Future<void> _loadUserRoleAndRequest() async {
@@ -270,8 +291,8 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
         final company = request['company'] as Map<String, dynamic>?;
         if (company != null) {
           final companyId = company['idCompany'];
-          final companyName = company['nameCompany'];
-          final logoPattern = 'empresa/$companyName/$companyId/avatar/';
+          // Use only companyId pattern to avoid issues with special characters
+          final logoPattern = 'empresa/$companyId/avatar/';
           final logo = await mediaDatabase.getMainPhotoByPattern(logoPattern);
           request['companyLogo'] = logo;
         }
@@ -329,6 +350,370 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
     } catch (e) {
       print('❌ Error loading assigned employees: $e');
     }
+  }
+
+  /// ✅ Load employee's task to get scheduled day and time
+  Future<void> _loadEmployeeTask() async {
+    if (_currentUserEmail == null) return;
+
+    try {
+      // Get current user
+      final user = await usersDatabase.getUserByEmail(_currentUserEmail!);
+      if (user == null || user.role?.toLowerCase() != 'empleado') return;
+
+      // Get employee ID
+      final employeeData = await Supabase.instance.client
+          .from('employees')
+          .select('idEmployee')
+          .eq('userID', user.id!)
+          .maybeSingle();
+
+      if (employeeData == null) return;
+
+      final employeeId = employeeData['idEmployee'] as int;
+
+      // Get task for this employee and article with request details
+      final taskData = await Supabase.instance.client
+          .from('tasks')
+          .select('''
+            *,
+            request:requestID(
+              scheduledDay,
+              scheduledTime
+            )
+          ''')
+          .eq('employeeID', employeeId)
+          .eq('articleID', widget.item.id)
+          .eq('workflowStatus', 'en_proceso')
+          .maybeSingle();
+
+      if (taskData != null && mounted) {
+        final request = taskData['request'] as Map<String, dynamic>?;
+        setState(() {
+          _employeeTaskId = taskData['idTask'] as int?;
+          _employeeTaskStatus = taskData['workflowStatus'] as String?;
+          _employeeScheduledDay = request?['scheduledDay'] as String?;
+          _employeeScheduledTime = request?['scheduledTime'] as String?;
+        });
+        print('✅ Loaded employee task (ID: $_employeeTaskId, Status: $_employeeTaskStatus) - Scheduled: $_employeeScheduledDay at $_employeeScheduledTime');
+        
+        // ✅ Setup real-time listener for task status changes (for employee)
+        _setupEmployeeTaskStatusListener();
+      }
+    } catch (e) {
+      print('❌ Error loading employee task: $e');
+    }
+  }
+
+  /// ✅ Setup real-time listener for employee task status changes
+  void _setupEmployeeTaskStatusListener() {
+    if (_employeeTaskId == null) return;
+
+    // Subscribe to task updates
+    _taskSubscription = Supabase.instance.client
+        .channel('task_status_employee_$_employeeTaskId')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.update,
+          schema: 'public',
+          table: 'tasks',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'idTask',
+            value: _employeeTaskId,
+          ),
+          callback: (payload) {
+            final newData = payload.newRecord;
+            final newStatus = newData['workflowStatus'] as String?;
+            
+            print('🔔 Employee task status changed to: $newStatus');
+            
+            if (mounted && newStatus != _employeeTaskStatus) {
+              setState(() {
+                _employeeTaskStatus = newStatus;
+              });
+              
+              // ✅ Show notification dialog when distributor confirms
+              if (newStatus == 'esperando_confirmacion_empleado') {
+                _showDistributorConfirmedNotification();
+              }
+            }
+          },
+        )
+        .subscribe();
+    
+    print('🔔 Real-time listener setup for employee task $_employeeTaskId');
+  }
+
+  /// ✅ Show notification when distributor confirms delivery
+  void _showDistributorConfirmedNotification() {
+    if (!mounted) return;
+    
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: Colors.green.shade100,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Icon(
+                Icons.notifications_active,
+                color: Colors.green.shade700,
+              ),
+            ),
+            const SizedBox(width: 12),
+            const Expanded(
+              child: Text(
+                'Distribuidor Confirmó',
+                style: TextStyle(fontSize: 18),
+              ),
+            ),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'El distribuidor ha confirmado que entregó el objeto:',
+              style: TextStyle(
+                fontSize: 15,
+                color: Colors.grey[700],
+              ),
+            ),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.green.shade50,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.green.shade200),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.inventory_2, color: Color(0xFF2D8A8A)),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      '"${widget.item.title}"',
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              '¿Deseas confirmar que recibiste el objeto?',
+              style: TextStyle(
+                fontSize: 14,
+                color: Colors.grey[600],
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Después'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              _showConfirmArrivalDialog();
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.amber,
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('Confirmar Ahora'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// ✅ Load distributor's task to check if they need to confirm delivery
+  Future<void> _loadDistributorTask() async {
+    if (!_isOwner) return; // Only load for article owner (distributor)
+
+    try {
+      // Query tasks table for this article where distributor needs to confirm delivery
+      // ✅ Join with employees table to get the userID
+      final taskData = await Supabase.instance.client
+          .from('tasks')
+          .select('''
+            idTask, 
+            workflowStatus, 
+            employeeID,
+            employees:employeeID(userID)
+          ''')
+          .eq('articleID', widget.item.id)
+          .eq('state', 1)
+          .maybeSingle();
+
+      if (taskData != null) {
+        final employeeData = taskData['employees'] as Map<String, dynamic>?;
+        
+        setState(() {
+          _distributorTaskId = taskData['idTask'] as int?;
+          _distributorTaskStatus = taskData['workflowStatus'] as String?;
+          _distributorEmployeeId = taskData['employeeID'] as int?;
+          _distributorEmployeeUserId = employeeData?['userID'] as int?; // ✅ Get userID for review
+        });
+        
+        print('✅ Loaded distributor task (ID: $_distributorTaskId, Status: $_distributorTaskStatus, Employee UserID: $_distributorEmployeeUserId)');
+        
+        // ✅ Setup real-time listener for task status changes
+        _setupTaskStatusListener();
+      } else {
+        print('ℹ️ No active task found for distributor on this article');
+      }
+    } catch (e) {
+      print('❌ Error loading distributor task: $e');
+    }
+  }
+
+  /// ✅ Setup real-time listener for task status changes
+  void _setupTaskStatusListener() {
+    if (_distributorTaskId == null) return;
+
+    // Subscribe to task updates
+    _taskSubscription = Supabase.instance.client
+        .channel('task_status_${_distributorTaskId}')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.update,
+          schema: 'public',
+          table: 'tasks',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'idTask',
+            value: _distributorTaskId,
+          ),
+          callback: (payload) {
+            final newData = payload.newRecord;
+            final newStatus = newData['workflowStatus'] as String?;
+            
+            print('🔔 Task status changed to: $newStatus');
+            
+            if (mounted && newStatus != _distributorTaskStatus) {
+              setState(() {
+                _distributorTaskStatus = newStatus;
+              });
+              
+              // ✅ Show notification dialog when employee confirms
+              if (newStatus == 'esperando_confirmacion_distribuidor') {
+                _showEmployeeConfirmedNotification();
+              }
+            }
+          },
+        )
+        .subscribe();
+    
+    print('🔔 Real-time listener setup for task $_distributorTaskId');
+  }
+
+  /// ✅ Show notification when employee confirms arrival
+  void _showEmployeeConfirmedNotification() {
+    if (!mounted) return;
+    
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: Colors.green.shade100,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Icon(
+                Icons.notifications_active,
+                color: Colors.green.shade700,
+              ),
+            ),
+            const SizedBox(width: 12),
+            const Expanded(
+              child: Text(
+                'Empleado Confirmó',
+                style: TextStyle(fontSize: 18),
+              ),
+            ),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'El empleado ha confirmado que recibió el objeto:',
+              style: TextStyle(
+                fontSize: 15,
+                color: Colors.grey[700],
+              ),
+            ),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.green.shade50,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.green.shade200),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.inventory_2, color: Color(0xFF2D8A8A)),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      '"${widget.item.title}"',
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              '¿Deseas confirmar que entregaste el objeto?',
+              style: TextStyle(
+                fontSize: 14,
+                color: Colors.grey[600],
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Después'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              _showConfirmDeliveryDialog();
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF2D8A8A),
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('Confirmar Ahora'),
+          ),
+        ],
+      ),
+    );
   }
 
   /// ✅ Handle accept request - now with employee assignment option
@@ -559,14 +944,11 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
                         if (confirmed == true) {
                           Navigator.pop(ctx); // Close employee selector
                           
-                          // Convert Request to Map format for _acceptAndAssignEmployee
-                          final requestData = {
-                            'idRequest': approvedRequest.id,
-                            'scheduledDay': approvedRequest.scheduledDay,
-                            'scheduledTime': approvedRequest.scheduledTime,
-                          };
+                          // Extract required parameters from approvedRequest
+                          final requestId = approvedRequest.id!;
+                          final companyId = approvedRequest.companyId!;
                           
-                          await _acceptAndAssignEmployee(requestData, employeeId);
+                          await _assignEmployeeToApprovedRequest(requestId, employeeId, companyId);
                         }
                       } else {
                         print('❌ Error: employeeId is null');
@@ -714,7 +1096,7 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
                               ),
                               ElevatedButton(
                                 onPressed: () => Navigator.pop(confirmCtx, true),
-                                style: ElevatedButton.styleFrom(
+                                style: ElevatedButton.styleFrom(  
                                   backgroundColor: const Color(0xFF2D8A8A),
                                 ),
                                 child: const Text('Asignar'),
@@ -725,7 +1107,13 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
 
                         if (confirmed == true) {
                           Navigator.pop(ctx); // Close employee selector
-                          await _acceptAndAssignEmployee(request, employeeId);
+                          
+                          // Extract required parameters from request
+                          final requestId = request['idRequest'] as int;
+                          final company = request['company'] as Map<String, dynamic>?;
+                          final companyId = company?['idCompany'] as int;
+                          
+                          await _assignEmployeeToApprovedRequest(requestId, employeeId, companyId);
                         }
                       } else {
                         print('❌ Error: employeeId is null');
@@ -747,49 +1135,830 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
   }
 
   /// ✅ Accept request and assign employee to task
-  Future<void> _acceptAndAssignEmployee(Map<String, dynamic> requestData, int employeeId) async {
-    try {
-      final requestId = requestData['idRequest'] as int;
+  // Future<void> _acceptAndAssignEmployee(Map<String, dynamic> requestData, int employeeId) async {
+  //   try {
+  //     final requestId = requestData['idRequest'] as int;
       
-      // First approve the request - update via Supabase directly
-      await Supabase.instance.client
-          .from('request')
-          .update({'status': 'aprobado', 'lastUpdate': DateTime.now().toIso8601String()})
-          .eq('idRequest', requestId);
+  //     // ✅ Use widget.item.id for articleId since we're on the detail screen
+  //     final articleId = widget.item.id;
+      
+  //     // ✅ Try to get companyId from requestData, or from the request itself
+  //     int? companyId = requestData['company']?['idCompany'] as int?;
+      
+  //     // If not available in requestData, get it from the request directly
+  //     if (companyId == null) {
+  //       final requestFromDb = await Supabase.instance.client
+  //           .from('request')
+  //           .select('companyID')
+  //           .eq('idRequest', requestId)
+  //           .single();
+  //       companyId = requestFromDb['companyID'] as int;
+  //     }
+      
+  //     // First approve the request - update via Supabase directly
+  //     await Supabase.instance.client
+  //         .from('request')
+  //         .update({'status': 'aprobado', 'lastUpdate': DateTime.now().toIso8601String()})
+  //         .eq('idRequest', requestId);
 
-      // Create task with requestID linking to the approved request
-      final task = Task(
-        employeeId: employeeId,
+  //     // ✅ Create task with employee assigned and "en_proceso" status
+  //     final task = Task(
+  //       employeeId: employeeId,
+  //       articleId: articleId,
+  //       companyId: companyId,
+  //       requestId: requestId,
+  //       assignedDate: DateTime.now(),
+  //       workflowStatus: 'en_proceso', // ✅ Employee starts working immediately
+  //       state: 1,
+  //       lastUpdate: DateTime.now(),
+  //     );
+
+  //     await taskDatabase.createTask(task);
+      
+  //     print('✅ Task created with employee assigned - Employee: $employeeId working on Article: $articleId');
+
+  //     // ✅ Refresh assigned employees list
+  //     await _loadAssignedEmployees();
+
+  //     setState(() {
+  //       _pendingRequests.removeWhere((r) => r['idRequest'] == requestId);
+  //     });
+
+  //     if (mounted) {
+  //       ScaffoldMessenger.of(context).showSnackBar(
+  //         const SnackBar(
+  //           content: Text('✅ Solicitud aprobada y empleado asignado'),
+  //           backgroundColor: Colors.green,
+  //         ),
+  //       );
+  //     }
+  //   } catch (e) {
+  //     print('❌ Error accepting and assigning: $e');
+  //     if (mounted) {
+  //       ScaffoldMessenger.of(context).showSnackBar(
+  //         SnackBar(
+  //           content: Text('❌ Error: $e'),
+  //           backgroundColor: Colors.red,
+  //         ),
+  //       );
+  //     }
+  //   }
+  // }
+
+  /// ✅ Assign employee to an already approved request (update existing task)
+  Future<void> _assignEmployeeToApprovedRequest(int requestId, int employeeId, int companyId) async {
+    try {
+      // ✅ Get existing task created by distributor with "sin_asignar" status
+      final existingTask = await taskDatabase.getTaskByRequestId(requestId);
+
+      if (existingTask == null) {
+        throw Exception('No se encontró la tarea para esta solicitud');
+      }
+
+      // ✅ Update task to assign employee and change status to "en_proceso"
+      final updatedTask = Task(
+        idTask: existingTask.idTask,
+        employeeId: employeeId, // ✅ Assign employee
         articleId: widget.item.id,
-        companyId: _companyId,
-        requestId: requestId, // ✅ Link to request with schedule
-        assignedDate: DateTime.now(),
-        workflowStatus: 'asignado',
+        companyId: companyId,
+        requestId: requestId,
+        assignedDate: existingTask.assignedDate,
+        workflowStatus: 'en_proceso', // ✅ Employee starts working immediately
         state: 1,
         lastUpdate: DateTime.now(),
       );
 
-      await taskDatabase.createTask(task);
+      await taskDatabase.updateTask(updatedTask);
       
-      print('✅ Task created - Employee: $employeeId, Article: ${widget.item.id}, Request: $requestId');
+      print('✅ Task updated successfully - Employee: $employeeId assigned and working on Article: ${widget.item.id}');
 
       // ✅ Refresh assigned employees list
       await _loadAssignedEmployees();
 
-      setState(() {
-        _pendingRequests.removeWhere((r) => r['idRequest'] == requestId);
-      });
-
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('✅ Solicitud aprobada y empleado asignado'),
+            content: Text('✅ Empleado asignado exitosamente'),
             backgroundColor: Colors.green,
           ),
         );
       }
     } catch (e) {
-      print('❌ Error accepting and assigning: $e');
+      print('❌ Error assigning employee: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('❌ Error al asignar empleado: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  /// ✅ Step 1: Confirm arrival at meeting point
+  void _showConfirmArrivalDialog() {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: const Color(0xFF2D8A8A).withOpacity(0.1),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const Icon(
+                Icons.location_on,
+                color: Color(0xFF2D8A8A),
+              ),
+            ),
+            const SizedBox(width: 12),
+            const Expanded(
+              child: Text(
+                'Punto de Encuentro',
+                style: TextStyle(fontSize: 18),
+              ),
+            ),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              '¿Te encuentras en el punto de encuentro?',
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.grey.shade100,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.place, color: Color(0xFF2D8A8A)),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      '"${widget.item.address}"',
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'Importante: Confirma solo si ya estás en el lugar. Esta acción notificará al otro participante que ya te encuentras en el lugar.',
+              style: TextStyle(
+                fontSize: 13,
+                color: Colors.grey[600],
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            style: TextButton.styleFrom(
+              foregroundColor: Colors.grey,
+            ),
+            child: const Text('rechazar'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              _showConfirmObjectReceivedDialog();
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF2D8A8A),
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('confirmar'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// ✅ Step 2: Confirm object received
+  void _showConfirmObjectReceivedDialog() {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: const Color(0xFF2D8A8A).withOpacity(0.1),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const Icon(
+                Icons.check_circle_outline,
+                color: Color(0xFF2D8A8A),
+              ),
+            ),
+            const SizedBox(width: 12),
+            const Expanded(
+              child: Text(
+                'Confirmar Entrega',
+                style: TextStyle(fontSize: 18),
+              ),
+            ),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              '¿Recibiste el objeto?',
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.grey.shade100,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.inventory_2, color: Color(0xFF2D8A8A)),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      '"${widget.item.title}"',
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'Importante: confirma solo si realmente recogiste el objeto del usuario.',
+              style: TextStyle(
+                fontSize: 13,
+                color: Colors.grey[600],
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            style: TextButton.styleFrom(
+              foregroundColor: Colors.grey,
+            ),
+            child: const Text('rechazar'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              _showRatingDialog();
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF2D8A8A),
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('confirmar'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// ✅ Step 3: Submit rating and complete task
+  void _showRatingDialog() {
+    int rating = 0;
+    final commentController = TextEditingController();
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setState) => AlertDialog(
+          title: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.amber.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Icon(
+                  Icons.star,
+                  color: Colors.amber,
+                ),
+              ),
+              const SizedBox(width: 12),
+              const Expanded(
+                child: Text(
+                  'Calificar entrega',
+                  style: TextStyle(fontSize: 18),
+                ),
+              ),
+            ],
+          ),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  '¿Cómo fue tu experiencia de la entrega?',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 20),
+                // Star rating
+                Center(
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: List.generate(5, (index) {
+                      return IconButton(
+                        iconSize: 40,
+                        onPressed: () {
+                          setState(() {
+                            rating = index + 1;
+                          });
+                        },
+                        icon: Icon(
+                          index < rating ? Icons.star : Icons.star_border,
+                          color: Colors.amber,
+                        ),
+                      );
+                    }),
+                  ),
+                ),
+                const SizedBox(height: 20),
+                // Comment input
+                const Text(
+                  'Comenta tu experiencia con la entrega',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: commentController,
+                  maxLines: 4,
+                  maxLength: 200,
+                  decoration: InputDecoration(
+                    hintText: 'Escribe tu comentario...',
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: const BorderSide(
+                        color: Color(0xFF2D8A8A),
+                        width: 2,
+                      ),
+                    ),
+                  ),
+                ),
+                Text(
+                  '${commentController.text.length}/200',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Colors.grey[600],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            ElevatedButton(
+              onPressed: rating > 0
+                  ? () async {
+                      Navigator.pop(ctx);
+                      await _submitReviewAndCompleteTask(
+                        rating,
+                        commentController.text.trim(),
+                      );
+                    }
+                  : null,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF2D8A8A),
+                foregroundColor: Colors.white,
+                minimumSize: const Size(double.infinity, 45),
+              ),
+              child: const Text('Calificar'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// ✅ Distributor: Confirm object delivery
+  void _showConfirmDeliveryDialog() {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: const Color(0xFF2D8A8A).withOpacity(0.1),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const Icon(
+                Icons.assignment_turned_in,
+                color: Color(0xFF2D8A8A),
+              ),
+            ),
+            const SizedBox(width: 12),
+            const Expanded(
+              child: Text(
+                'Confirmar Entrega',
+                style: TextStyle(fontSize: 18),
+              ),
+            ),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              '¿Entregaste el objeto?',
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.grey.shade100,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.inventory_2, color: Color(0xFF2D8A8A)),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      '"${widget.item.title}"',
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'Importante: confirma solo si realmente entregaste el objeto a la empresa.',
+              style: TextStyle(
+                fontSize: 13,
+                color: Colors.grey[600],
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            style: TextButton.styleFrom(
+              foregroundColor: Colors.grey,
+            ),
+            child: const Text('rechazar'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              _showDistributorRatingDialog();
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF2D8A8A),
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('confirmar'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// ✅ Distributor: Submit rating for employee/company
+  void _showDistributorRatingDialog() {
+    int rating = 0;
+    final commentController = TextEditingController();
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text(
+            'Califica la experiencia',
+            style: TextStyle(fontSize: 18),
+          ),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  '¿Cómo fue tu experiencia con la empresa?',
+                  style: TextStyle(fontSize: 14),
+                ),
+                const SizedBox(height: 16),
+                // Star rating
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: List.generate(5, (index) {
+                    return IconButton(
+                      onPressed: () {
+                        setDialogState(() {
+                          rating = index + 1;
+                        });
+                      },
+                      icon: Icon(
+                        index < rating ? Icons.star : Icons.star_border,
+                        color: Colors.amber,
+                        size: 36,
+                      ),
+                    );
+                  }),
+                ),
+                const SizedBox(height: 16),
+                // Comment field
+                TextField(
+                  controller: commentController,
+                  maxLength: 200,
+                  maxLines: 3,
+                  decoration: InputDecoration(
+                    hintText: 'Escribe un comentario (opcional)',
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: const BorderSide(color: Color(0xFF2D8A8A)),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              style: TextButton.styleFrom(
+                foregroundColor: Colors.grey,
+              ),
+              child: const Text('Cancelar'),
+            ),
+            ElevatedButton(
+              onPressed: rating > 0
+                  ? () {
+                      Navigator.pop(ctx);
+                      _submitDistributorReviewAndCompleteTask(
+                        rating,
+                        commentController.text.trim(),
+                      );
+                    }
+                  : null,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF2D8A8A),
+                foregroundColor: Colors.white,
+              ),
+              child: const Text('Enviar'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// ✅ Distributor: Submit review and complete task
+  Future<void> _submitDistributorReviewAndCompleteTask(int rating, String comment) async {
+    if (_distributorTaskId == null || _currentUserId == null || _distributorEmployeeUserId == null) {
+      print('❌ Missing required data for distributor review');
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('❌ Error: Información del empleado no disponible'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
+    try {
+      // Show loading
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => const Center(
+          child: CircularProgressIndicator(color: Color(0xFF2D8A8A)),
+        ),
+      );
+
+      // Create review - distributor reviews the employee/company
+      // ✅ Use _distributorEmployeeUserId (userID) instead of _distributorEmployeeId (employeeID)
+      await Supabase.instance.client.from('reviews').insert({
+        'starID': rating,
+        'articleID': widget.item.id,
+        'senderID': _currentUserId, // Distributor sending review
+        'receiverID': _distributorEmployeeUserId, // Employee's userID receiving review
+        'comment': comment.isEmpty ? null : comment,
+        'state': 1,
+        'created_at': DateTime.now().toIso8601String(),
+      });
+
+      print('✅ Distributor review created successfully');
+
+      // ✅ Check if employee has already confirmed (status should be 'esperando_confirmacion_distribuidor')
+      final taskData = await Supabase.instance.client
+          .from('tasks')
+          .select('workflowStatus')
+          .eq('idTask', _distributorTaskId!)
+          .single();
+
+      final currentStatus = taskData['workflowStatus'] as String?;
+      
+      // Only mark as completado if employee has confirmed (status is 'esperando_confirmacion_distribuidor')
+      // Otherwise, mark as 'esperando_confirmacion_empleado'
+      String newStatus;
+      String message;
+      
+      if (currentStatus == 'esperando_confirmacion_distribuidor') {
+        // Employee already confirmed, now distributor confirms → completado
+        newStatus = 'completado';
+        message = '✅ ¡Entrega completada exitosamente!';
+        print('✅ Task marked as completado - both parties confirmed');
+      } else {
+        // Distributor confirms first, waiting for employee
+        newStatus = 'esperando_confirmacion_empleado';
+        message = '✅ Confirmación enviada. Esperando confirmación del empleado.';
+        print('✅ Task marked as esperando_confirmacion_empleado - waiting for employee');
+      }
+
+      // Update task status
+      await Supabase.instance.client
+          .from('tasks')
+          .update({
+            'workflowStatus': newStatus,
+            'lastUpdate': DateTime.now().toIso8601String(),
+          })
+          .eq('idTask', _distributorTaskId!);
+
+      // Close loading dialog
+      if (mounted) Navigator.pop(context);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(message),
+            backgroundColor: Colors.green,
+          ),
+        );
+
+        // Navigate back to home
+        Navigator.pushAndRemoveUntil(
+          context,
+          MaterialPageRoute(builder: (context) => const NavigationScreens()),
+          (route) => false,
+        );
+      }
+    } catch (e) {
+      print('❌ Error submitting distributor review: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  /// ✅ Submit review and complete task
+  Future<void> _submitReviewAndCompleteTask(int rating, String comment) async {
+    if (_employeeTaskId == null || _currentUserId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('❌ Error: Información de tarea no disponible'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
+    try {
+      // Show loading
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => const Center(
+          child: CircularProgressIndicator(color: Color(0xFF2D8A8A)),
+        ),
+      );
+
+      // 1. Create review
+      await Supabase.instance.client.from('reviews').insert({
+        'starID': rating,
+        'articleID': widget.item.id,
+        'senderID': _currentUserId, // ✅ Employee who is SENDING the review
+        'receiverID': widget.item.ownerUserId, // ✅ Distributor who is RECEIVING the review
+        'comment': comment.isEmpty ? null : comment,
+        'state': 1,
+        'created_at': DateTime.now().toIso8601String(),
+      });
+
+      print('✅ Review created - Rating: $rating stars');
+
+      // 2. Check current task status to determine next status
+      final taskData = await Supabase.instance.client
+          .from('tasks')
+          .select('workflowStatus')
+          .eq('idTask', _employeeTaskId!)
+          .single();
+
+      final currentStatus = taskData['workflowStatus'] as String?;
+      
+      // Determine new status based on current workflow
+      String newStatus;
+      String message;
+      
+      if (currentStatus == 'esperando_confirmacion_empleado') {
+        // Distributor already confirmed, now employee confirms → completado
+        newStatus = 'completado';
+        message = '✅ ¡Entrega completada exitosamente!';
+        print('✅ Task marked as completado - both parties confirmed');
+      } else {
+        // Employee confirms first, waiting for distributor
+        newStatus = 'esperando_confirmacion_distribuidor';
+        message = '✅ Confirmación enviada. Esperando confirmación del distribuidor.';
+        print('✅ Task marked as esperando_confirmacion_distribuidor - waiting for distributor');
+      }
+
+      // Update task status
+      await Supabase.instance.client
+          .from('tasks')
+          .update({
+            'workflowStatus': newStatus,
+            'lastUpdate': DateTime.now().toIso8601String(),
+          })
+          .eq('idTask', _employeeTaskId!);
+
+      // Close loading dialog
+      if (mounted) Navigator.pop(context);
+
+      // Show success message
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(message),
+            backgroundColor: Colors.green,
+          ),
+        );
+
+        // Navigate back to home
+        Navigator.pushAndRemoveUntil(
+          context,
+          MaterialPageRoute(builder: (context) => const EmployeeNavigationScreens()),
+          (route) => false,
+        );
+      }
+    } catch (e) {
+      // Close loading dialog
+      if (mounted) Navigator.pop(context);
+
+      print('❌ Error submitting review: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -1320,30 +2489,6 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
         });
       }
 
-      // 3. Update deliver if location or address changed
-      // if (_selectedLocation != _originalLocation || 
-      //     _selectedAddress != _originalAddress) {
-        
-      //   print('🔄 Detectados cambios en ubicación:');
-      //   print('   Deliver ID: ${widget.item.deliverID}');
-      //   print('   Original: ${_originalAddress} (${_originalLocation.latitude}, ${_originalLocation.longitude})');
-      //   print('   Nueva: ${_selectedAddress} (${_selectedLocation!.latitude}, ${_selectedLocation!.longitude})');
-        
-      //   if (widget.item.deliverID == null) {
-      //     throw Exception('El deliverID no puede ser nulo al actualizar la ubicación');
-      //   }
-
-      //   Deliver updatedDeliver = Deliver(
-      //     id: widget.item.deliverID, // ✅ Usar el deliverID correcto
-      //     address: _selectedAddress ?? 'Ubicación no especificada',
-      //     lat: _selectedLocation!.latitude,
-      //     lng: _selectedLocation!.longitude,
-      //   );
-
-      //   await deliverDatabase.updateDeliver(updatedDeliver);
-      //   print('✅ Ubicación actualizada exitosamente en la base de datos');
-      // }
-
       // 4. Update article
       Article updatedArticle = Article(
         id: widget.item.id,
@@ -1560,6 +2705,7 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
   void dispose() {
     _itemNameController.dispose();
     _descriptionController.dispose();
+    _taskSubscription?.unsubscribe(); // ✅ Clean up real-time subscription
     super.dispose();
   }
 
@@ -1724,6 +2870,57 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              // ✅ Employee-only status badge
+              if (_isEmployee && _employeeTaskStatus == 'en_proceso')
+                Container(
+                  margin: const EdgeInsets.only(bottom: 16),
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  decoration: BoxDecoration(
+                    color: Colors.amber.shade50,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.amber.shade200),
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: Colors.amber,
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: const Icon(
+                          Icons.work_outline,
+                          color: Colors.white,
+                          size: 20,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'En Proceso',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.amber,
+                              ),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              'Esta tarea está asignada a ti',
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: Colors.grey[700],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
               
 
               // photo gallery
@@ -1871,22 +3068,163 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
 
               const SizedBox(height: 16),
 
-              // availability
-              AvailabilityPicker(
-                selectedAvailability: _isEditing
-                    ? _selectedAvailability 
-                    : _originalAvailability, 
-                onAvailabilitySelected: _isEditing
-                    ? (AvailabilityData? availability) {
-                        setState(() {
-                          _selectedAvailability = availability;
-                        });
-                      } 
-                    : null,
-                labelText: 'Disponibilidad para entrega',
-                prefixIcon: Icons.calendar_month,
-                isRequired: false,
-              ),
+              // ✅ Show scheduled time for employees, availability for others
+              if (_isEmployee && _employeeScheduledDay != null && _employeeScheduledTime != null)
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: Colors.amber.shade50,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.amber.shade200),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Row(
+                        children: [
+                          Icon(Icons.schedule, color: Colors.amber, size: 20),
+                          SizedBox(width: 8),
+                          Text(
+                            'Fecha y Hora de Entrega',
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.amber,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          const Icon(Icons.calendar_today, size: 18, color: Colors.amber),
+                          const SizedBox(width: 8),
+                          Text(
+                            '$_employeeScheduledDay a las ${_formatTime(_employeeScheduledTime!)}',
+                            style: const TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.black87,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                )
+              else
+                // availability
+                AvailabilityPicker(
+                  selectedAvailability: _isEditing
+                      ? _selectedAvailability 
+                      : _originalAvailability, 
+                  onAvailabilitySelected: _isEditing
+                      ? (AvailabilityData? availability) {
+                          setState(() {
+                            _selectedAvailability = availability;
+                          });
+                        } 
+                      : null,
+                  labelText: 'Disponibilidad para entrega',
+                  prefixIcon: Icons.calendar_month,
+                  isRequired: false,
+                ),
+
+              // ✅ Employee action button - Confirmar llegada (placed right after schedule)
+              if (_isEmployee && _employeeTaskId != null && 
+                  (_employeeTaskStatus == 'en_proceso' || 
+                   _employeeTaskStatus == 'esperando_confirmacion_empleado')) ...[
+                const SizedBox(height: 20),
+                if (_employeeTaskStatus == 'esperando_confirmacion_empleado') ...[
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.green.shade50,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.green.shade300),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(Icons.check_circle_outline, color: Colors.green.shade700, size: 20),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'El distribuidor confirmó la entrega. Confirma que recibiste el objeto.',
+                            style: TextStyle(
+                              color: Colors.green.shade900,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                ],
+                MyButton(
+                  onTap: _showConfirmArrivalDialog,
+                  text: _employeeTaskStatus == 'esperando_confirmacion_empleado'
+                      ? 'Confirmar recepción'
+                      : 'Confirmar llegada',
+                  color: Colors.amber,
+                ),
+              ],
+
+              // ✅ Distributor action button - Confirmar entrega (for article owner)
+              if (_isOwner && _distributorTaskId != null && 
+                  (_distributorTaskStatus == 'en_proceso' || 
+                   _distributorTaskStatus == 'esperando_confirmacion_distribuidor')) ...[
+                const SizedBox(height: 20),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: _distributorTaskStatus == 'esperando_confirmacion_distribuidor' 
+                        ? Colors.green.shade50 
+                        : Colors.amber.shade50,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                      color: _distributorTaskStatus == 'esperando_confirmacion_distribuidor'
+                          ? Colors.green.shade300
+                          : Colors.amber.shade300,
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(
+                        _distributorTaskStatus == 'esperando_confirmacion_distribuidor'
+                            ? Icons.check_circle_outline
+                            : Icons.info_outline,
+                        color: _distributorTaskStatus == 'esperando_confirmacion_distribuidor'
+                            ? Colors.green.shade700
+                            : Colors.amber.shade700,
+                        size: 20,
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          _distributorTaskStatus == 'esperando_confirmacion_distribuidor'
+                              ? 'El empleado confirmó la entrega. Confirma que entregaste el objeto.'
+                              : 'En proceso: Confirma cuando entregues el objeto',
+                          style: TextStyle(
+                            color: _distributorTaskStatus == 'esperando_confirmacion_distribuidor'
+                                ? Colors.green.shade900
+                                : Colors.amber.shade900,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+                MyButton(
+                  onTap: _showConfirmDeliveryDialog,
+                  text: 'Confirmar entrega',
+                  color: const Color(0xFF2D8A8A),
+                ),
+              ],
 
               // User info section (only in view mode)
               if (!_isEditing && !_isOwner) ...[
@@ -2012,23 +3350,53 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
               else
                 Column(
                   children: [
-                    MyButton(
-                      onTap: () async {
-                        // ✅ Refrescar categorías bloqueadas antes de entrar en modo edición
-                        await _refreshDisabledCategories();
-                        setState(() {
-                          _isEditing = true;
-                        });
-                      },
-                      text: 'Editar Artículo',
-                      color: Color(0xFF2D8A8A),
-                    ),
-                    const SizedBox(height: 12),
-                    MyButton(
-                      onTap: _isSubmitting ? null : _deleteArticle, 
-                      text: 'Eliminar Artículo', 
-                      color: Colors.grey
-                    ),
+                    // ✅ Disable edit/delete when task is in progress
+                    if (_distributorTaskStatus != null && 
+                        (_distributorTaskStatus == 'en_proceso' || 
+                         _distributorTaskStatus == 'esperando_confirmacion_distribuidor' ||
+                         _distributorTaskStatus == 'esperando_confirmacion_empleado')) ...[
+                      Container(
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          color: Colors.orange.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.orange.withOpacity(0.3)),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(Icons.lock, color: Colors.orange.shade700),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Text(
+                                'No puedes editar o eliminar este artículo mientras está en proceso',
+                                style: TextStyle(
+                                  color: Colors.orange.shade900,
+                                  fontSize: 14,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ] else ...[
+                      MyButton(
+                        onTap: () async {
+                          // ✅ Refrescar categorías bloqueadas antes de entrar en modo edición
+                          await _refreshDisabledCategories();
+                          setState(() {
+                            _isEditing = true;
+                          });
+                        },
+                        text: 'Editar Artículo',
+                        color: Color(0xFF2D8A8A),
+                      ),
+                      const SizedBox(height: 12),
+                      MyButton(
+                        onTap: _isSubmitting ? null : _deleteArticle, 
+                        text: 'Eliminar Artículo', 
+                        color: Colors.grey
+                      ),
+                    ],
                   ],
                 ),
               ],
