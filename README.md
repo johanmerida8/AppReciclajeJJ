@@ -49,8 +49,8 @@ lib/
 ```
 
 ## Autores
-- **Johan Merida** - Desarrollo Frontend
-- **Jerson** - Desarrollo Backend
+- **Johan Merida** - Fullstack
+- **Jerson** - Fullstack
 
 ## Branches
 - `main`: Rama principal
