@@ -7,7 +7,8 @@ class Request {
   int? state;
   DateTime? lastUpdate;
   String? scheduledDay; // ✅ Selected pickup day
-  String? scheduledTime; // ✅ Selected pickup time (HH:MM:SS format)
+  String? scheduledStartTime; // ✅ Window start time (HH:MM:SS format)
+  String? scheduledEndTime; // ✅ Window end time (HH:MM:SS format)
 
   Request({
     this.id,
@@ -18,7 +19,8 @@ class Request {
     this.state,
     this.lastUpdate,
     this.scheduledDay,
-    this.scheduledTime,
+    this.scheduledStartTime,
+    this.scheduledEndTime,
   });
 
   factory Request.fromMap(Map<String, dynamic> map ) {
@@ -31,7 +33,8 @@ class Request {
       state: map['state'] as int,
       lastUpdate: map['lastUpdate'] != null ? DateTime.parse(map['lastUpdate']) : null,
       scheduledDay: map['scheduledDay'] as String?,
-      scheduledTime: map['scheduledTime'] as String?,
+      scheduledStartTime: map['scheduledStartTime'] as String?,
+      scheduledEndTime: map['scheduledEndTime'] as String?,
     );
   }
 
@@ -44,12 +47,13 @@ class Request {
       'state': state,
       'lastUpdate': lastUpdate?.toIso8601String(),
       'scheduledDay': scheduledDay,
-      'scheduledTime': scheduledTime,
+      'scheduledStartTime': scheduledStartTime,
+      'scheduledEndTime': scheduledEndTime,
     };
   }
 
   @override
   String toString() {
-    return 'Request{id: $id, articleID: $articleId, companyID: $companyId, status: $status, requestDate: $requestDate, state: $state, lastUpdate: $lastUpdate, scheduledDay: $scheduledDay, scheduledTime: $scheduledTime}';
+    return 'Request{id: $id, articleID: $articleId, companyID: $companyId, status: $status, requestDate: $requestDate, state: $state, lastUpdate: $lastUpdate, scheduledDay: $scheduledDay, scheduledStartTime: $scheduledStartTime, scheduledEndTime: $scheduledEndTime}';
   }
 }

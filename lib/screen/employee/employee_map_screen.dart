@@ -234,9 +234,6 @@ class _EmployeeMapScreenState extends State<EmployeeMapScreen> with WidgetsBindi
               lng,
               categoryID,
               userID,
-              availableDays,
-              availableTimeStart,
-              availableTimeEnd,
               condition,
               lastUpdate,
               category:categoryID(idCategory, name),
@@ -244,7 +241,8 @@ class _EmployeeMapScreenState extends State<EmployeeMapScreen> with WidgetsBindi
             ),
             request:requestID(
               scheduledDay,
-              scheduledTime
+              scheduledStartTime,
+              scheduledEndTime
             )
           ''')
           .eq('employeeID', _employeeId!)
@@ -272,11 +270,7 @@ class _EmployeeMapScreenState extends State<EmployeeMapScreen> with WidgetsBindi
               ownerUserId: article['userID'] as int?,
               userName: user?['names'] as String? ?? 'Usuario',
               userEmail: user?['email'] as String? ?? '',
-              availableDays: article['availableDays'] as String? ?? 'No especificado',
-              availableTimeStart: article['availableTimeStart'] as String? ?? '00:00',
-              availableTimeEnd: article['availableTimeEnd'] as String? ?? '23:59',
               condition: article['condition'] as String?,
-              // workflowStatus: article['workflowStatus'] as String?,
               createdAt: DateTime.now(), // Use current time as fallback
             ));
           }

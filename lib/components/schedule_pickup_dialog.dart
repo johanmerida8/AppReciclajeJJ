@@ -1,18 +1,21 @@
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 
-/// ✅ Schedule Pickup Dialog
+/// ✅ Schedule Pickup Dialog with time window selection
 class SchedulePickupDialog extends StatefulWidget {
-  final String availableDays;
-  final String availableTimeStart;
-  final String availableTimeEnd;
+  final String? availableDays;
+  final String? availableTimeStart;
+  final String? availableTimeEnd;
   final String articleName;
+  final List<Map<String, dynamic>>? daysAvailableData; // New: actual date-based availability
 
   const SchedulePickupDialog({
     super.key,
-    required this.availableDays,
-    required this.availableTimeStart,
-    required this.availableTimeEnd,
+    this.availableDays,
+    this.availableTimeStart,
+    this.availableTimeEnd,
     required this.articleName,
+    this.daysAvailableData,
   });
 
   @override
@@ -21,58 +24,115 @@ class SchedulePickupDialog extends StatefulWidget {
 
 class _SchedulePickupDialogState extends State<SchedulePickupDialog> {
   String? _selectedDay;
-  TimeOfDay? _selectedTime;
-  late TimeOfDay _startTime;
-  late TimeOfDay _endTime;
-  late List<String> _availableDaysList;
+  int? _selectedIndex;
+  TimeOfDay? _selectedStartTime;
+  late TimeOfDay _availableStartTime;
+  late TimeOfDay _availableEndTime;
+  late List<Map<String, dynamic>> _availabilityList;
 
   @override
   void initState() {
     super.initState();
-    _parseAvailableDays();
-    _parseAvailableTimes();
+    _parseAvailability();
   }
 
-  void _parseAvailableDays() {
-    // Parse available days from format like "Lunes,Miércoles,Viernes"
-    final days = widget.availableDays.split(',').map((d) => d.trim()).toList();
-    _availableDaysList = days;
-    
-    // Auto-select first available day
-    if (_availableDaysList.isNotEmpty) {
-      _selectedDay = _availableDaysList.first;
+  void _parseAvailability() {
+    if (widget.daysAvailableData != null && widget.daysAvailableData!.isNotEmpty) {
+      // Use new date-based availability
+      _availabilityList = widget.daysAvailableData!;
+      _selectedIndex = 0;
+      
+      // Parse first day's times
+      final firstDay = _availabilityList[0];
+      _parseTimesFromData(firstDay);
+      _selectedDay = firstDay['dateAvailable'] as String;
+    } else {
+      // Fallback to old format
+      _availabilityList = [];
+      _parseAvailableDaysOldFormat();
+      _parseAvailableTimesOldFormat();
     }
   }
 
-  void _parseAvailableTimes() {
-    // Parse time from "HH:MM:SS" format
+  void _parseAvailableDaysOldFormat() {
+    final List<Map<String, dynamic>> tempList = [];
+    
+    if (widget.availableDays == null || widget.availableDays!.isEmpty) {
+      final dayNames = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
+      for (var day in dayNames) {
+        tempList.add({'dayName': day, 'dateAvailable': day});
+      }
+    } else {
+      final days = widget.availableDays!.split(',').map((d) => d.trim()).toList();
+      for (var day in days) {
+        tempList.add({'dayName': day, 'dateAvailable': day});
+      }
+    }
+    
+    _availabilityList = tempList;
+    if (_availabilityList.isNotEmpty) {
+      _selectedIndex = 0;
+      _selectedDay = _availabilityList[0]['dateAvailable'] as String;
+    }
+  }
+
+  void _parseTimesFromData(Map<String, dynamic> dayData) {
     try {
-      final startParts = widget.availableTimeStart.split(':');
-      _startTime = TimeOfDay(
+      final startTimeStr = dayData['startTime'] as String? ?? '08:00:00';
+      final endTimeStr = dayData['endTime'] as String? ?? '18:00:00';
+      
+      final startParts = startTimeStr.split(':');
+      _availableStartTime = TimeOfDay(
         hour: int.parse(startParts[0]),
         minute: int.parse(startParts[1]),
       );
 
-      final endParts = widget.availableTimeEnd.split(':');
-      _endTime = TimeOfDay(
+      final endParts = endTimeStr.split(':');
+      _availableEndTime = TimeOfDay(
         hour: int.parse(endParts[0]),
         minute: int.parse(endParts[1]),
       );
 
-      // Auto-select start time as default
-      _selectedTime = _startTime;
+      _selectedStartTime = _availableStartTime;
     } catch (e) {
       print('❌ Error parsing times: $e');
-      _startTime = const TimeOfDay(hour: 8, minute: 0);
-      _endTime = const TimeOfDay(hour: 17, minute: 0);
-      _selectedTime = _startTime;
+      _availableStartTime = const TimeOfDay(hour: 8, minute: 0);
+      _availableEndTime = const TimeOfDay(hour: 17, minute: 0);
+      _selectedStartTime = _availableStartTime;
     }
   }
 
-  Future<void> _pickTime() async {
+  void _parseAvailableTimesOldFormat() {
+    try {
+      final startTimeStr = widget.availableTimeStart ?? '08:00:00';
+      final endTimeStr = widget.availableTimeEnd ?? '18:00:00';
+      
+      final startParts = startTimeStr.split(':');
+      _availableStartTime = TimeOfDay(
+        hour: int.parse(startParts[0]),
+        minute: int.parse(startParts[1]),
+      );
+
+      final endParts = endTimeStr.split(':');
+      _availableEndTime = TimeOfDay(
+        hour: int.parse(endParts[0]),
+        minute: int.parse(endParts[1]),
+      );
+
+      _selectedStartTime = _availableStartTime;
+    } catch (e) {
+      print('❌ Error parsing times: $e');
+      _availableStartTime = const TimeOfDay(hour: 8, minute: 0);
+      _availableEndTime = const TimeOfDay(hour: 17, minute: 0);
+      _selectedStartTime = _availableStartTime;
+    }
+  }
+
+  Future<void> _pickStartTime() async {
     final TimeOfDay? picked = await showTimePicker(
       context: context,
-      initialTime: _selectedTime ?? _startTime,
+      initialTime: _selectedStartTime ?? _availableStartTime,
+      helpText: 'Selecciona hora de inicio',
       builder: (context, child) {
         return Theme(
           data: Theme.of(context).copyWith(
@@ -86,26 +146,27 @@ class _SchedulePickupDialogState extends State<SchedulePickupDialog> {
     );
 
     if (picked != null) {
-      // Validate time is within available range
       final pickedMinutes = picked.hour * 60 + picked.minute;
-      final startMinutes = _startTime.hour * 60 + _startTime.minute;
-      final endMinutes = _endTime.hour * 60 + _endTime.minute;
+      final availableStartMinutes = _availableStartTime.hour * 60 + _availableStartTime.minute;
+      final availableEndMinutes = _availableEndTime.hour * 60 + _availableEndTime.minute;
 
-      if (pickedMinutes >= startMinutes && pickedMinutes <= endMinutes) {
-        setState(() {
-          _selectedTime = picked;
-        });
+      if (pickedMinutes < availableStartMinutes || pickedMinutes >= availableEndMinutes) {
+        _showError('La hora debe estar entre ${_availableStartTime.format(context)} y ${_availableEndTime.format(context)}');
       } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              'La hora debe estar entre ${_startTime.format(context)} y ${_endTime.format(context)}',
-            ),
-            backgroundColor: Colors.orange,
-          ),
-        );
+        setState(() {
+          _selectedStartTime = picked;
+        });
       }
     }
+  }
+
+  void _showError(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: Colors.orange,
+      ),
+    );
   }
 
   String _formatTime(TimeOfDay time) {
@@ -135,7 +196,6 @@ class _SchedulePickupDialogState extends State<SchedulePickupDialog> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Important notice
             Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
@@ -149,21 +209,20 @@ class _SchedulePickupDialogState extends State<SchedulePickupDialog> {
             ),
             const SizedBox(height: 20),
 
-            // Time Picker
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                // Hour
                 InkWell(
-                  onTap: _pickTime,
+                  onTap: _pickStartTime,
                   child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                     decoration: BoxDecoration(
                       color: Colors.grey[100],
                       borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: const Color(0xFF2D8A8A), width: 2),
                     ),
                     child: Text(
-                      _selectedTime != null ? _selectedTime!.hour.toString().padLeft(2, '0') : '00',
+                      _selectedStartTime != null ? _selectedStartTime!.hour.toString().padLeft(2, '0') : '00',
                       style: const TextStyle(fontSize: 32, fontWeight: FontWeight.bold),
                     ),
                   ),
@@ -172,17 +231,17 @@ class _SchedulePickupDialogState extends State<SchedulePickupDialog> {
                   padding: EdgeInsets.symmetric(horizontal: 8),
                   child: Text(':', style: TextStyle(fontSize: 32, fontWeight: FontWeight.bold)),
                 ),
-                // Minute
                 InkWell(
-                  onTap: _pickTime,
+                  onTap: _pickStartTime,
                   child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                     decoration: BoxDecoration(
                       color: Colors.grey[100],
                       borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: const Color(0xFF2D8A8A), width: 2),
                     ),
                     child: Text(
-                      _selectedTime != null ? _selectedTime!.minute.toString().padLeft(2, '0') : '00',
+                      _selectedStartTime != null ? _selectedStartTime!.minute.toString().padLeft(2, '0') : '00',
                       style: const TextStyle(fontSize: 32, fontWeight: FontWeight.bold),
                     ),
                   ),
@@ -192,29 +251,41 @@ class _SchedulePickupDialogState extends State<SchedulePickupDialog> {
             const SizedBox(height: 8),
             Center(
               child: Text(
-                '${_startTime.format(context)} - ${_endTime.format(context)}',
+                'Disponible: ${_availableStartTime.format(context)} - ${_availableEndTime.format(context)}',
                 style: TextStyle(fontSize: 12, color: Colors.grey[600]),
               ),
             ),
             const SizedBox(height: 24),
 
-            // Days selector
-            const Text(
-              'Días Disponibles',
-              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text(
+                  'Días Disponibles',
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+                ),
+                if (_availabilityList.isNotEmpty && _availabilityList[0].containsKey('dateAvailable'))
+                  Text(
+                    _getMonthName(_availabilityList[0]['dateAvailable'] as String),
+                    style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                  ),
+              ],
             ),
             const SizedBox(height: 12),
             Wrap(
               spacing: 8,
               runSpacing: 8,
-              children: _availableDaysList.map((day) {
-                final isSelected = day == _selectedDay;
+              children: List.generate(_availabilityList.length, (index) {
+                final dayData = _availabilityList[index];
+                final isSelected = index == _selectedIndex;
                 return ChoiceChip(
-                  label: Text(_getShortDay(day)),
+                  label: Text(_formatDayLabel(dayData)),
                   selected: isSelected,
                   onSelected: (selected) {
                     setState(() {
-                      _selectedDay = day;
+                      _selectedIndex = index;
+                      _selectedDay = dayData['dateAvailable'] as String;
+                      _parseTimesFromData(dayData);
                     });
                   },
                   selectedColor: const Color(0xFF2D8A8A),
@@ -223,7 +294,7 @@ class _SchedulePickupDialogState extends State<SchedulePickupDialog> {
                     fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
                   ),
                 );
-              }).toList(),
+              }),
             ),
           ],
         ),
@@ -234,11 +305,12 @@ class _SchedulePickupDialogState extends State<SchedulePickupDialog> {
           child: const Text('cancelar'),
         ),
         ElevatedButton(
-          onPressed: _selectedDay != null && _selectedTime != null
+          onPressed: _selectedDay != null && _selectedStartTime != null
               ? () {
                   Navigator.pop(context, {
                     'day': _selectedDay!,
-                    'time': _formatTime(_selectedTime!),
+                    'startTime': _formatTime(_selectedStartTime!),
+                    'endTime': _formatTime(_availableEndTime),
                   });
                 }
               : null,
@@ -246,7 +318,7 @@ class _SchedulePickupDialogState extends State<SchedulePickupDialog> {
             backgroundColor: const Color(0xFF2D8A8A),
             disabledBackgroundColor: Colors.grey[300],
           ),
-          child: const Text('Solicitar'),
+          child: const Text('Solicitar', style: TextStyle(color: Colors.white)),
         ),
       ],
     );
@@ -256,8 +328,8 @@ class _SchedulePickupDialogState extends State<SchedulePickupDialog> {
     final dayMap = {
       'Lunes': 'Lun',
       'Martes': 'Mar',
-      'Miércoles': 'Mír',
-      'Miercoles': 'Mír',
+      'Miércoles': 'Mié',
+      'Miercoles': 'Mié',
       'Jueves': 'Jue',
       'Viernes': 'Vie',
       'Sábado': 'Sáb',
@@ -265,5 +337,47 @@ class _SchedulePickupDialogState extends State<SchedulePickupDialog> {
       'Domingo': 'Dom',
     };
     return dayMap[fullDay] ?? fullDay.substring(0, 3);
+  }
+
+  String _formatDayLabel(Map<String, dynamic> dayData) {
+    // If we have dateAvailable, format it as "Sáb 22"
+    if (dayData.containsKey('dateAvailable')) {
+      try {
+        final dateStr = dayData['dateAvailable'] as String;
+        final date = DateTime.parse(dateStr);
+        
+        // Use simple Spanish day names instead of DateFormat
+        final dayNames = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
+        final dayName = dayNames[date.weekday - 1];
+        final dayNumber = date.day;
+        
+        return '$dayName $dayNumber';
+      } catch (e) {
+        print('❌ Error parsing date: $e');
+      }
+    }
+    
+    // Fallback to dayName if available
+    if (dayData.containsKey('dayName')) {
+      return _getShortDay(dayData['dayName'] as String);
+    }
+    
+    return 'Día';
+  }
+
+  String _getMonthName(String dateStr) {
+    try {
+      final date = DateTime.parse(dateStr);
+      
+      // Simple Spanish month names
+      const monthNames = [
+        'enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio',
+        'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'
+      ];
+      
+      return monthNames[date.month - 1];
+    } catch (e) {
+      return '';
+    }
   }
 }

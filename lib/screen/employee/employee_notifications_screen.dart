@@ -91,7 +91,8 @@ class _EmployeeNotificationsScreenState extends State<EmployeeNotificationsScree
             ),
             request:requestID(
               scheduledDay,
-              scheduledTime
+              scheduledStartTime,
+              scheduledEndTime
             )
           ''')
           .eq('employeeID', _employeeId!)
@@ -254,7 +255,7 @@ class _EmployeeNotificationsScreenState extends State<EmployeeNotificationsScree
 
     // Scheduled date and time
     final scheduledDay = request?['scheduledDay'] as String?;
-    final scheduledTime = request?['scheduledTime'] as String?;
+    final scheduledTime = request?['scheduledStartTime'] as String?;
 
     // Parse assigned date for time ago
     DateTime assignedDateTime = DateTime.now();
@@ -415,7 +416,7 @@ class _EmployeeNotificationsScreenState extends State<EmployeeNotificationsScree
       ownerUserId: article['userID'] as int?,
       userName: user?['names'] as String? ?? 'Usuario',
       userEmail: user?['email'] as String? ?? '',
-      availableDays: article['availableDays'] as String? ?? 'No especificado',
+      availableDays: 'Consultar horarios',
       availableTimeStart: article['availableTimeStart'] as String? ?? '00:00',
       availableTimeEnd: article['availableTimeEnd'] as String? ?? '23:59',
       condition: article['condition'] as String?,

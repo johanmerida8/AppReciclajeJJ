@@ -87,9 +87,6 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
               lng,
               categoryID,
               userID,
-              availableDays,
-              availableTimeStart,
-              availableTimeEnd,
               condition,
               lastUpdate,
               category:categoryID(name),
@@ -97,7 +94,8 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
             ),
             request:requestID(
               scheduledDay,
-              scheduledTime
+              scheduledStartTime,
+              scheduledEndTime
             )
           ''')
           .eq('employeeID', _employeeId!)
@@ -279,7 +277,7 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
     final address = article?['address'] ?? 'Sin dirección';
     final status = task['workflowStatus'] as String;
     final scheduledDay = request?['scheduledDay'] ?? 'No especificado';
-    final scheduledTime = request?['scheduledTime'] ?? 'No especificado';
+    final scheduledTime = request?['scheduledStartTime'] ?? 'No especificado';
     
     Color statusColor = Colors.orange;
     String statusText = 'Asignado';
@@ -310,7 +308,7 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
         ownerUserId: article['userID'] as int?,
         userName: user?['names'] as String? ?? 'Usuario',
         userEmail: user?['email'] as String? ?? '',
-        availableDays: article['availableDays'] as String? ?? 'No especificado',
+        availableDays: 'Consultar horarios',
         availableTimeStart: article['availableTimeStart'] as String? ?? '00:00',
         availableTimeEnd: article['availableTimeEnd'] as String? ?? '23:59',
         condition: article['condition'] as String?,

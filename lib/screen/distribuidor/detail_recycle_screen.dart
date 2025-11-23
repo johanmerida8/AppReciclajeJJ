@@ -27,9 +27,11 @@ import 'package:reciclaje_app/components/my_textformfield.dart';
 import 'package:reciclaje_app/components/limit_character_two.dart';
 import 'package:reciclaje_app/database/article_database.dart';
 import 'package:reciclaje_app/database/category_database.dart';
+import 'package:reciclaje_app/database/days_available_database.dart';
 // import 'package:reciclaje_app/database/deliver_database.dart';
 import 'package:reciclaje_app/model/article.dart';
 import 'package:reciclaje_app/model/category.dart';
+import 'package:reciclaje_app/model/daysAvailable.dart';
 // import 'package:reciclaje_app/model/deliver.dart';
 import 'package:reciclaje_app/screen/distribuidor/navigation_screens.dart';
 import 'package:reciclaje_app/screen/employee/employee_navigation_screens.dart';
@@ -54,6 +56,7 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
   
   final articleDatabase = ArticleDatabase();
   final categoryDatabase = CategoryDatabase();
+  final daysAvailableDatabase = DaysAvailableDatabase();
   // final deliverDatabase = DeliverDatabase();
   final mediaDatabase = MediaDatabase();  
   final workflowService = WorkflowService();
@@ -82,6 +85,8 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
   String? _distributorTaskStatus; // Track distributor's task workflow status
   int? _distributorEmployeeId; // Track which employee is assigned (employeeID from employees table)
   int? _distributorEmployeeUserId; // Track employee's userID for review (userID from users table)
+  String? _distributorScheduledDay; // Track scheduled day for distributor
+  String? _distributorScheduledTime; // Track scheduled time for distributor
   
   // ✅ Real-time subscription for task updates
   RealtimeChannel? _taskSubscription;
@@ -120,15 +125,15 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
   late String _originalConditionName;
   late String _originalAddress;
   late LatLng _originalLocation;
-  late AvailabilityData? _originalAvailability;
+  AvailabilityData? _originalAvailability;
 
   @override
   void initState() {
     super.initState();
-    _initializeData();
     _loadCategories();
     _loadPhotos();
     _loadDisabledCategories();
+    _loadAvailabilityData(); // ✅ Load availability from daysAvailable table
     _debugDatabaseStructure(); // ✅ Debug temporal
 
     _currentUserEmail = _authService.getCurrentUserEmail();
@@ -137,6 +142,9 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
     _loadEmployeeTask(); // ✅ Load employee's task if employee
     _loadDistributorTask(); // ✅ Load distributor's task if owner
     // ❌ DON'T load employees here - they need _companyId to be set first
+    
+    // Initialize basic data (non-async)
+    _initializeBasicData();
   }
 
   // ✅ Método para refrescar categorías bloqueadas cuando se necesite
@@ -379,7 +387,8 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
             *,
             request:requestID(
               scheduledDay,
-              scheduledTime
+              scheduledStartTime,
+              scheduledEndTime
             )
           ''')
           .eq('employeeID', employeeId)
@@ -393,7 +402,7 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
           _employeeTaskId = taskData['idTask'] as int?;
           _employeeTaskStatus = taskData['workflowStatus'] as String?;
           _employeeScheduledDay = request?['scheduledDay'] as String?;
-          _employeeScheduledTime = request?['scheduledTime'] as String?;
+          _employeeScheduledTime = request?['scheduledStartTime'] as String?;
         });
         print('✅ Loaded employee task (ID: $_employeeTaskId, Status: $_employeeTaskStatus) - Scheduled: $_employeeScheduledDay at $_employeeScheduledTime');
         
@@ -546,14 +555,19 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
 
     try {
       // Query tasks table for this article where distributor needs to confirm delivery
-      // ✅ Join with employees table to get the userID
+      // ✅ Join with employees table to get the userID and request to get scheduled time
       final taskData = await Supabase.instance.client
           .from('tasks')
           .select('''
             idTask, 
             workflowStatus, 
             employeeID,
-            employees:employeeID(userID)
+            employees:employeeID(userID),
+            request:requestID(
+              scheduledDay,
+              scheduledStartTime,
+              scheduledEndTime
+            )
           ''')
           .eq('articleID', widget.item.id)
           .eq('state', 1)
@@ -561,12 +575,15 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
 
       if (taskData != null) {
         final employeeData = taskData['employees'] as Map<String, dynamic>?;
+        final request = taskData['request'] as Map<String, dynamic>?;
         
         setState(() {
           _distributorTaskId = taskData['idTask'] as int?;
           _distributorTaskStatus = taskData['workflowStatus'] as String?;
           _distributorEmployeeId = taskData['employeeID'] as int?;
           _distributorEmployeeUserId = employeeData?['userID'] as int?; // ✅ Get userID for review
+          _distributorScheduledDay = request?['scheduledDay'] as String?;
+          _distributorScheduledTime = request?['scheduledStartTime'] as String?;
         });
         
         print('✅ Loaded distributor task (ID: $_distributorTaskId, Status: $_distributorTaskStatus, Employee UserID: $_distributorEmployeeUserId)');
@@ -800,6 +817,32 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
     }
   }
 
+  /// ✅ Format scheduled date and time in human-readable Spanish format
+  String _formatScheduledDateTime(String? dateStr, String? startTimeStr, String? endTimeStr) {
+    if (dateStr == null || startTimeStr == null) return 'No especificado';
+    
+    try {
+      final date = DateTime.parse(dateStr);
+      final dayNames = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
+      final monthNames = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 
+                          'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+      
+      final dayName = dayNames[date.weekday - 1];
+      final day = date.day;
+      final monthName = monthNames[date.month - 1];
+      final startTime = _formatTime(startTimeStr);
+      
+      if (endTimeStr != null) {
+        final endTime = _formatTime(endTimeStr);
+        return '$dayName $day de $monthName a las $startTime - $endTime';
+      } else {
+        return '$dayName $day de $monthName a las $startTime';
+      }
+    } catch (e) {
+      return '$dateStr a las ${_formatTime(startTimeStr)}';
+    }
+  }
+
   /// ✅ Show employee assignment dialog for already approved request
   void _showAssignEmployeeDialog(Request approvedRequest) {
     // Debug: Check employee list before showing dialog
@@ -808,8 +851,10 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
     print('🔍 DEBUG: _employees = $_employees');
     
     final scheduledDay = approvedRequest.scheduledDay ?? 'No especificado';
-    final scheduledTime = approvedRequest.scheduledTime;
-    final formattedTime = scheduledTime != null ? _formatTime(scheduledTime) : 'No especificado';
+    final startTime = approvedRequest.scheduledStartTime;
+    final endTime = approvedRequest.scheduledEndTime;
+    final formattedStartTime = startTime != null ? _formatTime(startTime) : 'No especificado';
+    final formattedEndTime = endTime != null ? _formatTime(endTime) : 'No especificado';
 
     showDialog(
       context: context,
@@ -856,7 +901,7 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
                   const Icon(Icons.access_time, color: Color(0xFF2D8A8A), size: 20),
                   const SizedBox(width: 8),
                   Text(
-                    'Hora: $formattedTime',
+                    'Horario: $formattedStartTime - $formattedEndTime',
                     style: const TextStyle(fontSize: 15),
                   ),
                 ],
@@ -923,7 +968,7 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
                             content: Text(
                               '¿Deseas asignar a $name para recoger "${widget.item.title}"?\n\n'
                               'Día: $scheduledDay\n'
-                              'Hora: $formattedTime',
+                              'Horario: $formattedStartTime - $formattedEndTime',
                             ),
                             actions: [
                               TextButton(
@@ -972,8 +1017,10 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
   /// ✅ Show employee assignment confirmation dialog
   void _showAssignEmployeeConfirmation(Map<String, dynamic> request) {
     final scheduledDay = request['scheduledDay'] as String? ?? 'No especificado';
-    final scheduledTime = request['scheduledTime'] as String?;
-    final formattedTime = scheduledTime != null ? _formatTime(scheduledTime) : 'No especificado';
+    final scheduledStartTime = request['scheduledStartTime'] as String?;
+    final scheduledEndTime = request['scheduledEndTime'] as String?;
+    final formattedStartTime = scheduledStartTime != null ? _formatTime(scheduledStartTime) : 'No especificado';
+    final formattedEndTime = scheduledEndTime != null ? _formatTime(scheduledEndTime) : 'No especificado';
 
     showDialog(
       context: context,
@@ -1020,7 +1067,7 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
                   const Icon(Icons.access_time, color: Color(0xFF2D8A8A), size: 20),
                   const SizedBox(width: 8),
                   Text(
-                    'Hora: $formattedTime',
+                    'Horario: $formattedStartTime - $formattedEndTime',
                     style: const TextStyle(fontSize: 15),
                   ),
                 ],
@@ -1087,7 +1134,7 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
                             content: Text(
                               '¿Deseas asignar a $name para recoger "${widget.item.title}"?\n\n'
                               'Día: $scheduledDay\n'
-                              'Hora: $formattedTime',
+                              'Horario: $formattedStartTime - $formattedEndTime',
                             ),
                             actions: [
                               TextButton(
@@ -1496,10 +1543,16 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
                 // Star rating
                 Center(
                   child: Row(
+                    mainAxisSize: MainAxisSize.min,
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: List.generate(5, (index) {
                       return IconButton(
-                        iconSize: 40,
+                        iconSize: 36,
+                        padding: const EdgeInsets.all(4),
+                        constraints: const BoxConstraints(
+                          minWidth: 44,
+                          minHeight: 44,
+                        ),
                         onPressed: () {
                           setState(() {
                             rating = index + 1;
@@ -1696,22 +1749,30 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
                 ),
                 const SizedBox(height: 16),
                 // Star rating
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: List.generate(5, (index) {
-                    return IconButton(
-                      onPressed: () {
-                        setDialogState(() {
-                          rating = index + 1;
-                        });
-                      },
-                      icon: Icon(
-                        index < rating ? Icons.star : Icons.star_border,
-                        color: Colors.amber,
-                        size: 36,
-                      ),
-                    );
-                  }),
+                Center(
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: List.generate(5, (index) {
+                      return IconButton(
+                        iconSize: 36,
+                        padding: const EdgeInsets.all(4),
+                        constraints: const BoxConstraints(
+                          minWidth: 44,
+                          minHeight: 44,
+                        ),
+                        onPressed: () {
+                          setDialogState(() {
+                            rating = index + 1;
+                          });
+                        },
+                        icon: Icon(
+                          index < rating ? Icons.star : Icons.star_border,
+                          color: Colors.amber,
+                        ),
+                      );
+                    }),
+                  ),
                 ),
                 const SizedBox(height: 16),
                 // Comment field
@@ -1971,7 +2032,7 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
   }
   
 
-  void _initializeData() {
+  void _initializeBasicData() {
     // Store original data
     _originalTitle = widget.item.title;
     _originalDescription = widget.item.description ?? '';
@@ -1980,31 +2041,6 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
     _originalAddress = widget.item.address;
     _originalLocation = LatLng(widget.item.latitude, widget.item.longitude);
 
-    // prints row values from database
-    print('🔍 Loading availability data:');
-    print('   Days: ${widget.item.availableDays}');
-    print('   Start Time: ${widget.item.availableTimeStart}');
-    print('   End Time: ${widget.item.availableTimeEnd}');
-
-    _originalAvailability = AvailabilityData.fromDatabase(
-      days: widget.item.availableDays,
-      startTime: widget.item.availableTimeStart,
-      endTime: widget.item.availableTimeEnd,
-    );
-
-    // print parsed availability data
-    if (_originalAvailability != null) {
-    print('✅ Parsed availability:');
-    print('   Days: ${_originalAvailability!.selectedDays}');
-    print('   Start: ${_originalAvailability!.startTime}');
-    print('   End: ${_originalAvailability!.endTime}');
-    } else {
-      print('❌ No availability data found');
-    }
-
-    // initialize selected availability with original data
-    _selectedAvailability = _originalAvailability;
-    
     // Initialize controllers with current data
     _itemNameController.text = widget.item.title;
     _descriptionController.text = widget.item.description ?? '';
@@ -2018,6 +2054,110 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
       id: widget.item.categoryID ?? 0,
       name: widget.item.categoryName,
     );
+  }
+
+  /// ✅ Load availability data from daysAvailable table
+  Future<void> _loadAvailabilityData() async {
+    try {
+      print('🔍 Loading availability data from daysAvailable table for article ${widget.item.id}...');
+      
+      final daysAvailableList = await Supabase.instance.client
+          .from('daysAvailable')
+          .select()
+          .eq('articleID', widget.item.id)
+          .order('dateAvailable', ascending: true);
+      
+      if (daysAvailableList.isEmpty) {
+        print('❌ No availability data found');
+        setState(() {
+          _originalAvailability = null;
+          _selectedAvailability = null;
+        });
+        return;
+      }
+
+      print('✅ Found ${daysAvailableList.length} availability records');
+
+      // Build per-day times map
+      final Map<String, DayTimeRange> perDayTimes = {};
+      final dayNames = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
+      
+      for (var record in daysAvailableList) {
+        final date = DateTime.parse(record['dateAvailable']);
+        final dayName = dayNames[date.weekday - 1];
+        
+        final startTime = _parseTimeFromDatabase(record['startTime']);
+        final endTime = _parseTimeFromDatabase(record['endTime']);
+        
+        if (startTime != null && endTime != null) {
+          // ✅ Use date string as unique key (format: yyyy-MM-dd)
+          final dateKey = '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+          
+          perDayTimes[dateKey] = DayTimeRange(
+            dayName: dayName,
+            date: date,
+            startTime: startTime,
+            endTime: endTime,
+          );
+          
+          print('   $dayName (${date.day}/${date.month}) [$dateKey]: ${_formatTimeForLog(startTime)} - ${_formatTimeForLog(endTime)}');
+        }
+      }
+
+      if (perDayTimes.isNotEmpty) {
+        final availabilityData = AvailabilityData(
+          selectedDays: perDayTimes.keys.toList(),
+          startTime: null,
+          endTime: null,
+          perDayTimes: perDayTimes,
+        );
+
+        setState(() {
+          _originalAvailability = availabilityData;
+          _selectedAvailability = availabilityData;
+        });
+
+        print('✅ Availability data loaded successfully');
+      } else {
+        print('❌ No valid availability records found');
+        setState(() {
+          _originalAvailability = null;
+          _selectedAvailability = null;
+        });
+      }
+    } catch (e) {
+      print('❌ Error loading availability data: $e');
+      setState(() {
+        _originalAvailability = null;
+        _selectedAvailability = null;
+      });
+    }
+  }
+
+  TimeOfDay? _parseTimeFromDatabase(String? timeStr) {
+    if (timeStr == null || timeStr.isEmpty) return null;
+
+    try {
+      final parts = timeStr.split(':');
+      if (parts.length < 2) return null;
+
+      final hour = int.parse(parts[0]);
+      final minute = int.parse(parts[1]);
+
+      if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
+
+      return TimeOfDay(hour: hour, minute: minute);
+    } catch (e) {
+      print('Error parsing time from database: $e');
+      return null;
+    }
+  }
+
+  String _formatTimeForLog(TimeOfDay time) {
+    final hour = time.hourOfPeriod == 0 ? 12 : time.hourOfPeriod;
+    final minute = time.minute.toString().padLeft(2, '0');
+    final period = time.period == DayPeriod.am ? 'AM' : 'PM';
+    return '$hour:$minute $period';
   }
 
   void _onImagesChanged(List<XFile> images) {
@@ -2428,10 +2568,22 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
     if (_selectedAddress != _originalAddress) hasChanges = true;
     if (_selectedLocation != _originalLocation) hasChanges = true;
 
-    // check availability changes
-    if (_selectedAvailability?.getDaysForDatabase() != _originalAvailability?.getDaysForDatabase()) hasChanges = true;
-    if (_selectedAvailability?.getStartTimeForDatabase() != _originalAvailability?.getStartTimeForDatabase()) hasChanges = true;
-    if (_selectedAvailability?.getEndTimeForDatabase() != _originalAvailability?.getEndTimeForDatabase()) hasChanges = true;
+    // ✅ Check availability changes (properly handles perDayTimes)
+    print('🔍 Checking availability changes:');
+    print('   _selectedAvailability: ${_selectedAvailability?.selectedDays} (${_selectedAvailability?.perDayTimes?.length} days)');
+    print('   _originalAvailability: ${_originalAvailability?.selectedDays} (${_originalAvailability?.perDayTimes?.length} days)');
+    
+    if (_selectedAvailability != null && _originalAvailability != null) {
+      final isEqual = _selectedAvailability!.isEqualTo(_originalAvailability);
+      print('   isEqualTo result: $isEqual');
+      if (!isEqual) {
+        hasChanges = true;
+        print('   ✅ Availability has changed!');
+      }
+    } else if (_selectedAvailability != _originalAvailability) {
+      hasChanges = true;
+      print('   ✅ Availability changed (null check)');
+    }
 
     if (_photosToDelete.isNotEmpty) hasChanges = true;
 
@@ -2502,14 +2654,16 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
         lat: widget.item.latitude,
         lng: widget.item.longitude,
         userId: widget.item.ownerUserId,
-        availableDays: _selectedAvailability?.getDaysForDatabase(),
-        availableTimeStart: _selectedAvailability?.getStartTimeForDatabase(),
-        availableTimeEnd: _selectedAvailability?.getEndTimeForDatabase(),
         // workflowStatus: 'pendiente',
         state: 1,
       );
 
       await articleDatabase.updateArticle(updatedArticle);
+
+      // Update daysAvailable records - delete old and create new ones
+      if (_selectedAvailability != null) {
+        await _updateDaysAvailableRecords(widget.item.id, _selectedAvailability!);
+      }
 
       // 5. reload photos to update UI
       await _loadPhotos();
@@ -2552,6 +2706,77 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
         ),
       );
     }
+  }
+
+  /// Helper method to update daysAvailable records
+  /// Deletes all existing records and creates new ones
+  Future<void> _updateDaysAvailableRecords(int articleId, AvailabilityData availability) async {
+    // First, get all existing daysAvailable records for this article
+    final existingRecords = await Supabase.instance.client
+        .from('daysAvailable')
+        .select()
+        .eq('articleID', articleId);
+    
+    // Delete all existing records
+    for (var record in existingRecords) {
+      final oldRecord = daysAvailable.fromMap(record);
+      if (oldRecord.id != null) {
+        await daysAvailableDatabase.deleteDaysAvailable(oldRecord);
+      }
+    }
+    
+    // ✅ Check if we have per-day times (new format)
+    if (availability.perDayTimes != null && availability.perDayTimes!.isNotEmpty) {
+      for (var entry in availability.perDayTimes!.entries) {
+        final dayTimeRange = entry.value;
+        
+        final newDaysAvailable = daysAvailable(
+          articleId: articleId,
+          availableDate: dayTimeRange.date,
+          timeStart: _formatTimeForDatabase(dayTimeRange.startTime),
+          timeEnd: _formatTimeForDatabase(dayTimeRange.endTime),
+        );
+
+        await daysAvailableDatabase.createDaysAvailable(newDaysAvailable);
+      }
+    } else {
+      // ✅ Old format: same time for all days
+      final dayNameToWeekday = {
+        'Lunes': 1,
+        'Martes': 2,
+        'Miércoles': 3,
+        'Jueves': 4,
+        'Viernes': 5,
+        'Sábado': 6,
+        'Domingo': 7,
+      };
+
+      final today = DateTime.now();
+      final currentWeekday = today.weekday;
+      final monday = today.subtract(Duration(days: currentWeekday - 1));
+
+      for (String dayName in availability.selectedDays) {
+        final weekdayNumber = dayNameToWeekday[dayName];
+        if (weekdayNumber != null) {
+          final date = monday.add(Duration(days: weekdayNumber - 1));
+          
+          final newDaysAvailable = daysAvailable(
+            articleId: articleId,
+            availableDate: date,
+            timeStart: availability.getStartTimeForDatabase(),
+            timeEnd: availability.getEndTimeForDatabase(),
+          );
+
+          await daysAvailableDatabase.createDaysAvailable(newDaysAvailable);
+        }
+      }
+    }
+  }
+
+  String _formatTimeForDatabase(TimeOfDay time) {
+    final hour = time.hour.toString().padLeft(2, '0');
+    final minute = time.minute.toString().padLeft(2, '0');
+    return '$hour:$minute';
   }
 
   Future<void> _deleteArticle() async {
@@ -2627,6 +2852,20 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
       return;
     }
 
+    // Load daysAvailable data for this article
+    List<Map<String, dynamic>>? daysAvailableData;
+    try {
+      final response = await Supabase.instance.client
+          .from('daysAvailable')
+          .select()
+          .eq('articleID', widget.item.id)
+          .order('dateAvailable', ascending: true);
+      
+      daysAvailableData = response.cast<Map<String, dynamic>>();
+    } catch (e) {
+      print('❌ Error loading daysAvailable: $e');
+    }
+
     // ✅ Show scheduling dialog to select day and time
     final scheduleData = await showDialog<Map<String, String>>(
       context: context,
@@ -2635,6 +2874,7 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
         availableTimeStart: widget.item.availableTimeStart,
         availableTimeEnd: widget.item.availableTimeEnd,
         articleName: widget.item.title,
+        daysAvailableData: daysAvailableData,
       ),
     );
 
@@ -2655,11 +2895,14 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
     );
 
     try {
-      // Parse the time string (HH:MM) and format as HH:MM:SS for database
-      final timeParts = scheduleData['time']!.split(':');
-      final scheduledTimeFormatted = '${timeParts[0].padLeft(2, '0')}:${timeParts[1].padLeft(2, '0')}:00';
+      // Parse time strings (HH:MM) and format as HH:MM:SS for database
+      final startTimeParts = scheduleData['startTime']!.split(':');
+      final startTimeFormatted = '${startTimeParts[0].padLeft(2, '0')}:${startTimeParts[1].padLeft(2, '0')}:00';
+      
+      final endTimeParts = scheduleData['endTime']!.split(':');
+      final endTimeFormatted = '${endTimeParts[0].padLeft(2, '0')}:${endTimeParts[1].padLeft(2, '0')}:00';
 
-      // Create request with scheduled day and time
+      // Create request with scheduled day and time window
       final newRequest = Request(
         articleId: widget.item.id,
         companyId: _companyId,
@@ -2668,7 +2911,8 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
         state: 1,
         lastUpdate: DateTime.now(),
         scheduledDay: scheduleData['day'],
-        scheduledTime: scheduledTimeFormatted,
+        scheduledStartTime: startTimeFormatted,
+        scheduledEndTime: endTimeFormatted,
       );
 
       await requestDatabase.createRequest(newRequest);
@@ -2681,7 +2925,7 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('✅ Solicitud enviada para ${scheduleData['day']} a las ${scheduleData['time']}'),
+            content: Text('✅ Solicitud enviada para ${scheduleData['day']} entre ${scheduleData['startTime']} - ${scheduleData['endTime']}'),
             backgroundColor: Colors.green,
           ),
         );
@@ -2709,12 +2953,188 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
     super.dispose();
   }
 
+  /// ✅ Build reviews section widget
+  Widget _buildReviewsSection() {
+    return FutureBuilder<List<Map<String, dynamic>>>(
+      future: _loadReviews(),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(
+            child: CircularProgressIndicator(color: Color(0xFF2D8A8A)),
+          );
+        }
+
+        if (snapshot.hasError) {
+          return Text(
+            'Error al cargar calificaciones',
+            style: TextStyle(color: Colors.grey[600]),
+          );
+        }
+
+        final reviews = snapshot.data ?? [];
+        
+        if (reviews.isEmpty) {
+          return Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: Colors.grey[100],
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Text(
+              'No hay calificaciones disponibles',
+              style: TextStyle(
+                fontSize: 13,
+                color: Colors.grey[600],
+                fontStyle: FontStyle.italic,
+              ),
+              textAlign: TextAlign.center,
+            ),
+          );
+        }
+
+        return Column(
+          children: reviews.map((review) {
+            final sender = review['sender'] as Map<String, dynamic>?;
+            final senderName = sender?['names'] ?? 'Usuario';
+            final rating = review['starID'] as int? ?? 0;
+            final comment = review['comment'] as String?;
+            final createdAt = review['created_at'] as String?;
+            
+            // Format date
+            String dateText = '';
+            if (createdAt != null) {
+              try {
+                final date = DateTime.parse(createdAt);
+                dateText = '${date.day}/${date.month}/${date.year}';
+              } catch (e) {
+                // Ignore parse error
+              }
+            }
+            
+            return Container(
+              margin: const EdgeInsets.only(bottom: 12),
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.grey[300]!),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.grey.withOpacity(0.1),
+                    blurRadius: 4,
+                    offset: const Offset(0, 2),
+                  ),
+                ],
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      CircleAvatar(
+                        radius: 20,
+                        backgroundColor: const Color(0xFF2D8A8A).withOpacity(0.1),
+                        child: Text(
+                          senderName.isNotEmpty ? senderName[0].toUpperCase() : 'U',
+                          style: const TextStyle(
+                            color: Color(0xFF2D8A8A),
+                            fontWeight: FontWeight.bold,
+                            fontSize: 18,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              senderName,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 15,
+                              ),
+                            ),
+                            if (dateText.isNotEmpty)
+                              Text(
+                                dateText,
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.grey[600],
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                      Row(
+                        children: List.generate(5, (index) {
+                          return Icon(
+                            index < rating ? Icons.star : Icons.star_border,
+                            color: Colors.amber,
+                            size: 18,
+                          );
+                        }),
+                      ),
+                    ],
+                  ),
+                  if (comment != null && comment.isNotEmpty) ...[
+                    const SizedBox(height: 12),
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.grey[50],
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Text(
+                        comment,
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: Colors.grey[800],
+                          height: 1.4,
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            );
+          }).toList(),
+        );
+      },
+    );
+  }
+
+  /// ✅ Load reviews for this article
+  Future<List<Map<String, dynamic>>> _loadReviews() async {
+    try {
+      final reviews = await Supabase.instance.client
+          .from('reviews')
+          .select('''
+            idReview,
+            starID,
+            comment,
+            created_at,
+            senderID,
+            receiverID,
+            sender:senderID(names),
+            receiver:receiverID(names)
+          ''')
+          .eq('articleID', widget.item.id)
+          .order('created_at', ascending: false);
+      
+      return List<Map<String, dynamic>>.from(reviews);
+    } catch (e) {
+      print('❌ Error loading reviews: $e');
+      return [];
+    }
+  }
+
   /// ✅ Build request card widget
   Widget _buildRequestCard(Map<String, dynamic> request) {
     final company = request['company'] as Map<String, dynamic>?;
     final companyLogo = request['companyLogo'] as Multimedia?;
     final scheduledDay = request['scheduledDay'] as String?;
-    final scheduledTime = request['scheduledTime'] as String?;
+    final scheduledTime = request['scheduledStartTime'] as String?;
     final companyName = company?['nameCompany'] ?? 'Empresa';
 
     return Container(
@@ -3068,28 +3488,29 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
 
               const SizedBox(height: 16),
 
-              // ✅ Show scheduled time for employees, availability for others
-              if (_isEmployee && _employeeScheduledDay != null && _employeeScheduledTime != null)
+              // ✅ Show scheduled time for employees and distributors with active tasks (but not completed)
+              if (((_isEmployee && _employeeScheduledDay != null && _employeeScheduledTime != null && _employeeTaskStatus != 'completado') ||
+                  (_isOwner && _distributorTaskStatus != null && _distributorTaskStatus != 'completado' && _distributorScheduledDay != null && _distributorScheduledTime != null)))
                 Container(
                   padding: const EdgeInsets.all(16),
                   decoration: BoxDecoration(
-                    color: Colors.amber.shade50,
+                    color: _isEmployee ? Colors.amber.shade50 : Colors.blue.shade50,
                     borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: Colors.amber.shade200),
+                    border: Border.all(color: _isEmployee ? Colors.amber.shade200 : Colors.blue.shade200),
                   ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Row(
+                      Row(
                         children: [
-                          Icon(Icons.schedule, color: Colors.amber, size: 20),
-                          SizedBox(width: 8),
+                          Icon(Icons.schedule, color: _isEmployee ? Colors.amber : Colors.blue, size: 20),
+                          const SizedBox(width: 8),
                           Text(
                             'Fecha y Hora de Entrega',
                             style: TextStyle(
                               fontSize: 14,
                               fontWeight: FontWeight.bold,
-                              color: Colors.amber,
+                              color: _isEmployee ? Colors.amber : Colors.blue,
                             ),
                           ),
                         ],
@@ -3097,14 +3518,18 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
                       const SizedBox(height: 12),
                       Row(
                         children: [
-                          const Icon(Icons.calendar_today, size: 18, color: Colors.amber),
+                          Icon(Icons.calendar_today, size: 18, color: _isEmployee ? Colors.amber : Colors.blue),
                           const SizedBox(width: 8),
-                          Text(
-                            '$_employeeScheduledDay a las ${_formatTime(_employeeScheduledTime!)}',
-                            style: const TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w600,
-                              color: Colors.black87,
+                          Expanded(
+                            child: Text(
+                              _isEmployee 
+                                  ? _formatScheduledDateTime(_employeeScheduledDay, _employeeScheduledTime, null)
+                                  : _formatScheduledDateTime(_distributorScheduledDay, _distributorScheduledTime, null),
+                              style: const TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w600,
+                                color: Colors.black87,
+                              ),
                             ),
                           ),
                         ],
@@ -3112,8 +3537,8 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
                     ],
                   ),
                 )
-              else
-                // availability
+              else if (!(_isOwner && _distributorTaskStatus != null))
+                // availability - only show if distributor doesn't have active task
                 AvailabilityPicker(
                   selectedAvailability: _isEditing
                       ? _selectedAvailability 
@@ -3125,7 +3550,7 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
                           });
                         } 
                       : null,
-                  labelText: 'Disponibilidad para entrega',
+                  labelText: _isOwner ? 'Fecha y Hora de Entrega' : 'Disponibilidad para entrega',
                   prefixIcon: Icons.calendar_month,
                   isRequired: false,
                 ),
@@ -3224,6 +3649,22 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
                   text: 'Confirmar entrega',
                   color: const Color(0xFF2D8A8A),
                 ),
+              ],
+
+              // ✅ Reviews section (show after task is completed)
+              if ((_isEmployee && _employeeTaskStatus == 'completado') || 
+                  (_isOwner && _distributorTaskStatus == 'completado')) ...[
+                const SizedBox(height: 20),
+                const Text(
+                  'Calificaciones',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    color: Color(0xFF2D8A8A),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                _buildReviewsSection(),
               ],
 
               // User info section (only in view mode)
@@ -3350,27 +3791,43 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
               else
                 Column(
                   children: [
-                    // ✅ Disable edit/delete when task is in progress
+                    // ✅ Hide edit/delete when task is completed or in progress
                     if (_distributorTaskStatus != null && 
-                        (_distributorTaskStatus == 'en_proceso' || 
+                        (_distributorTaskStatus == 'completado' ||
+                         _distributorTaskStatus == 'en_proceso' || 
                          _distributorTaskStatus == 'esperando_confirmacion_distribuidor' ||
                          _distributorTaskStatus == 'esperando_confirmacion_empleado')) ...[
                       Container(
                         padding: const EdgeInsets.all(16),
                         decoration: BoxDecoration(
-                          color: Colors.orange.withOpacity(0.1),
+                          color: _distributorTaskStatus == 'completado' 
+                              ? Colors.green.withOpacity(0.1) 
+                              : Colors.orange.withOpacity(0.1),
                           borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: Colors.orange.withOpacity(0.3)),
+                          border: Border.all(
+                            color: _distributorTaskStatus == 'completado'
+                                ? Colors.green.withOpacity(0.3)
+                                : Colors.orange.withOpacity(0.3)
+                          ),
                         ),
                         child: Row(
                           children: [
-                            Icon(Icons.lock, color: Colors.orange.shade700),
+                            Icon(
+                              _distributorTaskStatus == 'completado' ? Icons.check_circle : Icons.lock,
+                              color: _distributorTaskStatus == 'completado' 
+                                  ? Colors.green.shade700 
+                                  : Colors.orange.shade700,
+                            ),
                             const SizedBox(width: 12),
                             Expanded(
                               child: Text(
-                                'No puedes editar o eliminar este artículo mientras está en proceso',
+                                _distributorTaskStatus == 'completado'
+                                    ? 'Este artículo ya fue entregado y está en el historial'
+                                    : 'No puedes editar o eliminar este artículo mientras está en proceso',
                                 style: TextStyle(
-                                  color: Colors.orange.shade900,
+                                  color: _distributorTaskStatus == 'completado'
+                                      ? Colors.green.shade900
+                                      : Colors.orange.shade900,
                                   fontSize: 14,
                                 ),
                               ),

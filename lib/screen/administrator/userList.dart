@@ -1,3 +1,6 @@
+import 'package:reciclaje_app/auth/auth_service.dart';
+import 'package:reciclaje_app/screen/distribuidor/login_screen.dart';
+
 import '/database/admin/userList_db.dart';
 import '/model/admin/user_model.dart';
 import '/components/admin/user_card.dart';
@@ -16,6 +19,7 @@ class UserList extends StatefulWidget {
 }
 
 class _UserListState extends State<UserList> {
+  final authService = AuthService();
   final UserListDB _db = UserListDB();
   final TextEditingController _searchController = TextEditingController();
 
@@ -48,6 +52,40 @@ class _UserListState extends State<UserList> {
     }
   }
 
+  void _logout() async {
+    // Show confirmation dialog
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Cerrar Sesión'),
+        content: const Text('¿Estás seguro que deseas cerrar sesión?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancelar'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text(
+              'Cerrar Sesión',
+              style: TextStyle(color: Colors.red),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      await authService.signOut();
+      if (mounted) {
+        Navigator.of(context).pushAndRemoveUntil(
+          MaterialPageRoute(builder: (_) => const LoginScreen()),
+          (route) => false,
+        );
+      }
+    }
+  }
+
   @override
   void dispose() {
     _searchController.dispose();
@@ -65,6 +103,13 @@ class _UserListState extends State<UserList> {
         elevation: 0,
         toolbarHeight: 48,
         title: const Text('Usuarios', style: AppTextStyles.title),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.logout),
+            onPressed: _logout,
+            tooltip: 'Cerrar Sesión',
+          ),
+        ],
       ),
       body:
           _isLoading

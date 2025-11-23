@@ -26,10 +26,27 @@ class WorkflowService {
     // Obtener artículos activos del usuario (state = 1)
     final userArticles = await _articleDatabase.getArticlesByUserId(user!.id!);
     
-    // Contar artículos activos (state = 1)
-    final activeArticles = userArticles.where((article) => article.state == 1).toList();
+    // ✅ Get completed article IDs from tasks table
+    final supabase = Supabase.instance.client;
+    final completedTasks = await supabase
+        .from('tasks')
+        .select('articleID')
+        .eq('workflowStatus', 'completado');
+    
+    final completedArticleIds = completedTasks
+        .map((task) => task['articleID'] as int?)
+        .where((id) => id != null)
+        .cast<int>()
+        .toSet();
+    
+    // ✅ Contar artículos activos (state = 1) que NO están completados
+    final activeArticles = userArticles.where((article) => 
+      article.state == 1 && 
+      (article.id == null || !completedArticleIds.contains(article.id))
+    ).toList();
 
-    print('📊 Usuario tiene ${activeArticles.length} artículos activos de 3 máximo');
+    print('📊 Usuario tiene ${activeArticles.length} artículos activos de 3 máximo (excluyendo completados)');
+    print('📊 Total artículos en DB: ${userArticles.length}, Completados: ${completedArticleIds.length}');
 
     // ✅ Permitir hasta 3 artículos activos
     return activeArticles.length < 3;
@@ -50,6 +67,18 @@ class WorkflowService {
 
       final supabase = Supabase.instance.client;
       
+      // ✅ Get completed article IDs first
+      final completedTasks = await supabase
+          .from('tasks')
+          .select('articleID')
+          .eq('workflowStatus', 'completado');
+      
+      final completedArticleIds = completedTasks
+          .map((task) => task['articleID'] as int?)
+          .where((id) => id != null)
+          .cast<int>()
+          .toSet();
+      
       // ✅ Obtener TODOS los artículos activos del usuario
       var query = supabase
         .from('article')
@@ -64,12 +93,19 @@ class WorkflowService {
 
       final res = await query;
       
-      final categories = res
+      // ✅ Filter out completed articles
+      final activeArticles = res.where((article) => 
+        !completedArticleIds.contains(article['idArticle'] as int)
+      ).toList();
+      
+      final categories = activeArticles
           .map((e) => e['categoryID'] as int)
           .toSet();
 
-      print('🔍 Categorías usadas en artículos activos del usuario ${currentUser.id}:');
+      print('🔍 Categorías usadas en artículos activos (sin completados) del usuario ${currentUser.id}:');
       print('   Total artículos activos: ${res.length}');
+      print('   Artículos completados excluidos: ${completedArticleIds.length}');
+      print('   Artículos activos válidos: ${activeArticles.length}');
       print('   Categorías bloqueadas: $categories');
       if (excludeArticleId != null) {
         print('   Excluyendo artículo: $excludeArticleId');
@@ -94,12 +130,29 @@ class WorkflowService {
       
       final supabase = Supabase.instance.client;
       
-      // Contar artículos activos
-      final activeCount = await supabase
+      // ✅ Get completed article IDs
+      final completedTasks = await supabase
+          .from('tasks')
+          .select('articleID')
+          .eq('workflowStatus', 'completado');
+      
+      final completedArticleIds = completedTasks
+          .map((task) => task['articleID'] as int?)
+          .where((id) => id != null)
+          .cast<int>()
+          .toSet();
+      
+      // Get all active articles
+      final allActiveArticles = await supabase
           .from('article')
-          .count(CountOption.exact)
+          .select('idArticle')
           .eq('userID', currentUser.id!)
           .eq('state', 1);
+      
+      // ✅ Filter out completed articles
+      final activeCount = allActiveArticles
+          .where((article) => !completedArticleIds.contains(article['idArticle'] as int))
+          .length;
       
       if (activeCount == 0) {
         return 'can_publish';

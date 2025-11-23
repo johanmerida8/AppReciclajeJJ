@@ -18,10 +18,12 @@ import 'package:reciclaje_app/components/limit_character_two.dart';
 import 'package:reciclaje_app/components/row_button_2.dart';
 import 'package:reciclaje_app/database/article_database.dart';
 import 'package:reciclaje_app/database/category_database.dart';
+import 'package:reciclaje_app/database/days_available_database.dart';
 import 'package:reciclaje_app/database/media_database.dart';
 import 'package:reciclaje_app/database/users_database.dart';
 import 'package:reciclaje_app/model/article.dart';
 import 'package:reciclaje_app/model/category.dart';
+import 'package:reciclaje_app/model/daysAvailable.dart';
 import 'package:reciclaje_app/model/multimedia.dart';
 import 'package:reciclaje_app/screen/distribuidor/map_picker_screen.dart';
 import 'package:reciclaje_app/services/workflow_service.dart'; // ✅ Nuevo servicio
@@ -53,6 +55,7 @@ class _RegisterRecycleScreenState extends State<RegisterRecycleScreen> {
   
   final articleDatabase = ArticleDatabase();
   final categoryDatabase = CategoryDatabase();
+  final daysAvailableDatabase = DaysAvailableDatabase();
   // final deliverDatabase = DeliverDatabase();
   final mediaDatabase = MediaDatabase();
   
@@ -214,6 +217,16 @@ class _RegisterRecycleScreenState extends State<RegisterRecycleScreen> {
       return;
     }
 
+    if (_selectedAvailability == null || !_selectedAvailability!.isComplete) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Por favor selecciona tu disponibilidad para entrega'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
     setState(() {
       _isSubmitting = true;
     });
@@ -255,14 +268,26 @@ class _RegisterRecycleScreenState extends State<RegisterRecycleScreen> {
         userId: currentUser.id,
         state: 1, // Active state
         // workflowStatus: 'pendiente', // ✅ Estado inicial del workflow
-
-        // Availability fields
-        availableDays: _selectedAvailability?.getDaysForDatabase(),
-        availableTimeStart: _selectedAvailability?.getStartTimeForDatabase(),
-        availableTimeEnd: _selectedAvailability?.getEndTimeForDatabase(),
       );
 
       final articleId = await articleDatabase.createArticle(newArticle);
+      print('✅ Artículo creado con ID: $articleId');
+
+      // Create daysAvailable records for each selected day
+      if (_selectedAvailability != null) {
+        print('📅 Creando registros de disponibilidad...');
+        print('   Días seleccionados: ${_selectedAvailability!.selectedDays}');
+        print('   Hora inicio: ${_selectedAvailability!.getStartTimeForDatabase()}');
+        print('   Hora fin: ${_selectedAvailability!.getEndTimeForDatabase()}');
+        
+        try {
+          await _createDaysAvailableRecords(articleId, _selectedAvailability!);
+          print('✅ Registros de disponibilidad creados exitosamente');
+        } catch (e) {
+          print('❌ Error al crear registros de disponibilidad: $e');
+          throw Exception('Error al guardar disponibilidad: $e');
+        }
+      }
 
       // upload and save photos if any exist
       if (pickedImages.isNotEmpty) {
@@ -694,6 +719,85 @@ class _RegisterRecycleScreenState extends State<RegisterRecycleScreen> {
     });
   }
 }
+
+  /// Helper method to create daysAvailable records from AvailabilityData
+  Future<void> _createDaysAvailableRecords(int articleId, AvailabilityData availability) async {
+    try {
+      print('📅 Procesando ${availability.selectedDays.length} días de disponibilidad...');
+
+      // ✅ Check if we have per-day times (new format)
+      if (availability.perDayTimes != null && availability.perDayTimes!.isNotEmpty) {
+        for (var entry in availability.perDayTimes!.entries) {
+          final dayTimeRange = entry.value;
+          
+          print('   Creando registro para ${dayTimeRange.dayName} (${dayTimeRange.date.day}/${dayTimeRange.date.month})...');
+          print('     Hora: ${_formatTimeForLog(dayTimeRange.startTime)} - ${_formatTimeForLog(dayTimeRange.endTime)}');
+          
+          final newDaysAvailable = daysAvailable(
+            articleId: articleId,
+            availableDate: dayTimeRange.date,
+            timeStart: _formatTimeForDatabase(dayTimeRange.startTime),
+            timeEnd: _formatTimeForDatabase(dayTimeRange.endTime),
+          );
+
+          await daysAvailableDatabase.createDaysAvailable(newDaysAvailable);
+          print('   ✅ Registro creado exitosamente');
+        }
+      } else {
+        // ✅ Old format: same time for all days
+        final dayNameToWeekday = {
+          'Lunes': 1,
+          'Martes': 2,
+          'Miércoles': 3,
+          'Jueves': 4,
+          'Viernes': 5,
+          'Sábado': 6,
+          'Domingo': 7,
+        };
+
+        final today = DateTime.now();
+        final currentWeekday = today.weekday;
+        final monday = today.subtract(Duration(days: currentWeekday - 1));
+
+        for (String dayName in availability.selectedDays) {
+          final weekdayNumber = dayNameToWeekday[dayName];
+          if (weekdayNumber != null) {
+            final date = monday.add(Duration(days: weekdayNumber - 1));
+            
+            print('   Creando registro para $dayName (${date.day}/${date.month})...');
+            
+            final newDaysAvailable = daysAvailable(
+              articleId: articleId,
+              availableDate: date,
+              timeStart: availability.getStartTimeForDatabase(),
+              timeEnd: availability.getEndTimeForDatabase(),
+            );
+
+            await daysAvailableDatabase.createDaysAvailable(newDaysAvailable);
+            print('   ✅ Registro creado exitosamente');
+          }
+        }
+      }
+      
+      print('✅ Todos los registros de disponibilidad creados');
+    } catch (e) {
+      print('❌ Error en _createDaysAvailableRecords: $e');
+      rethrow;
+    }
+  }
+
+  String _formatTimeForDatabase(TimeOfDay time) {
+    final hour = time.hour.toString().padLeft(2, '0');
+    final minute = time.minute.toString().padLeft(2, '0');
+    return '$hour:$minute';
+  }
+
+  String _formatTimeForLog(TimeOfDay time) {
+    final hour = time.hourOfPeriod == 0 ? 12 : time.hourOfPeriod;
+    final minute = time.minute.toString().padLeft(2, '0');
+    final period = time.period == DayPeriod.am ? 'AM' : 'PM';
+    return '$hour:$minute $period';
+  }
 
   void _clearForm() {
     _itemNameController.clear();

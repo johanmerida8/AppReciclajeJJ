@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:reciclaje_app/screen/administrator/companyList.dart';
 import 'package:reciclaje_app/screen/administrator/userList.dart';
 
-class   adminNavigationScreens extends StatefulWidget {
+class adminNavigationScreens extends StatefulWidget {
   const adminNavigationScreens({super.key});
 
   @override

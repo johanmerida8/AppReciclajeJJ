@@ -29,9 +29,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Users? currentUser;
   Multimedia? currentUserAvatar; // User's avatar from multimedia table
   List<Article> userArticles = [];
+  List<Map<String, dynamic>> completedTasks = []; // Completed tasks with reviews
   Map<int, Multimedia?> articlePhotos = {}; // Cache for article photos
   Map<int, String> categoryNames = {}; // Cache for category names
   bool isLoading = true;
+  String selectedFilter = 'Publicados'; // 'Publicados' or 'Finalizados'
 
   @override
   void initState() {
@@ -73,6 +75,30 @@ class _ProfileScreenState extends State<ProfileScreen> {
         if (currentUser?.id != null) {
           userArticles = await articleDatabase.getArticlesByUserId(currentUser!.id!);
           
+          // ✅ Filter out articles with completed workflow status
+          final completedArticleIds = <int>{};
+          try {
+            final completedTasks = await Supabase.instance.client
+                .from('tasks')
+                .select('articleID')
+                .eq('workflowStatus', 'completado');
+            
+            for (var task in completedTasks) {
+              if (task['articleID'] != null) {
+                completedArticleIds.add(task['articleID'] as int);
+              }
+            }
+          } catch (e) {
+            print('⚠️ Error filtering completed articles: $e');
+          }
+          
+          // Remove completed articles from published list
+          userArticles = userArticles.where((article) => 
+            article.id != null && !completedArticleIds.contains(article.id!)
+          ).toList();
+          
+          print('📊 Published articles (excluding completed): ${userArticles.length}');
+          
           // Load photos and category names for each article
           for (var article in userArticles) {
             if (article.id != null) {
@@ -87,11 +113,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     .from('category')
                     .select('name')
                     .eq('idCategory', article.categoryID!)
-                    .single();
-                categoryNames[article.id!] = category['name'] as String;
+                    .maybeSingle();
+                if (category != null) {
+                  categoryNames[article.id!] = category['name'] as String;
+                }
               }
             }
           }
+          
+          // Load completed tasks with reviews
+          await _loadCompletedTasks();
         }
       }
     } catch (e) {
@@ -100,6 +131,84 @@ class _ProfileScreenState extends State<ProfileScreen> {
       if (mounted) {
         setState(() => isLoading = false);
       }
+    }
+  }
+
+  /// Load completed tasks with review information
+  Future<void> _loadCompletedTasks() async {
+    if (currentUser?.id == null) return;
+    
+    try {
+      final tasks = await Supabase.instance.client
+          .from('tasks')
+          .select('''
+            idTask,
+            workflowStatus,
+            lastUpdate,
+            article:articleID(
+              idArticle,
+              name,
+              description,
+              categoryID,
+              category:categoryID(name)
+            ),
+            request:requestID(
+              scheduledDay,
+              scheduledStartTime
+            )
+          ''')
+          .eq('workflowStatus', 'completado')
+          .order('lastUpdate', ascending: false);
+
+      // Get reviews for these tasks
+      final tasksWithReviews = <Map<String, dynamic>>[];
+      for (var task in tasks) {
+        final articleId = task['article']?['idArticle'];
+        if (articleId != null) {
+          // Check if this article belongs to the current user
+          final article = await Supabase.instance.client
+              .from('article')
+              .select('userID')
+              .eq('idArticle', articleId)
+              .maybeSingle();
+          
+          if (article != null && article['userID'] == currentUser!.id) {
+            // Get reviews for this article
+            final reviews = await Supabase.instance.client
+                .from('reviews')
+                .select('''
+                  idReview,
+                  starID,
+                  comment,
+                  senderID,
+                  receiverID,
+                  created_at,
+                  sender:senderID(names),
+                  receiver:receiverID(names)
+                ''')
+                .eq('articleID', articleId)
+                .order('created_at', ascending: false);
+            
+            // Load article photo
+            final urlPattern = 'articles/$articleId';
+            final photo = await mediaDatabase.getMainPhotoByPattern(urlPattern);
+            
+            tasksWithReviews.add({
+              ...task,
+              'reviews': reviews,
+              'photo': photo,
+            });
+          }
+        }
+      }
+
+      if (mounted) {
+        setState(() {
+          completedTasks = tasksWithReviews;
+        });
+      }
+    } catch (e) {
+      print('❌ Error loading completed tasks: $e');
     }
   }
 
@@ -164,6 +273,44 @@ class _ProfileScreenState extends State<ProfileScreen> {
       //     .eq('idDeliver', article.deliverID!)
       //     .single();
 
+      // Get daysAvailable data for this article
+      String availableDays = '';
+      String availableTimeStart = '';
+      String availableTimeEnd = '';
+      
+      try {
+        final daysAvailableList = await Supabase.instance.client
+            .from('daysAvailable')
+            .select()
+            .eq('articleID', article.id!);
+        
+        if (daysAvailableList.isNotEmpty) {
+          // Extract unique day names from dates
+          final dayNames = <String>{};
+          final dateFormat = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
+          
+          for (var record in daysAvailableList) {
+            if (record['dateAvailable'] != null) {
+              final date = DateTime.parse(record['dateAvailable']);
+              final dayName = dateFormat[date.weekday - 1];
+              dayNames.add(dayName);
+            }
+            
+            // Get times from first record (assuming all have same times)
+            if (availableTimeStart.isEmpty && record['startTime'] != null) {
+              availableTimeStart = record['startTime'];
+            }
+            if (availableTimeEnd.isEmpty && record['endTime'] != null) {
+              availableTimeEnd = record['endTime'];
+            }
+          }
+          
+          availableDays = dayNames.join(',');
+        }
+      } catch (e) {
+        print('Error fetching daysAvailable for article ${article.id}: $e');
+      }
+
       return RecyclingItem(
         id: article.id!,
         title: article.name ?? '',
@@ -181,9 +328,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
         // latitude: (deliver['lat'] as num).toDouble(),
         // longitude: (deliver['lng'] as num).toDouble(),
         // address: deliver['address'] as String,
-        availableDays: article.availableDays ?? '',
-        availableTimeStart: article.availableTimeStart ?? '',
-        availableTimeEnd: article.availableTimeEnd ?? '',
+        availableDays: availableDays,
+        availableTimeStart: availableTimeStart,
+        availableTimeEnd: availableTimeEnd,
         createdAt: article.lastUpdate ?? DateTime.now(),
       );
     } catch (e) {
@@ -419,91 +566,37 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             ),
                           ),
                           const SizedBox(height: 10),
-                          // Filter options
+                          // Filter tabs
                           Padding(
                             padding: const EdgeInsets.symmetric(horizontal: 25),
-                            // child: Row(
-                            //   children: [
-                            //     Text(
-                            //       'por fecha',
-                            //       style: TextStyle(
-                            //         fontSize: 14,
-                            //         color: Colors.grey[600],
-                            //       ),
-                            //     ),
-                            //     const SizedBox(width: 8),
-                            //     Icon(Icons.calendar_today, size: 16, color: Colors.grey[600]),
-                            //     const Spacer(),
-                            //     // 3-dot menu button
-                            //     IconButton(
-                            //       icon: Icon(Icons.more_vert, size: 24, color: Colors.grey[600]),
-                            //       onPressed: _showSettingsMenu,
-                            //       tooltip: 'Más opciones',
-                            //       padding: EdgeInsets.zero,
-                            //       constraints: const BoxConstraints(),
-                            //     ),
-                            //     const SizedBox(width: 16),
-                            //     Icon(Icons.sort, size: 20, color: Colors.grey[600]),
-                            //     const SizedBox(width: 16),
-                            //     Icon(Icons.grid_view, size: 20, color: Colors.grey[600]),
-                            //   ],
-                            // ),
+                            child: Row(
+                              children: [
+                                _buildFilterTab('Publicados'),
+                                const SizedBox(width: 12),
+                                _buildFilterTab('Finalizados'),
+                              ],
+                            ),
                           ),
                           const SizedBox(height: 10),
                           // Articles count
                           Padding(
                             padding: const EdgeInsets.symmetric(horizontal: 25),
                             child: Text(
-                              'Total ${userArticles.length} finalizadas',
+                              selectedFilter == 'Publicados'
+                                  ? '${userArticles.length} artículos publicados'
+                                  : '${completedTasks.length} tareas finalizadas',
                               style: TextStyle(
-                                fontSize: 13,
+                                fontSize: 14,
                                 color: Colors.grey[600],
                               ),
                             ),
                           ),
                           const SizedBox(height: 15),
-                          // Grid of articles
+                          // Grid of articles or completed tasks
                           Expanded(
-                            child: userArticles.isEmpty
-                                ? Center(
-                                    child: Column(
-                                      mainAxisAlignment: MainAxisAlignment.center,
-                                      children: [
-                                        Icon(
-                                          Icons.inventory_2_outlined,
-                                          size: 80,
-                                          color: Colors.grey[300],
-                                        ),
-                                        const SizedBox(height: 16),
-                                        Text(
-                                          'No tienes publicaciones',
-                                          style: TextStyle(
-                                            fontSize: 16,
-                                            color: Colors.grey[600],
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  )
-                                : Padding(
-                                    padding: const EdgeInsets.symmetric(horizontal: 15),
-                                    child: GridView.builder(
-                                      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                                        crossAxisCount: 2,
-                                        mainAxisSpacing: 10,
-                                        crossAxisSpacing: 10,
-                                        childAspectRatio: 0.85,
-                                      ),
-                                      itemCount: userArticles.length,
-                                      itemBuilder: (context, index) {
-                                        final article = userArticles[index];
-                                        return GestureDetector(
-                                          onTap: () => _navigateToDetail(article),
-                                          child: _buildArticleCard(article),
-                                        );
-                                      },
-                                    ),
-                                  ),
+                            child: selectedFilter == 'Publicados'
+                                ? _buildPublishedArticlesGrid()
+                                : _buildCompletedTasksGrid(),
                           ),
                         ],
                       ),
@@ -511,6 +604,356 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   ),
                 ],
               ),
+      ),
+    );
+  }
+
+  // Build filter tab button
+  Widget _buildFilterTab(String filterName) {
+    final isSelected = selectedFilter == filterName;
+    return Expanded(
+      child: GestureDetector(
+        onTap: () {
+          setState(() {
+            selectedFilter = filterName;
+          });
+        },
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 10),
+          decoration: BoxDecoration(
+            color: isSelected ? const Color(0xFF2D8A8A) : Colors.grey[200],
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Text(
+            filterName,
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+              color: isSelected ? Colors.white : Colors.grey[700],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  // Build published articles grid
+  Widget _buildPublishedArticlesGrid() {
+    if (userArticles.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.inventory_2_outlined,
+              size: 80,
+              color: Colors.grey[300],
+            ),
+            const SizedBox(height: 16),
+            Text(
+              'No tienes publicaciones',
+              style: TextStyle(
+                fontSize: 16,
+                color: Colors.grey[600],
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 15),
+      child: GridView.builder(
+        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: 2,
+          mainAxisSpacing: 10,
+          crossAxisSpacing: 10,
+          childAspectRatio: 0.85,
+        ),
+        itemCount: userArticles.length,
+        itemBuilder: (context, index) {
+          final article = userArticles[index];
+          return GestureDetector(
+            onTap: () => _navigateToDetail(article),
+            child: _buildArticleCard(article),
+          );
+        },
+      ),
+    );
+  }
+
+  // Build completed tasks grid
+  Widget _buildCompletedTasksGrid() {
+    if (completedTasks.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.check_circle_outline,
+              size: 80,
+              color: Colors.grey[300],
+            ),
+            const SizedBox(height: 16),
+            Text(
+              'No hay tareas finalizadas',
+              style: TextStyle(
+                fontSize: 16,
+                color: Colors.grey[600],
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 15),
+      child: GridView.builder(
+        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: 2,
+          mainAxisSpacing: 10,
+          crossAxisSpacing: 10,
+          childAspectRatio: 0.85,
+        ),
+        itemCount: completedTasks.length,
+        itemBuilder: (context, index) {
+          final task = completedTasks[index];
+          return GestureDetector(
+            onTap: () async {
+              // Navigate to detail_recycle_screen instead of dialog
+              await _navigateToCompletedTaskDetail(task);
+            },
+            child: _buildCompletedTaskCard(task),
+          );
+        },
+      ),
+    );
+  }
+
+  // Navigate to completed task detail screen
+  Future<void> _navigateToCompletedTaskDetail(Map<String, dynamic> task) async {
+    try {
+      final article = task['article'] as Map<String, dynamic>?;
+      if (article == null || article['idArticle'] == null) {
+        print('❌ No article data in task');
+        return;
+      }
+
+      final articleId = article['idArticle'] as int;
+      
+      // Fetch full article data
+      final articleData = await articleDatabase.getArticleById(articleId);
+      if (articleData == null) {
+        print('❌ Article not found');
+        return;
+      }
+
+      // Convert to RecyclingItem and navigate
+      final recyclingItem = await _convertArticleToRecyclingItem(articleData);
+      if (recyclingItem != null && mounted) {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => DetailRecycleScreen(item: recyclingItem),
+          ),
+        ).then((_) {
+          // Refresh data when coming back
+          _loadUserData();
+        });
+      }
+    } catch (e) {
+      print('❌ Error navigating to completed task detail: $e');
+    }
+  }
+
+  // Format time from database
+  String _formatTime(String timeStr) {
+    try {
+      final parts = timeStr.split(':');
+      if (parts.length >= 2) {
+        int hour = int.parse(parts[0]);
+        final minute = parts[1].padLeft(2, '0');
+        final period = hour >= 12 ? 'PM' : 'AM';
+        if (hour > 12) hour -= 12;
+        if (hour == 0) hour = 12;
+        return '$hour:$minute $period';
+      }
+    } catch (e) {
+      // Return as is if parsing fails
+    }
+    return timeStr;
+  }
+
+  // Build completed task card
+  Widget _buildCompletedTaskCard(Map<String, dynamic> task) {
+    final article = task['article'] as Map<String, dynamic>?;
+    final photo = task['photo'] as Multimedia?;
+    final category = article?['category'] as Map<String, dynamic>?;
+    final reviews = task['reviews'] as List<dynamic>?;
+    
+    final articleName = article?['name'] ?? 'Sin título';
+    final categoryName = category?['name'] ?? '';
+    final imageUrl = photo?.url;
+    
+    // Calculate average rating
+    double avgRating = 0;
+    if (reviews != null && reviews.isNotEmpty) {
+      final totalStars = reviews.fold<int>(0, (sum, review) => sum + (review['starID'] as int? ?? 0));
+      avgRating = totalStars / reviews.length;
+    }
+
+    return Container(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(12),
+        color: imageUrl == null ? Colors.grey[300] : null,
+      ),
+      child: Stack(
+        children: [
+          // Image
+          if (imageUrl != null)
+            ClipRRect(
+              borderRadius: BorderRadius.circular(12),
+              child: CachedNetworkImage(
+                imageUrl: imageUrl,
+                width: double.infinity,
+                height: double.infinity,
+                fit: BoxFit.cover,
+                placeholder: (context, url) => Container(
+                  color: Colors.grey[300],
+                  child: const Center(
+                    child: CircularProgressIndicator(
+                      color: Color(0xFF2D8A8A),
+                      strokeWidth: 2,
+                    ),
+                  ),
+                ),
+                errorWidget: (context, url, error) => Container(
+                  color: Colors.grey[300],
+                  child: Center(
+                    child: Icon(
+                      Icons.image_not_supported,
+                      size: 40,
+                      color: Colors.grey[600],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          // Gradient overlay
+          Container(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(12),
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [
+                  Colors.transparent,
+                  Colors.black.withOpacity(0.7),
+                ],
+                stops: const [0.5, 1.0],
+              ),
+            ),
+          ),
+          // Completed badge
+          Positioned(
+            top: 8,
+            right: 8,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: Colors.green,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const Text(
+                'Completado',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 10,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          ),
+          // Article info at bottom
+          Positioned(
+            bottom: 10,
+            left: 10,
+            right: 10,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  articleName,
+                  style: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white,
+                    shadows: [
+                      Shadow(
+                        color: Colors.black,
+                        blurRadius: 2,
+                      ),
+                    ],
+                  ),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                const SizedBox(height: 4),
+                if (categoryName.isNotEmpty)
+                  Text(
+                    categoryName,
+                    style: const TextStyle(
+                      fontSize: 11,
+                      color: Colors.white70,
+                      shadows: [
+                        Shadow(
+                          color: Colors.black,
+                          blurRadius: 2,
+                        ),
+                      ],
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                if (avgRating > 0) ...[
+                  const SizedBox(height: 4),
+                  Row(
+                    children: [
+                      const Icon(Icons.star, color: Colors.amber, size: 14),
+                      const SizedBox(width: 4),
+                      Text(
+                        avgRating.toStringAsFixed(1),
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                          shadows: [
+                            Shadow(
+                              color: Colors.black,
+                              blurRadius: 2,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ],
+            ),
+          ),
+          // Show icon if no image
+          if (imageUrl == null)
+            Center(
+              child: Icon(
+                Icons.check_circle,
+                size: 40,
+                color: Colors.grey[600],
+              ),
+            ),
+        ],
       ),
     );
   }

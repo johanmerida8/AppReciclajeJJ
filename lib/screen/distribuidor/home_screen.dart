@@ -603,10 +603,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
 
-  /// Get only current user's items
+  /// Get only current user's items (excluding completed tasks)
   List<RecyclingItem> get _myItems {
     if (_currentUserId == null) return [];
-    return _items.where((item) => item.ownerUserId == _currentUserId).toList();
+    // ✅ Filter out articles with completed workflow status (they're in history)
+    return _items.where((item) => 
+      item.ownerUserId == _currentUserId && 
+      item.workflowStatus != 'completado'
+    ).toList();
   }
 
   /// Handle map tap for quick register

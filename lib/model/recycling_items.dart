@@ -12,9 +12,9 @@ class RecyclingItem {
   final double latitude;
   final double longitude;
   final String address;
-  final String availableDays;
-  final String availableTimeStart;
-  final String availableTimeEnd;
+  final String? availableDays; // ✅ Made optional - now stored in daysAvailable table
+  final String? availableTimeStart; // ✅ Made optional
+  final String? availableTimeEnd; // ✅ Made optional
   final DateTime createdAt;
   final String? workflowStatus;
 
@@ -32,9 +32,9 @@ class RecyclingItem {
     required this.latitude,
     required this.longitude,
     required this.address,
-    required this.availableDays,
-    required this.availableTimeStart,
-    required this.availableTimeEnd,
+    this.availableDays, // ✅ Now optional
+    this.availableTimeStart, // ✅ Now optional
+    this.availableTimeEnd, // ✅ Now optional
     required this.createdAt,
     this.workflowStatus,
   });

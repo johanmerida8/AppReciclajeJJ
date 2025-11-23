@@ -5,6 +5,7 @@ import 'package:reciclaje_app/screen/distribuidor/profile_screen.dart';
 import 'package:reciclaje_app/screen/employee/employee_home_screen.dart';
 // import 'package:reciclaje_app/screen/employee/employee_tasks_screen.dart';
 import 'package:reciclaje_app/screen/employee/employee_map_screen.dart';
+import 'package:reciclaje_app/screen/employee/employee_profile_screen.dart';
 // import 'package:reciclaje_app/screen/employee/employee_profile_screen.dart';
 
 class EmployeeNavigationScreens extends StatefulWidget {
@@ -22,8 +23,8 @@ class _EmployeeNavigationScreensState extends State<EmployeeNavigationScreens> {
     const EmployeeMapScreen(),
     const EmployeeHomeScreen(),
     // const EmployeeTasksScreen(),
-    // const EmployeeProfileScreen(),
-    const ProfileScreen(),
+    const EmployeeProfileScreen(),
+    // const ProfileScreen(),
   ];
 
   final List<Widget> _navigationItems = [

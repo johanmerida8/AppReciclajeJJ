@@ -65,7 +65,7 @@ class AuthGate extends StatelessWidget {
             if (role == 'administrador') {
               print('✅ Redirecting to: AdminDashboardScreen');
               return const adminNavigationScreens();
-              return const AdminDashboardScreen();
+              // return const AdminDashboardScreen();
             } else if (role == 'admin-empresa') {
               print('✅ Redirecting to: CompanyNavigationScreens');
               return const CompanyNavigationScreens();

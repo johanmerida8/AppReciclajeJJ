@@ -52,6 +52,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
   }
 
   // sign user in method
+  // sign user in method
   void signUserUp() async {
     final names = namesController.text.trim();
     final email = emailController.text.trim();
@@ -108,18 +109,20 @@ class _RegisterScreenState extends State<RegisterScreen> {
       // --- Lógica para rol ---
       String role = 'distribuidor';
       if (names.toLowerCase() == 'admin' || names.toLowerCase() == 'administrador') {
-        // comprobar si ya existe un administrador
-        final existingAdmin = await Supabase.instance.client
+        // ✅ Comprobar cuántos administradores ya existen (máximo 3)
+        final existingAdmins = await Supabase.instance.client
             .from('users')
             .select('idUser')
-            .eq('role', 'administrador')
-            .maybeSingle();
+            .eq('role', 'administrador');
 
-        if (existingAdmin != null) {
-          // ya existe admin -> impedir crear otro
+        if (existingAdmins.length >= 3) {
+          // Ya existen 3 administradores -> impedir crear más
           ScaffoldMessenger.of(context).hideCurrentSnackBar();
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Ya existe un administrador registrado. No se puede crear otro.'), backgroundColor: Colors.red),
+            const SnackBar(
+              content: Text('Ya existen 3 administradores registrados. No se pueden crear más.'), 
+              backgroundColor: Colors.red
+            ),
           );
           setState(() => _isLoading = false);
           return;
@@ -150,7 +153,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
       if (res.user == null) {
         throw Exception('No se creó la cuenta (respuesta vacía del servidor)');
       }
-
 
       // éxito
       if (mounted) {

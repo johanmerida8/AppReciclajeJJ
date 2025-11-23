@@ -42,6 +42,22 @@ class ArticleDatabase {
     }
   }
 
+  Future<Article?> getArticleById(int articleId) async {
+    try {
+      final res = await Supabase.instance.client
+          .from('article')
+          .select()
+          .eq('idArticle', articleId)
+          .eq('state', 1) // Solo artículos activos
+          .maybeSingle();
+      
+      return res != null ? Article.fromMap(res) : null;
+    } catch (e) {
+      print('Error al obtener el artículo por ID: $e');
+      return null;
+    }
+  }
+
   // ✅ NUEVO: Obtener artículos por ID de usuario
   Future<List<Article>> getArticlesByUserId(int userId) async {
     try {

@@ -65,6 +65,14 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
             return article != null && article['userID'] == _currentUserId;
           }).toList();
 
+          print('🔔 Found ${myRequests.length} pending requests');
+          for (var req in myRequests) {
+            print('📋 Request ${req['idRequest']}: ${req['company']?['nameCompany']} - ${req['article']?['name']}');
+            print('   RequestDate: ${req['requestDate']}');
+            print('   ScheduledDay: ${req['scheduledDay']}');
+            print('   ScheduledStartTime: ${req['scheduledStartTime']}');
+          }
+
           // Load company logos for each request
           for (var request in myRequests) {
             final company = request['company'] as Map<String, dynamic>?;
@@ -314,14 +322,29 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     final article = request['article'] as Map<String, dynamic>?;
     final companyLogo = request['companyLogo'] as Multimedia?;
     final requestDate = request['requestDate'] != null 
-        ? DateTime.parse(request['requestDate']) 
+        ? DateTime.parse(request['requestDate']).toLocal() 
         : DateTime.now();
 
     final companyName = company?['nameCompany'] ?? 'Empresa';
     final articleName = article?['name'] ?? 'Artículo';
     final timeAgo = _getTimeAgo(requestDate);
     final scheduledDay = request['scheduledDay'] as String?;
-    final scheduledTime = request['scheduledTime'] as String?;
+    final scheduledStartTime = request['scheduledStartTime'] as String?;
+    final scheduledEndTime = request['scheduledEndTime'] as String?;
+    
+    // Format the scheduled day to show day name and date
+    String? formattedScheduledDay;
+    if (scheduledDay != null) {
+      try {
+        final date = DateTime.parse(scheduledDay);
+        final dayNames = ['lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado', 'domingo'];
+        final dayName = dayNames[date.weekday - 1];
+        formattedScheduledDay = '$dayName ${date.day}';
+      } catch (e) {
+        // If it's not a date, use as is (fallback for old format)
+        formattedScheduledDay = scheduledDay;
+      }
+    }
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
@@ -424,10 +447,10 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                       fontStyle: FontStyle.italic,
                     ),
                   ),
-                  if (scheduledDay != null && scheduledTime != null) ...[
+                  if (formattedScheduledDay != null && scheduledStartTime != null) ...[
                     const TextSpan(text: ' el '),
                     TextSpan(
-                      text: scheduledDay,
+                      text: formattedScheduledDay,
                       style: const TextStyle(
                         fontWeight: FontWeight.bold,
                         color: Color(0xFF2D8A8A),
@@ -435,7 +458,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                     ),
                     const TextSpan(text: ' a las '),
                     TextSpan(
-                      text: _formatTime(scheduledTime),
+                      text: _formatTime(scheduledStartTime),
                       style: const TextStyle(
                         fontWeight: FontWeight.bold,
                         color: Color(0xFF2D8A8A),

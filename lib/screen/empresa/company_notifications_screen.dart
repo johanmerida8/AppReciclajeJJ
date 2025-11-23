@@ -453,24 +453,24 @@ class _CompanyNotificationsScreenState extends State<CompanyNotificationsScreen>
                 ),
               ],
             ),
-            const SizedBox(height: 16),
-            // Action button
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton.icon(
-                onPressed: () => _navigateToArticleDetails(request),
-                icon: const Icon(Icons.assignment_ind, size: 18),
-                label: const Text('Asignar Empleado'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF2D8A8A),
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 12),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                ),
-              ),
-            ),
+            // const SizedBox(height: 16),
+            // // Action button
+            // SizedBox(
+            //   width: double.infinity,
+            //   child: ElevatedButton.icon(
+            //     onPressed: () => _navigateToArticleDetails(request),
+            //     icon: const Icon(Icons.assignment_ind, size: 18),
+            //     label: const Text('Asignar Empleado'),
+            //     style: ElevatedButton.styleFrom(
+            //       backgroundColor: const Color(0xFF2D8A8A),
+            //       foregroundColor: Colors.white,
+            //       padding: const EdgeInsets.symmetric(vertical: 12),
+            //       shape: RoundedRectangleBorder(
+            //         borderRadius: BorderRadius.circular(8),
+            //       ),
+            //     ),
+            //   ),
+            // ),
           ],
         ),
       ),

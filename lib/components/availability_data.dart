@@ -1,14 +1,31 @@
 import 'package:flutter/material.dart';
 
+// ✅ New model to store time range for each day
+class DayTimeRange {
+  final String dayName;
+  final DateTime date;
+  final TimeOfDay startTime;
+  final TimeOfDay endTime;
+
+  DayTimeRange({
+    required this.dayName,
+    required this.date,
+    required this.startTime,
+    required this.endTime,
+  });
+}
+
 class AvailabilityData {
   final List<String> selectedDays;
   final TimeOfDay? startTime;
   final TimeOfDay? endTime;
+  final Map<String, DayTimeRange>? perDayTimes; // ✅ New: store different times per day
 
   AvailabilityData({
     required this.selectedDays,
     this.startTime,
     this.endTime,
+    this.perDayTimes,
   });
 
   // convert to database format
@@ -67,10 +84,71 @@ class AvailabilityData {
     }
   } 
 
-  bool get isComplete => selectedDays.isNotEmpty && startTime != null && endTime != null;
+  bool get isComplete => selectedDays.isNotEmpty && 
+      (perDayTimes != null ? perDayTimes!.length == selectedDays.length : (startTime != null && endTime != null));
+
+  /// ✅ Check if availability data has changed
+  bool isEqualTo(AvailabilityData? other) {
+    if (other == null) return false;
+    
+    // Check if days are the same
+    if (selectedDays.length != other.selectedDays.length) return false;
+    for (int i = 0; i < selectedDays.length; i++) {
+      if (selectedDays[i] != other.selectedDays[i]) return false;
+    }
+    
+    // Check per-day times if present
+    if (perDayTimes != null || other.perDayTimes != null) {
+      if (perDayTimes == null || other.perDayTimes == null) return false;
+      if (perDayTimes!.length != other.perDayTimes!.length) return false;
+      
+      // Compare each day's times and dates
+      for (var entry in perDayTimes!.entries) {
+        final otherDayTime = other.perDayTimes![entry.key];
+        if (otherDayTime == null) return false;
+        
+        final dayTime = entry.value;
+        // Compare dates (year, month, day)
+        if (dayTime.date.year != otherDayTime.date.year ||
+            dayTime.date.month != otherDayTime.date.month ||
+            dayTime.date.day != otherDayTime.date.day) return false;
+        // Compare start and end times
+        if (dayTime.startTime.hour != otherDayTime.startTime.hour ||
+            dayTime.startTime.minute != otherDayTime.startTime.minute) return false;
+        if (dayTime.endTime.hour != otherDayTime.endTime.hour ||
+            dayTime.endTime.minute != otherDayTime.endTime.minute) return false;
+      }
+      
+      return true;
+    }
+    
+    // Check regular times if no per-day times
+    if (startTime?.hour != other.startTime?.hour ||
+        startTime?.minute != other.startTime?.minute) return false;
+    if (endTime?.hour != other.endTime?.hour ||
+        endTime?.minute != other.endTime?.minute) return false;
+    
+    return true;
+  }
 
   String getDisplayText() {
     if (selectedDays.isEmpty) return 'No hay días seleccionados';
+    
+    // If we have per-day times, show detailed list
+    if (perDayTimes != null && perDayTimes!.isNotEmpty) {
+      // Sort by date
+      final sortedEntries = perDayTimes!.entries.toList()
+        ..sort((a, b) => a.value.date.compareTo(b.value.date));
+      
+      // Format each day with date and time
+      return sortedEntries.map((entry) {
+        final dayTime = entry.value;
+        final formattedDate = _formatDate(dayTime.date);
+        final startStr = _formatTime(dayTime.startTime);
+        final endStr = _formatTime(dayTime.endTime);
+        return '$formattedDate: $startStr - $endStr';
+      }).join('\n');
+    }
     
     final daysText = selectedDays.join(', ');
     
@@ -79,6 +157,17 @@ class AvailabilityData {
     }
     
     return daysText;
+  }
+
+  String _formatDate(DateTime date) {
+    final weekdays = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
+    final months = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
+    
+    final weekday = weekdays[date.weekday - 1];
+    final day = date.day;
+    final month = months[date.month - 1];
+    
+    return '$weekday $day $month';
   }
 
   String _formatTime(TimeOfDay time) {
@@ -254,8 +343,7 @@ class _AvailabilityPickerDialog extends StatefulWidget {
 
 class _AvailabilityPickerDialogState extends State<_AvailabilityPickerDialog> {
   late List<String> _selectedDays;
-  TimeOfDay? _startTime;
-  TimeOfDay? _endTime;
+  Map<String, DayTimeRange> _dayTimeRanges = {}; // ✅ Store time for each day
 
   final List<Map<String, dynamic>> _weekDays = [];
 
@@ -263,8 +351,7 @@ class _AvailabilityPickerDialogState extends State<_AvailabilityPickerDialog> {
   void initState() {
     super.initState();
     _selectedDays = widget.initialAvailability?.selectedDays ?? [];
-    _startTime = widget.initialAvailability?.startTime;
-    _endTime = widget.initialAvailability?.endTime;
+    _dayTimeRanges = widget.initialAvailability?.perDayTimes ?? {};
     _buildWeekDays();
   }
 
@@ -368,30 +455,26 @@ class _AvailabilityPickerDialogState extends State<_AvailabilityPickerDialog> {
                 spacing: 8,
                 runSpacing: 8,
                 children: _weekDays.map((day) {
-                  final isSelected = _selectedDays.contains(day['full']);
+                  final dayName = day['full'] as String;
+                  final date = day['date'] as DateTime;
+                  // ✅ Create date-based key for lookup
+                  final dateKey = '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+                  final hasTimeSet = _dayTimeRanges.containsKey(dateKey);
                   final dayNumber = day['dayNumber'];
                   final shortName = day['short'];
                   
                   return GestureDetector(
-                    onTap: () {
-                      setState(() {
-                        if (isSelected) {
-                          _selectedDays.remove(day['full']);
-                        } else {
-                          _selectedDays.add(day['full'] as String);
-                        }
-                      });
-                    },
+                    onTap: () => _selectDayWithTime(day),
                     child: Container(
                       width: 70,
                       padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
                       decoration: BoxDecoration(
-                        color: isSelected 
+                        color: hasTimeSet 
                             ? const Color(0xFF2D8A8A) 
                             : Colors.grey.shade100,
                         borderRadius: BorderRadius.circular(12),
                         border: Border.all(
-                          color: isSelected 
+                          color: hasTimeSet 
                               ? const Color(0xFF2D8A8A) 
                               : Colors.grey.shade300,
                           width: 2,
@@ -402,7 +485,7 @@ class _AvailabilityPickerDialogState extends State<_AvailabilityPickerDialog> {
                           Text(
                             shortName.toString(),
                             style: TextStyle(
-                              color: isSelected ? Colors.white : Colors.grey.shade700,
+                              color: hasTimeSet ? Colors.white : Colors.grey.shade700,
                               fontWeight: FontWeight.bold,
                               fontSize: 13,
                             ),
@@ -411,20 +494,19 @@ class _AvailabilityPickerDialogState extends State<_AvailabilityPickerDialog> {
                           Text(
                             dayNumber.toString(),
                             style: TextStyle(
-                              color: isSelected ? Colors.white : Colors.grey.shade800,
+                              color: hasTimeSet ? Colors.white : Colors.grey.shade800,
                               fontWeight: FontWeight.bold,
                               fontSize: 18,
                             ),
                           ),
-                          if (isSelected)
-                            const Padding(
-                              padding: EdgeInsets.only(top: 2),
-                              child: Icon(
-                                Icons.check_circle,
-                                color: Colors.white,
-                                size: 14,
-                              ),
+                          if (hasTimeSet) ...[
+                            const SizedBox(height: 2),
+                            Icon(
+                              Icons.schedule,
+                              color: Colors.white,
+                              size: 14,
                             ),
+                          ],
                         ],
                       ),
                     ),
@@ -432,81 +514,169 @@ class _AvailabilityPickerDialogState extends State<_AvailabilityPickerDialog> {
                 }).toList(),
               ),
 
-              const SizedBox(height: 24),
+              const SizedBox(height: 16),
 
-              // Hours Section
-              const Text(
-                'Horas Disponibles',
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                  color: Color(0xFF2D8A8A),
-                ),
-              ),
-              const SizedBox(height: 12),
-
-              Row(
-                children: [
-                  // Start Time
-                  Expanded(
-                    child: _TimePickerButton(
-                      label: 'Desde',
-                      time: _startTime,
-                      onTap: () => _selectTime(context, true),
-                    ),
-                  ),
-                  const SizedBox(width: 16),
-                  // End Time
-                  Expanded(
-                    child: _TimePickerButton(
-                      label: 'Hasta',
-                      time: _endTime,
-                      onTap: () => _selectTime(context, false),
-                    ),
-                  ),
-                ],
-              ),
-
-              const SizedBox(height: 24),
-
-              // Warning message for single day selection
-              if (_selectedDays.length == 1)
+              // Show selected days with times
+              if (_dayTimeRanges.isNotEmpty) ...[
                 Container(
-                  padding: const EdgeInsets.all(12),
-                  margin: const EdgeInsets.only(bottom: 16),
+                  padding: const EdgeInsets.all(16),
                   decoration: BoxDecoration(
-                    color: Colors.orange.shade50,
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: Colors.orange.shade300),
+                    color: const Color(0xFF2D8A8A).withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: const Color(0xFF2D8A8A).withOpacity(0.3),
+                      width: 1.5,
+                    ),
                   ),
-                  child: Row(
+                  child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Icon(Icons.info_outline, color: Colors.orange.shade700, size: 20),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          'Recomendamos seleccionar al menos 2-3 días para dar más flexibilidad a las empresas de reciclaje al programar la recolección.',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: Colors.orange.shade900,
-                            height: 1.3,
+                      Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(6),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF2D8A8A),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: const Icon(
+                              Icons.event_available,
+                              color: Colors.white,
+                              size: 16,
+                            ),
                           ),
-                        ),
+                          const SizedBox(width: 10),
+                          const Text(
+                            'Días seleccionados:',
+                            style: TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.bold,
+                              color: Color(0xFF2D8A8A),
+                            ),
+                          ),
+                        ],
                       ),
+                      const SizedBox(height: 12),
+                      // Sort entries by date before displaying
+                      ...(_dayTimeRanges.entries.toList()
+                        ..sort((a, b) => a.value.date.compareTo(b.value.date)))
+                        .map((entry) {
+                        final dayTimeRange = entry.value;
+                        final monthNames = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
+                        
+                        return Container(
+                          margin: const EdgeInsets.only(bottom: 8),
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(
+                              color: const Color(0xFF2D8A8A).withOpacity(0.2),
+                            ),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withOpacity(0.03),
+                                blurRadius: 4,
+                                offset: const Offset(0, 2),
+                              ),
+                            ],
+                          ),
+                          child: Row(
+                            children: [
+                              // Day name and date
+                              Expanded(
+                                flex: 2,
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      dayTimeRange.dayName,
+                                      style: const TextStyle(
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.bold,
+                                        color: Color(0xFF2D8A8A),
+                                      ),
+                                    ),
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      '${dayTimeRange.date.day} ${monthNames[dayTimeRange.date.month - 1]}',
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: Colors.grey[600],
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              // Time range
+                              Expanded(
+                                flex: 2,
+                                child: Row(
+                                  children: [
+                                    Icon(
+                                      Icons.access_time,
+                                      size: 14,
+                                      color: Colors.grey[600],
+                                    ),
+                                    const SizedBox(width: 4),
+                                    Expanded(
+                                      child: Text(
+                                        '${_formatTime(dayTimeRange.startTime)} - ${_formatTime(dayTimeRange.endTime)}',
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          color: Colors.grey[700],
+                                          fontWeight: FontWeight.w500,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              // Remove button
+                              Material(
+                                color: Colors.transparent,
+                                child: InkWell(
+                                  borderRadius: BorderRadius.circular(20),
+                                  onTap: () {
+                                    setState(() {
+                                      _dayTimeRanges.remove(entry.key);
+                                      _selectedDays.remove(dayTimeRange.dayName);
+                                    });
+                                  },
+                                  child: Padding(
+                                    padding: const EdgeInsets.all(4),
+                                    child: Icon(
+                                      Icons.close,
+                                      size: 18,
+                                      color: Colors.grey[600],
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      }).toList(),
                     ],
                   ),
                 ),
+              ],
+
+              const SizedBox(height: 24),
 
               // Confirm Button
               ElevatedButton(
-                onPressed: _selectedDays.isNotEmpty && _startTime != null && _endTime != null
+                onPressed: _dayTimeRanges.isNotEmpty
                     ? () {
+                        setState(() {
+                          _selectedDays = _dayTimeRanges.keys.toList();
+                        });
                         widget.onConfirm(
                           AvailabilityData(
                             selectedDays: _selectedDays,
-                            startTime: _startTime,
-                            endTime: _endTime,
+                            startTime: null,
+                            endTime: null,
+                            perDayTimes: _dayTimeRanges,
                           ),
                         );
                       }
@@ -519,9 +689,11 @@ class _AvailabilityPickerDialogState extends State<_AvailabilityPickerDialog> {
                   ),
                   disabledBackgroundColor: Colors.grey.shade300,
                 ),
-                child: const Text(
-                  'Confirmar Disponibilidad',
-                  style: TextStyle(
+                child: Text(
+                  _dayTimeRanges.isEmpty 
+                      ? 'Selecciona días y horarios'
+                      : 'Confirmar Disponibilidad (${_dayTimeRanges.length} ${_dayTimeRanges.length == 1 ? 'día' : 'días'})',
+                  style: const TextStyle(
                     fontSize: 16,
                     fontWeight: FontWeight.bold,
                     color: Colors.white,
@@ -535,33 +707,88 @@ class _AvailabilityPickerDialogState extends State<_AvailabilityPickerDialog> {
     );
   }
 
-  Future<void> _selectTime(BuildContext context, bool isStartTime) async {
-    final TimeOfDay? picked = await showTimePicker(
-      context: context,
-      initialTime: (isStartTime ? _startTime : _endTime) ?? TimeOfDay.now(),
-      builder: (context, child) {
-        return Theme(
-          data: Theme.of(context).copyWith(
-            colorScheme: const ColorScheme.light(
-              primary: Color(0xFF2D8A8A),
-              onPrimary: Colors.white,
-              onSurface: Colors.black,
-            ),
+  // ✅ New method to select a day and set its time
+  Future<void> _selectDayWithTime(Map<String, dynamic> day) async {
+    final dayName = day['full'] as String;
+    final date = day['date'] as DateTime;
+    // ✅ Create date-based key (format: yyyy-MM-dd)
+    final dateKey = '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+    
+    // If already selected, ask if they want to edit or remove
+    if (_dayTimeRanges.containsKey(dateKey)) {
+      final action = await showDialog<String>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text('$dayName (${date.day}/${date.month})'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                'Hora actual:\n${_formatTime(_dayTimeRanges[dateKey]!.startTime)} - ${_formatTime(_dayTimeRanges[dateKey]!.endTime)}',
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontWeight: FontWeight.bold),
+              ),
+            ],
           ),
-          child: child!,
-        );
-      },
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, 'remove'),
+              child: const Text('Quitar', style: TextStyle(color: Colors.red)),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(context, 'edit'),
+              child: const Text('Cambiar hora'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancelar'),
+            ),
+          ],
+        ),
+      );
+
+      if (action == 'remove') {
+        setState(() {
+          _dayTimeRanges.remove(dateKey);
+          _selectedDays.remove(dayName);
+        });
+        return;
+      } else if (action != 'edit') {
+        return;
+      }
+    }
+
+    // Show time picker dialog
+    final result = await showDialog<Map<String, TimeOfDay>>(
+      context: context,
+      builder: (context) => _DayTimePickerDialog(
+        dayName: dayName,
+        date: date,
+        initialStartTime: _dayTimeRanges[dateKey]?.startTime,
+        initialEndTime: _dayTimeRanges[dateKey]?.endTime,
+      ),
     );
 
-    if (picked != null) {
+    if (result != null && result['start'] != null && result['end'] != null) {
       setState(() {
-        if (isStartTime) {
-          _startTime = picked;
-        } else {
-          _endTime = picked;
+        _dayTimeRanges[dateKey] = DayTimeRange(
+          dayName: dayName,
+          date: date,
+          startTime: result['start']!,
+          endTime: result['end']!,
+        );
+        if (!_selectedDays.contains(dayName)) {
+          _selectedDays.add(dayName);
         }
       });
     }
+  }
+
+  String _formatTime(TimeOfDay time) {
+    final hour = time.hourOfPeriod == 0 ? 12 : time.hourOfPeriod;
+    final minute = time.minute.toString().padLeft(2, '0');
+    final period = time.period == DayPeriod.am ? 'AM' : 'PM';
+    return '$hour:$minute $period';
   }
 }
 
@@ -631,5 +858,137 @@ class _TimePickerButton extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+// ✅ New dialog for selecting time for a specific day
+class _DayTimePickerDialog extends StatefulWidget {
+  final String dayName;
+  final DateTime date;
+  final TimeOfDay? initialStartTime;
+  final TimeOfDay? initialEndTime;
+
+  const _DayTimePickerDialog({
+    required this.dayName,
+    required this.date,
+    this.initialStartTime,
+    this.initialEndTime,
+  });
+
+  @override
+  State<_DayTimePickerDialog> createState() => _DayTimePickerDialogState();
+}
+
+class _DayTimePickerDialogState extends State<_DayTimePickerDialog> {
+  late TimeOfDay? _startTime;
+  late TimeOfDay? _endTime;
+
+  @override
+  void initState() {
+    super.initState();
+    _startTime = widget.initialStartTime;
+    _endTime = widget.initialEndTime;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final monthNames = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
+    
+    return AlertDialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      title: Column(
+        children: [
+          const Icon(Icons.schedule, color: Color(0xFF2D8A8A), size: 32),
+          const SizedBox(height: 8),
+          Text(
+            widget.dayName,
+            style: const TextStyle(
+              color: Color(0xFF2D8A8A),
+              fontWeight: FontWeight.bold,
+              fontSize: 20,
+            ),
+          ),
+          Text(
+            '${widget.date.day} de ${monthNames[widget.date.month - 1]}',
+            style: TextStyle(
+              color: Colors.grey[600],
+              fontSize: 14,
+              fontWeight: FontWeight.normal,
+            ),
+          ),
+        ],
+      ),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Text(
+            'Selecciona el horario disponible:',
+            style: TextStyle(fontSize: 14),
+          ),
+          const SizedBox(height: 16),
+          _TimePickerButton(
+            label: 'Hora de inicio',
+            time: _startTime,
+            onTap: () => _selectTime(true),
+          ),
+          const SizedBox(height: 12),
+          _TimePickerButton(
+            label: 'Hora de fin',
+            time: _endTime,
+            onTap: () => _selectTime(false),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancelar'),
+        ),
+        ElevatedButton(
+          onPressed: _startTime != null && _endTime != null
+              ? () {
+                  Navigator.pop<Map<String, TimeOfDay>>(context, {
+                    'start': _startTime!,
+                    'end': _endTime!,
+                  });
+                }
+              : null,
+          style: ElevatedButton.styleFrom(
+            backgroundColor: const Color(0xFF2D8A8A),
+            disabledBackgroundColor: Colors.grey.shade300,
+          ),
+          child: const Text('Confirmar', style: TextStyle(color: Colors.white)),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _selectTime(bool isStartTime) async {
+    final TimeOfDay? picked = await showTimePicker(
+      context: context,
+      initialTime: (isStartTime ? _startTime : _endTime) ?? TimeOfDay.now(),
+      builder: (context, child) {
+        return Theme(
+          data: Theme.of(context).copyWith(
+            colorScheme: const ColorScheme.light(
+              primary: Color(0xFF2D8A8A),
+              onPrimary: Colors.white,
+              onSurface: Colors.black,
+            ),
+          ),
+          child: child!,
+        );
+      },
+    );
+
+    if (picked != null) {
+      setState(() {
+        if (isStartTime) {
+          _startTime = picked;
+        } else {
+          _endTime = picked;
+        }
+      });
+    }
   }
 }

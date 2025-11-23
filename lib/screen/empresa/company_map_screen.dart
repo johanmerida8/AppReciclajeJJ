@@ -560,6 +560,20 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
   }
 
   Future<void> _sendRequestToDistributor(RecyclingItem item) async {
+    // Load daysAvailable data for this article
+    List<Map<String, dynamic>>? daysAvailableData;
+    try {
+      final response = await Supabase.instance.client
+          .from('daysAvailable')
+          .select()
+          .eq('articleID', item.id)
+          .order('dateAvailable', ascending: true);
+      
+      daysAvailableData = response.cast<Map<String, dynamic>>();
+    } catch (e) {
+      print('❌ Error loading daysAvailable: $e');
+    }
+
     // ✅ Show scheduling dialog to select day and time
     final scheduleData = await showDialog<Map<String, String>>(
       context: context,
@@ -568,24 +582,29 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
         availableTimeStart: item.availableTimeStart,
         availableTimeEnd: item.availableTimeEnd,
         articleName: item.title,
+        daysAvailableData: daysAvailableData,
       ),
     );
 
     if (scheduleData == null) return; // User cancelled
 
     try {
-      // Parse the time string (HH:MM) and format as HH:MM:SS for database
-      final timeParts = scheduleData['time']!.split(':');
-      final scheduledTimeFormatted = '${timeParts[0].padLeft(2, '0')}:${timeParts[1].padLeft(2, '0')}:00';
+      // Parse time strings (HH:MM) and format as HH:MM:SS for database
+      final startTimeParts = scheduleData['startTime']!.split(':');
+      final startTimeFormatted = '${startTimeParts[0].padLeft(2, '0')}:${startTimeParts[1].padLeft(2, '0')}:00';
+      
+      final endTimeParts = scheduleData['endTime']!.split(':');
+      final endTimeFormatted = '${endTimeParts[0].padLeft(2, '0')}:${endTimeParts[1].padLeft(2, '0')}:00';
 
-      // Create request with status "pendiente" and scheduled day/time
+      // Create request with status "pendiente" and scheduled time window
       final newRequest = Request(
         articleId: item.id,
         companyId: _companyId,
         status: 'pendiente',
         requestDate: DateTime.now(),
         scheduledDay: scheduleData['day'], // ✅ Add scheduled day
-        scheduledTime: scheduledTimeFormatted, // ✅ Add scheduled time
+        scheduledStartTime: startTimeFormatted, // ✅ Add scheduled start time
+        scheduledEndTime: endTimeFormatted, // ✅ Add scheduled end time
         state: 1, // Active
         lastUpdate: DateTime.now(),
       );
@@ -593,7 +612,7 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
       await _requestDatabase.createRequest(newRequest);
       
       // Success - no need to refresh map as the request is on the distributor side
-      print('✅ Request sent successfully to distributor with schedule: ${scheduleData['day']} at ${scheduleData['time']}');
+      print('✅ Request sent successfully to distributor with schedule: ${scheduleData['day']} between ${scheduleData['startTime']} - ${scheduleData['endTime']}');
     } catch (e) {
       print('❌ Error sending request: $e');
       rethrow; // Re-throw to handle in calling code
@@ -1333,9 +1352,10 @@ class _AssignEmployeeDialogState extends State<_AssignEmployeeDialog> {
     final name = user?['names'] ?? 'Empleado';
     
     final scheduledDay = widget.approvedRequest.scheduledDay ?? 'No especificado';
-    final scheduledTime = widget.approvedRequest.scheduledTime != null
-        ? _formatTime(widget.approvedRequest.scheduledTime!)
-        : 'No especificado';
+    final startTime = widget.approvedRequest.scheduledStartTime;
+    final endTime = widget.approvedRequest.scheduledEndTime;
+    final formattedStartTime = startTime != null ? _formatTime(startTime) : 'No especificado';
+    final formattedEndTime = endTime != null ? _formatTime(endTime) : 'No especificado';
 
     showDialog(
       context: context,
@@ -1381,7 +1401,7 @@ class _AssignEmployeeDialogState extends State<_AssignEmployeeDialog> {
                 const Icon(Icons.access_time, color: Color(0xFF2D8A8A), size: 20),
                 const SizedBox(width: 8),
                 Text(
-                  'Hora: $scheduledTime',
+                  'Horario: $formattedStartTime - $formattedEndTime',
                   style: const TextStyle(fontSize: 15),
                 ),
               ],
