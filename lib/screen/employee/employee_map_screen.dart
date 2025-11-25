@@ -46,6 +46,8 @@ class _EmployeeMapScreenState extends State<EmployeeMapScreen> with WidgetsBindi
   bool _showArticleNavigation = false;
   double _currentZoom = 13.0;
 
+  Map<LatLng, bool> _expandedClusters = {};
+
   // Location state
   LatLng? _userLocation;
   bool _hasUserLocation = false;
@@ -61,6 +63,7 @@ class _EmployeeMapScreenState extends State<EmployeeMapScreen> with WidgetsBindi
   bool _isLocationServiceEnabled = false;
   bool _isConnected = true;
   bool _hasCheckedLocation = false;
+  bool _userDismissedLocationDialog = false;
   int _pendingRequestCount = 0; // Notification count for new assigned tasks
 
   @override
@@ -326,19 +329,264 @@ class _EmployeeMapScreenState extends State<EmployeeMapScreen> with WidgetsBindi
 
   Future<void> _checkLocationServices() async {
     final status = await _locationService.checkLocationStatus();
+    final wasEnabled = _isLocationServiceEnabled;
+    final hadPermission = _hasLocationPermission;
+    
+    if (!mounted) return;
     
     setState(() {
       _isLocationServiceEnabled = status['serviceEnabled'] ?? false;
       _hasLocationPermission = status['hasPermission'] ?? false;
+      _hasCheckedLocation = true;
     });
+
+    print('📊 Estado GPS - Servicio: $_isLocationServiceEnabled, Permisos: $_hasLocationPermission');
+    print('📊 Estado anterior - Servicio: $wasEnabled, Permisos: $hadPermission');
+
+    // ✅ Si GPS se habilitó después del inicio, recargar ubicación
+    if (_isLocationServiceEnabled && _hasLocationPermission) {
+      if (!wasEnabled || !hadPermission) {
+        print('🔄 GPS habilitado, recargando ubicación del usuario...');
+        await _loadUserLocation();
+        
+        // ✅ Forzar rebuild del widget para mostrar el marcador
+        if (mounted) {
+          setState(() {});
+        }
+      }
+    } else {
+      // ✅ Si GPS se deshabilitó, limpiar ubicación
+      if (wasEnabled || hadPermission) {
+        print('⚠️ GPS deshabilitado, limpiando ubicación');
+        if (!mounted) return;
+        
+        setState(() {
+          _hasUserLocation = false;
+          _userLocation = null;
+        });
+      }
+    }
   }
 
   void _fitMapToShowAllArticles() {
+    if (_assignedArticles.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('No hay tareas asignadas para mostrar'),
+            backgroundColor: Colors.orange,
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
+      return;
+    }
+    
     _mapService.fitMapToShowAllArticles(
       _mapController,
       _assignedArticles,
       _userLocation,
       _hasUserLocation,
+    );
+    
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Mostrando ${_assignedArticles.length} tarea${_assignedArticles.length == 1 ? "" : "s"}'),
+          backgroundColor: Colors.green,
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
+  }
+
+  /// ✅ Mostrar diálogo para activar ubicación
+  void _showEnableLocationDialog() {
+    if (!mounted || ModalRoute.of(context)?.isCurrent != true) {
+      return;
+    }
+    
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          title: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF2D8A8A).withOpacity(0.2),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.location_on,
+                  color: Color(0xFF2D8A8A),
+                  size: 28,
+                ),
+              ),
+              const SizedBox(width: 12),
+              const Expanded(
+                child: Text(
+                  'Habilitar ubicación',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                ),
+              ),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Para ver tu ubicación en el mapa, necesitas activar los servicios de ubicación.',
+                style: TextStyle(fontSize: 15, height: 1.4),
+              ),
+              const SizedBox(height: 16),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade100,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(Icons.check_circle, color: Colors.green.shade600, size: 20),
+                        const SizedBox(width: 8),
+                        const Expanded(
+                          child: Text(
+                            'Ver tu ubicación en el mapa',
+                            style: TextStyle(fontSize: 13),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Icon(Icons.check_circle, color: Colors.green.shade600, size: 20),
+                        const SizedBox(width: 8),
+                        const Expanded(
+                          child: Text(
+                            'Navegar a las ubicaciones de tus tareas',
+                            style: TextStyle(fontSize: 13),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              if (!_isLocationServiceEnabled) ...[
+                const SizedBox(height: 12),
+                Text(
+                  '⚠️ GPS está desactivado',
+                  style: TextStyle(
+                    color: Colors.orange.shade700,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+              if (!_hasLocationPermission) ...[
+                const SizedBox(height: 12),
+                Text(
+                  '⚠️ Permisos de ubicación no otorgados',
+                  style: TextStyle(
+                    color: Colors.orange.shade700,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                setState(() {
+                  _userDismissedLocationDialog = true;
+                });
+                Navigator.of(context).pop();
+                print('❌ Usuario rechazó activar ubicación');
+              },
+              child: Text(
+                'No, gracias',
+                style: TextStyle(color: Colors.grey.shade600),
+              ),
+            ),
+            ElevatedButton(
+              onPressed: () async {
+                Navigator.of(context).pop();
+                print('✅ Usuario quiere activar ubicación');
+                
+                // ✅ Solicitar servicio de GPS primero
+                if (!_isLocationServiceEnabled) {
+                  final serviceEnabled = await _locationService.requestLocationService();
+                  if (!serviceEnabled) {
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('⚠️ GPS no activado. Por favor, activa el GPS manualmente'),
+                          duration: Duration(seconds: 3),
+                          backgroundColor: Colors.orange,
+                        ),
+                      );
+                    }
+                    return;
+                  }
+                }
+                
+                // ✅ Solicitar permisos de ubicación
+                if (!_hasLocationPermission) {
+                  final permissionGranted = await _locationService.requestLocationPermission();
+                  if (!permissionGranted) {
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('⚠️ Permisos denegados. Por favor, otorga permisos de ubicación'),
+                          duration: Duration(seconds: 3),
+                          backgroundColor: Colors.orange,
+                        ),
+                      );
+                    }
+                    return;
+                  }
+                }
+                
+                // Verificar estado actualizado
+                await _checkLocationServices();
+                
+                // Intentar cargar ubicación
+                if (_isLocationServiceEnabled && _hasLocationPermission) {
+                  await _loadUserLocation();
+                  
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('✅ Ubicación activada correctamente'),
+                        duration: Duration(seconds: 2),
+                        backgroundColor: Colors.green,
+                      ),
+                    );
+                  }
+                }
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF2D8A8A),
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ),
+              child: const Text('Activar'),
+            ),
+          ],
+        );
+      },
     );
   }
 
@@ -415,11 +663,28 @@ class _EmployeeMapScreenState extends State<EmployeeMapScreen> with WidgetsBindi
       options: MapOptions(
         initialCenter: _userLocation ?? const LatLng(-17.3895, -66.1568),
         initialZoom: _currentZoom,
-        onPositionChanged: (position, hasGesture) {
-          setState(() {
-            _currentZoom = position.zoom;
-          });
-        },
+        minZoom: 6.0,  // ✅ Prevent zooming out beyond Bolivia
+        maxZoom: 18.0,
+        // ✅ Disable map rotation
+        interactionOptions: const InteractionOptions(
+          flags: InteractiveFlag.all & ~InteractiveFlag.rotate,
+        ),
+        cameraConstraint: CameraConstraint.contain(
+          bounds: LatLngBounds(
+            const LatLng(-22.9, -69.7), // Southwest corner of Bolivia
+            const LatLng(-9.6, -57.4),   // Northeast corner of Bolivia
+          ),
+        ),
+        onPositionChanged: (MapCamera position, bool hasGesture) {
+          if (hasGesture) {
+            setState(() {
+              _currentZoom = position.zoom;
+              if (position.zoom >= 14 || position.zoom < 12) {
+                _expandedClusters.clear();
+              }
+            });
+          }
+        }
       ),
       children: [
         TileLayer(
@@ -704,9 +969,11 @@ class _EmployeeMapScreenState extends State<EmployeeMapScreen> with WidgetsBindi
   /// ✅ Unified location FAB with menu
   Widget _buildLocationFAB() {
     return FloatingActionButton(
+      heroTag: 'location_menu',
       onPressed: _showLocationMenu,
       backgroundColor: const Color(0xFF2D8A8A),
-      child: const Icon(Icons.tune, color: Colors.white),
+      elevation: 6,
+      child: const Icon(Icons.location_searching, color: Colors.white),
     );
   }
 
@@ -718,93 +985,138 @@ class _EmployeeMapScreenState extends State<EmployeeMapScreen> with WidgetsBindi
       builder: (context) => Container(
         decoration: const BoxDecoration(
           color: Colors.white,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+          borderRadius: BorderRadius.only(
+            topLeft: Radius.circular(20),
+            topRight: Radius.circular(20),
+          ),
         ),
-        padding: const EdgeInsets.all(20),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            // Drag handle
+            // Handle bar
             Container(
-              width: 50,
-              height: 5,
+              margin: const EdgeInsets.only(top: 12, bottom: 8),
+              width: 40,
+              height: 4,
               decoration: BoxDecoration(
                 color: Colors.grey[300],
-                borderRadius: BorderRadius.circular(10),
+                borderRadius: BorderRadius.circular(2),
               ),
             ),
-            const SizedBox(height: 20),
-            const Text(
-              'Opciones de Ubicación',
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
+
+            // Título
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: Row(
+                children: [
+                  const Icon(Icons.location_on, color: Color(0xFF2D8A8A)),
+                  const SizedBox(width: 8),
+                  const Text(
+                    'Opciones de Ubicación',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF2D8A8A),
+                    ),
+                  ),
+                ],
               ),
             ),
-            const SizedBox(height: 20),
-            
-            // Go to my location
+
+            const Divider(height: 1),
+
+            // Opción 1: Ir a mi ubicación
             ListTile(
               leading: const CircleAvatar(
                 backgroundColor: Color(0xFF2D8A8A),
-                child: Icon(Icons.my_location, color: Colors.white),
+                child: Icon(Icons.my_location, color: Colors.white, size: 20),
               ),
-              title: const Text('Ir a mi ubicación'),
+              title: const Text(
+                'Ir a mi ubicación',
+                style: TextStyle(fontWeight: FontWeight.w600),
+              ),
               subtitle: Text(
-                _hasUserLocation ? 'Centrar mapa en tu ubicación actual' : 'GPS deshabilitado',
+                _hasUserLocation 
+                    ? 'Centrar mapa en mi posición actual' 
+                    : 'GPS deshabilitado',
               ),
               onTap: () {
                 Navigator.pop(context);
                 _goToUserLocation();
               },
             ),
-            
-            // Toggle user marker
+
+            // Opción 2: Toggle marcador de usuario
             ListTile(
               leading: CircleAvatar(
-                backgroundColor: _showUserMarker ? Colors.blue : Colors.grey,
+                backgroundColor: _showUserMarker 
+                    ? const Color(0xFF2D8A8A) 
+                    : Colors.grey[400],
                 child: Icon(
-                  _showUserMarker ? Icons.person_pin_circle : Icons.person_pin_circle_outlined,
+                  _showUserMarker ? Icons.visibility : Icons.visibility_off,
                   color: Colors.white,
+                  size: 20,
                 ),
               ),
-              title: Text(_showUserMarker ? 'Ocultar mi marcador' : 'Mostrar mi marcador'),
-              subtitle: const Text('Mostrar/ocultar tu ubicación en el mapa'),
-              onTap: () {
-                Navigator.pop(context);
-                setState(() {
-                  _showUserMarker = !_showUserMarker;
-                });
-              },
-            ),
-            
-            // Refresh data
-            ListTile(
-              leading: const CircleAvatar(
-                backgroundColor: Colors.green,
-                child: Icon(Icons.refresh, color: Colors.white),
+              title: Text(
+                _showUserMarker 
+                    ? 'Ocultar mi marcador' 
+                    : 'Mostrar mi marcador',
+                style: const TextStyle(fontWeight: FontWeight.w600),
               ),
-              title: const Text('Actualizar datos'),
-              subtitle: const Text('Recargar tareas asignadas'),
-              onTap: () {
-                Navigator.pop(context);
-                _refreshData();
-              },
+              subtitle: Text(
+                _showUserMarker 
+                    ? 'El marcador azul desaparecerá del mapa'
+                    : 'Mostrar marcador azul en el mapa',
+              ),
+              trailing: Switch(
+                value: _showUserMarker,
+                onChanged: (value) {
+                  Navigator.pop(context);
+                  setState(() {
+                    _showUserMarker = value;
+                  });
+                  
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(
+                        _showUserMarker 
+                            ? '✅ Marcador visible' 
+                            : '❌ Marcador oculto'
+                      ),
+                      duration: const Duration(seconds: 1),
+                      backgroundColor: _showUserMarker ? Colors.green : Colors.grey,
+                    ),
+                  );
+                },
+                activeColor: const Color(0xFF2D8A8A),
+              ),
             ),
-            
-            // View all articles
+
+            // Opción 3: Ver todas las tareas
             ListTile(
               leading: const CircleAvatar(
                 backgroundColor: Colors.orange,
-                child: Icon(Icons.fit_screen, color: Colors.white),
+                child: Icon(Icons.map, color: Colors.white, size: 20),
               ),
-              title: const Text('Ver todas las tareas'),
-              subtitle: const Text('Ajustar mapa para ver todas las ubicaciones'),
-              onTap: () {
-                Navigator.pop(context);
-                _fitMapToShowAllArticles();
-              },
+              title: const Text(
+                'Ver todas las tareas',
+                style: TextStyle(fontWeight: FontWeight.w600),
+              ),
+              subtitle: Text(
+                _assignedArticles.isEmpty
+                    ? 'No hay tareas asignadas'
+                    : 'Ajustar mapa para mostrar todas las ubicaciones',
+              ),
+              onTap: _assignedArticles.isEmpty 
+                  ? null
+                  : () {
+                      Navigator.pop(context);
+                      _fitMapToShowAllArticles();
+                    },
             ),
+
+            const SizedBox(height: 16),
           ],
         ),
       ),
@@ -857,21 +1169,53 @@ class _EmployeeMapScreenState extends State<EmployeeMapScreen> with WidgetsBindi
     await _checkLocationServices();
     
     if (!_isLocationServiceEnabled || !_hasLocationPermission) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Por favor habilita los servicios de ubicación'),
-            backgroundColor: Colors.orange,
-          ),
-        );
-      }
+      _showEnableLocationDialog();
       return;
     }
     
     if (_hasUserLocation && _userLocation != null) {
-      _mapController.move(_userLocation!, 15);
+      if (_mapService.isMapReady(_mapController)) {
+        _mapController.move(_userLocation!, 16.0);
+      }
+      
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('📍 Centrado en tu ubicación'),
+            duration: Duration(seconds: 1),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
     } else {
+      // No tenemos ubicación, intentar obtenerla
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('📍 Obteniendo tu ubicación...'),
+            duration: Duration(seconds: 2),
+            backgroundColor: Color(0xFF2D8A8A),
+          ),
+        );
+      }
+      
       await _loadUserLocation();
+      
+      if (_hasUserLocation && _userLocation != null) {
+        if (_mapService.isMapReady(_mapController)) {
+          _mapController.move(_userLocation!, 16.0);
+        }
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('⚠️ No se pudo obtener tu ubicación'),
+              duration: Duration(seconds: 2),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        }
+      }
     }
   }
 }

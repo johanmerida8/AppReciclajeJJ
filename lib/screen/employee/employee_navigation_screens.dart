@@ -18,33 +18,40 @@ class EmployeeNavigationScreens extends StatefulWidget {
 class _EmployeeNavigationScreensState extends State<EmployeeNavigationScreens> {
   int _currentIndex = 0;
   
-  // List of screens to navigate between
-  final List<Widget> _screens = [
-    const EmployeeMapScreen(),
-    const EmployeeHomeScreen(),
-    // const EmployeeTasksScreen(),
-    const EmployeeProfileScreen(),
-    // const ProfileScreen(),
-  ];
-
-  final List<Widget> _navigationItems = [
-    const Icon(Icons.map, size: 30, color: Colors.white),
-    const Icon(Icons.assignment, size: 30, color: Colors.white),
-    // const Icon(Icons.assignment, size: 30, color: Colors.white),
-    const Icon(Icons.person, size: 30, color: Colors.white),
-  ];
+  // ✅ Create screens lazily to prevent memory leaks
+  // Only the current screen is kept in memory
+  late final List<Widget Function()> _screenBuilders;
+  
+  @override
+  void initState() {
+    super.initState();
+    // Initialize screen builders
+    _screenBuilders = [
+      () => const EmployeeMapScreen(),
+      () => const EmployeeHomeScreen(),
+      () => const EmployeeProfileScreen(),
+    ];
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.white,
-      body: _screens[_currentIndex],
+      // ✅ Build only the current screen to prevent keeping all screens in memory
+      body: IndexedStack(
+        index: _currentIndex,
+        children: _screenBuilders.map((builder) => builder()).toList(),
+      ),
       bottomNavigationBar: CurvedNavigationBar(
         backgroundColor: Colors.transparent,
         color: const Color(0xFF2D8A8A),
         buttonBackgroundColor: const Color.fromARGB(255, 45, 138, 138),
         height: 75,
-        items: _navigationItems,
+        items: const [
+          Icon(Icons.map, size: 30, color: Colors.white),
+          Icon(Icons.assignment, size: 30, color: Colors.white),
+          Icon(Icons.person, size: 30, color: Colors.white),
+        ],
         index: _currentIndex,
         animationDuration: const Duration(milliseconds: 300),
         animationCurve: Curves.easeInOut,

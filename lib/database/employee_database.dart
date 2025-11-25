@@ -12,22 +12,25 @@ class EmployeeDatabase {
     required int companyId,
     required String temporaryPassword,
   }) async {
-    // 1. Create user with state=0 (inactive)
+    // Create user record in database with state=0 (inactive)
     final userResponse = await usersDb.insert({
       'names': names,
       'email': email,
       'role': 'empleado',
-      'state': 0, // Inactive until password creation
+      'state': 0, // Inactive until first login and password change
     }).select().single();
 
     final userId = userResponse['idUser'] as int;
 
-    // 2. Create employee record linking to user
+    // Create employee record with temporary password
     await database.insert({
       'userID': userId,
       'companyID': companyId,
       'temporaryPassword': temporaryPassword,
     });
+
+    // Note: Employee logs in with email + temporary password
+    // No email sent - admin shares password manually via dialog
   }
 
   // Get all employees for a company with user data

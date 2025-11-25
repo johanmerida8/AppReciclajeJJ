@@ -107,6 +107,11 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
         throw Exception('Missing article or company ID');
       }
 
+      print('🔍 Creating task with:');
+      print('   articleId: $articleId');
+      print('   companyId: $companyId');
+      print('   requestId: $requestId');
+
       // Update request status to "aprobado"
       await Supabase.instance.client
           .from('request')
@@ -115,6 +120,8 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
             'lastUpdate': DateTime.now().toIso8601String(),
           })
           .eq('idRequest', requestId);
+
+      print('✅ Request updated to "aprobado"');
 
       // ✅ Create task with "sin_asignar" status (no employee assigned yet)
       final task = Task(
@@ -130,6 +137,18 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
       await _taskDatabase.createTask(task);
 
       print('✅ Task created with "sin_asignar" status - Article: $articleId, Company: $companyId, Request: $requestId');
+      
+      // ✅ Verify task was created
+      final verifyTask = await Supabase.instance.client
+          .from('tasks')
+          .select()
+          .eq('requestID', requestId)
+          .maybeSingle();
+      
+      print('🔍 Verification - Task in DB: ${verifyTask != null ? "FOUND (ID: ${verifyTask['idTask']})" : "NOT FOUND"}');
+      if (verifyTask != null) {
+        print('   Task details: workflowStatus=${verifyTask['workflowStatus']}, articleID=${verifyTask['articleID']}, companyID=${verifyTask['companyID']}');
+      }
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

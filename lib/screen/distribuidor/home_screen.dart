@@ -1,5 +1,6 @@
 import 'dart:math';
 import 'package:flutter/material.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:reciclaje_app/auth/auth_service.dart';
@@ -162,6 +163,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final email = _authService.getCurrentUserEmail();
     if (email != null) {
       final userData = await _dataService.userDatabase.getUserByEmail(email);
+      
+      if (!mounted) return;
+      
       setState(() {
         _currentUserId = userData?.id;
       });
@@ -208,6 +212,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       return;
     }
 
+    if (!mounted) return;
+
     setState(() {
       _isLoading = true;
       _hasError = false;
@@ -221,6 +227,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     try {
       final cachedData = await _cacheService.loadCache(_currentUserId);
       if (cachedData != null && cachedData['items'] != null) {
+        if (!mounted) return false;
+        
         setState(() {
           _items = List<RecyclingItem>.from(cachedData['items']);
           _isLoading = false;
@@ -241,6 +249,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       final items = await _dataService.loadRecyclingItems();
       final categories = await _dataService.loadCategories();
 
+      if (!mounted) return;
+
       setState(() {
         _items = items;
         _isLoading = false;
@@ -260,6 +270,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         });
       }
     } catch (e) {
+      if (!mounted) return;
+      
       setState(() {
         _hasError = true;
         _errorMessage = 'Error al cargar datos: $e';
@@ -307,6 +319,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       final location = await _locationService.getCurrentLocation();
       
       if (location != null) {
+        if (!mounted) return;
+        
         setState(() {
           _userLocation = location;
           _hasUserLocation = true;
@@ -328,6 +342,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         });
       } else {
         print('⚠️ No se pudo obtener la ubicación del usuario');
+        if (!mounted) return;
+        
         setState(() {
           _hasUserLocation = false;
           _userLocation = null;
@@ -335,6 +351,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       }
     } catch (e) {
       print('❌ Error obteniendo ubicación del usuario: $e');
+      if (!mounted) return;
+      
       setState(() {
         _hasUserLocation = false;
         _userLocation = null;
@@ -358,6 +376,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final status = await _locationService.checkLocationStatus();
     final wasEnabled = _isLocationServiceEnabled;
     final hadPermission = _hasLocationPermission;
+    
+    if (!mounted) return;
     
     setState(() {
       _isLocationServiceEnabled = status['serviceEnabled'] ?? false;
@@ -383,6 +403,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       // ✅ Si GPS se deshabilitó, limpiar ubicación
       if (wasEnabled || hadPermission) {
         print('⚠️ GPS deshabilitado, limpiando ubicación');
+        if (!mounted) return;
+        
         setState(() {
           _hasUserLocation = false;
           _userLocation = null;
@@ -622,6 +644,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     String address = await _getAddressFromCoordinates(point);
     
+    if (!mounted) return;
+    
     setState(() {
       _quickRegisterLocation = point;
       _quickRegisterAddress = address;
@@ -696,6 +720,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           ),
         ),
       );
+
+      if (!mounted) return;
 
       setState(() {
         _quickRegisterLocation = null;
@@ -808,13 +834,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   /// Show item details
-  void _showItemDetails(RecyclingItem item) {
-    Navigator.push(
+  void _showItemDetails(RecyclingItem item) async {
+    final result = await Navigator.push<bool>(
       context,
       MaterialPageRoute(
         builder: (context) => DetailRecycleScreen(item: item),
       ),
     );
+
+    // ✅ Reload data if article was updated or deleted
+    if (result == true && mounted) {
+      print('🔄 Reloading data after article update/delete...');
+      await _refreshData();
+    }
   }
 
 
@@ -831,8 +863,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         // ✅ Siempre iniciar en Cochabamba con zoom moderado
         initialCenter: MapService.cochabambaCenter,
         initialZoom: 13.0, // ✅ Zoom moderado para ver la ciudad completa
-        minZoom: 8.0,
+        minZoom: 6.0,  // ✅ Prevent zooming out beyond Bolivia
         maxZoom: 18.0,
+        // ✅ Disable map rotation
+        interactionOptions: const InteractionOptions(
+          flags: InteractiveFlag.all & ~InteractiveFlag.rotate,
+        ),
+        // ✅ Restrict map to Bolivia boundaries
+        cameraConstraint: CameraConstraint.contain(
+          bounds: LatLngBounds(
+            const LatLng(-22.9, -69.7), // Southwest corner of Bolivia
+            const LatLng(-9.6, -57.4),   // Northeast corner of Bolivia
+          ),
+        ),
         onTap: (_, point) => _onMapTap(point),
         onPositionChanged: (MapCamera position, bool hasGesture) {
           if (hasGesture) {
@@ -1765,14 +1808,23 @@ class _ArticleModalContentState extends State<_ArticleModalContent> {
                 ClipRRect(
                   borderRadius: BorderRadius.circular(12),
                   child: currentPhoto?.url != null
-                      ? Image.network(
-                          currentPhoto!.url!,
+                      ? CachedNetworkImage(
+                          imageUrl: currentPhoto!.url!,
                           width: 100,
                           height: 100,
                           fit: BoxFit.cover,
-                          errorBuilder: (context, error, stackTrace) {
-                            return _buildCompactPlaceholder(currentItem);
-                          },
+                          placeholder: (context, url) => Container(
+                            width: 100,
+                            height: 100,
+                            color: Colors.grey[300],
+                            child: const Center(
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Color(0xFF2D8A8A),
+                              ),
+                            ),
+                          ),
+                          errorWidget: (context, url, error) => _buildCompactPlaceholder(currentItem),
                         )
                       : _buildCompactPlaceholder(currentItem),
                 ),
@@ -2105,13 +2157,27 @@ class _ClusterModalContentState extends State<_ClusterModalContent> {
                                     ),
                                   )
                                 : currentPhoto != null && currentPhoto!.url != null
-                                    ? Image.network(
-                                        currentPhoto!.url!,
+                                    ? CachedNetworkImage(
+                                        imageUrl: currentPhoto!.url!,
                                         width: 80,
                                         height: 80,
                                         fit: BoxFit.cover,
-                                        errorBuilder: (context, error, stackTrace) =>
-                                            _buildCompactPlaceholder(currentItem),
+                                        placeholder: (context, url) => Container(
+                                          width: 80,
+                                          height: 80,
+                                          color: Colors.grey[300],
+                                          child: const Center(
+                                            child: SizedBox(
+                                              width: 20,
+                                              height: 20,
+                                              child: CircularProgressIndicator(
+                                                strokeWidth: 2,
+                                                color: Color(0xFF2D8A8A),
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                        errorWidget: (context, url, error) => _buildCompactPlaceholder(currentItem),
                                       )
                                     : _buildCompactPlaceholder(currentItem),
                           ),
@@ -2329,13 +2395,27 @@ class _SingleArticleModalContentState extends State<_SingleArticleModalContent> 
                               ),
                             )
                           : currentPhoto != null && currentPhoto!.url != null
-                              ? Image.network(
-                                  currentPhoto!.url!,
+                              ? CachedNetworkImage(
+                                  imageUrl: currentPhoto!.url!,
                                   width: 80,
                                   height: 80,
                                   fit: BoxFit.cover,
-                                  errorBuilder: (context, error, stackTrace) =>
-                                      _buildCompactPlaceholder(widget.item),
+                                  placeholder: (context, url) => Container(
+                                    width: 80,
+                                    height: 80,
+                                    color: Colors.grey[300],
+                                    child: const Center(
+                                      child: SizedBox(
+                                        width: 20,
+                                        height: 20,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                          color: Color(0xFF2D8A8A),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                  errorWidget: (context, url, error) => _buildCompactPlaceholder(widget.item),
                                 )
                               : _buildCompactPlaceholder(widget.item),
                     ),

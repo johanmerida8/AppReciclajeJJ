@@ -1,8 +1,6 @@
 import 'package:curved_navigation_bar/curved_navigation_bar.dart';
 import 'package:flutter/material.dart';
-import 'package:reciclaje_app/screen/empresa/company_admin_dashboard_screen.dart';
 import 'package:reciclaje_app/screen/empresa/company_profile_screen.dart';
-// import 'package:reciclaje_app/screen/empresa/company_profile_screen_new.dart';
 import 'package:reciclaje_app/screen/empresa/company_map_screen.dart';
 import 'package:reciclaje_app/screen/empresa/employees_screen.dart';
 import 'package:reciclaje_app/auth/auth_service.dart';
@@ -24,6 +22,10 @@ class _CompanyNavigationScreensState extends State<CompanyNavigationScreens> {
   int _currentIndex = 0;
   int? _companyId;
   bool _isLoading = true;
+  
+  // Cache screens for better performance
+  late List<Widget> _screens;
+  bool _screensInitialized = false;
 
   @override
   void initState() {
@@ -45,6 +47,7 @@ class _CompanyNavigationScreensState extends State<CompanyNavigationScreens> {
           if (companyData != null) {
             setState(() {
               _companyId = companyData['idCompany'] as int?;
+              _initializeScreens();
               _isLoading = false;
             });
           } else {
@@ -58,27 +61,32 @@ class _CompanyNavigationScreensState extends State<CompanyNavigationScreens> {
     }
   }
 
-  List<Widget> _getScreens() {
+  void _initializeScreens() {
     if (_companyId == null) {
-      return [
-        const Center(child: Text('Error: No se encontró la empresa')),
+      _screens = [
         const Center(child: Text('Error: No se encontró la empresa')),
         const Center(child: Text('Error: No se encontró la empresa')),
         const Center(child: Text('Error: No se encontró la empresa')),
       ];
+    } else {
+      _screens = [
+        const CompanyMapScreen(),
+        EmployeesScreen(companyId: _companyId!),
+        const CompanyProfileScreen(),
+      ];
     }
-    
-    return [
-      const CompanyMapScreen(),
-      const CompanyAdminDashboardScreen(),
-      EmployeesScreen(companyId: _companyId!),
-      const CompanyProfileScreen(),
-    ];
+    _screensInitialized = true;
+  }
+
+  List<Widget> _getScreens() {
+    if (!_screensInitialized) {
+      _initializeScreens();
+    }
+    return _screens;
   }
 
   final List<Widget> _navigationItems = [
     const Icon(Icons.map, size: 30, color: Colors.white),
-    const Icon(Icons.dashboard, size: 30, color: Colors.white),
     const Icon(Icons.people, size: 30, color: Colors.white),
     const Icon(Icons.person, size: 30, color: Colors.white),
   ];
@@ -93,7 +101,10 @@ class _CompanyNavigationScreensState extends State<CompanyNavigationScreens> {
 
     return Scaffold(
       backgroundColor: Colors.white,
-      body: _getScreens()[_currentIndex],
+      body: IndexedStack(
+        index: _currentIndex,
+        children: _getScreens(),
+      ),
       bottomNavigationBar: CurvedNavigationBar(
         backgroundColor: Colors.transparent,
         color: const Color(0xFF2D8A8A),

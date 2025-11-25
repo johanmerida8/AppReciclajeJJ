@@ -312,12 +312,37 @@ class _MapPickerScreenState extends State<MapPickerScreen> with WidgetsBindingOb
             options: MapOptions(
               initialCenter: widget.initialLocation,
               initialZoom: 13.0,
+              minZoom: 6.0,  // ✅ Prevent zooming out beyond Bolivia
+              maxZoom: 18.0,
+              // ✅ Disable map rotation
+              interactionOptions: const InteractionOptions(
+                flags: InteractiveFlag.all & ~InteractiveFlag.rotate,
+              ),
               onTap: (tapPosition, point) async {
                 await _handleLocationSelection(
                   point.latitude, 
                   point.longitude, 
                   fromMap: true
                 );
+              },
+              onPositionChanged: (position, hasGesture) {
+                // ✅ Restrict map to Bolivia boundaries
+                if (hasGesture) {
+                  final center = position.center;
+                  const double minLat = -22.9;  // Southwest corner of Bolivia
+                  const double maxLat = -9.6;   // Northeast corner of Bolivia
+                  const double minLng = -69.7;  // Southwest corner of Bolivia
+                  const double maxLng = -57.4;  // Northeast corner of Bolivia
+                  
+                  // Check if we're outside Bolivia boundaries
+                  if (center.latitude < minLat || center.latitude > maxLat ||
+                      center.longitude < minLng || center.longitude > maxLng) {
+                    // Clamp position to Bolivia boundaries
+                    final clampedLat = center.latitude.clamp(minLat, maxLat);
+                    final clampedLng = center.longitude.clamp(minLng, maxLng);
+                    _mapController.move(LatLng(clampedLat, clampedLng), position.zoom);
+                  }
+                }
               },
             ),
             children: [

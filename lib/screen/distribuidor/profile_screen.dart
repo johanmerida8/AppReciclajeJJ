@@ -34,6 +34,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Map<int, String> categoryNames = {}; // Cache for category names
   bool isLoading = true;
   String selectedFilter = 'Publicados'; // 'Publicados' or 'Finalizados'
+  double distributorRating = 0.0; // ✅ Average rating for distributor
+  int totalReviews = 0; // ✅ Total number of reviews received
 
   @override
   void initState() {
@@ -123,6 +125,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
           
           // Load completed tasks with reviews
           await _loadCompletedTasks();
+          
+          // ✅ Load distributor rating
+          await _loadDistributorRating();
         }
       }
     } catch (e) {
@@ -131,6 +136,45 @@ class _ProfileScreenState extends State<ProfileScreen> {
       if (mounted) {
         setState(() => isLoading = false);
       }
+    }
+  }
+
+  /// ✅ Load distributor's average rating from reviews
+  Future<void> _loadDistributorRating() async {
+    if (currentUser?.id == null) return;
+    
+    try {
+      // Get all reviews where current user is the receiver (distributor)
+      final reviews = await Supabase.instance.client
+          .from('reviews')
+          .select('starID')
+          .eq('receiverID', currentUser!.id!)
+          .eq('state', 1); // Only active reviews
+      
+      if (reviews.isEmpty) {
+        setState(() {
+          distributorRating = 0.0;
+          totalReviews = 0;
+        });
+        return;
+      }
+      
+      // Calculate average rating
+      int totalStars = 0;
+      for (var review in reviews) {
+        totalStars += (review['starID'] as int? ?? 0);
+      }
+      
+      final avgRating = totalStars / reviews.length;
+      
+      setState(() {
+        distributorRating = avgRating;
+        totalReviews = reviews.length;
+      });
+      
+      print('⭐ Distributor rating: ${avgRating.toStringAsFixed(1)} stars (${reviews.length} reviews)');
+    } catch (e) {
+      print('❌ Error loading distributor rating: $e');
     }
   }
 
@@ -486,6 +530,36 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                   color: Colors.white70,
                                 ),
                               ),
+                              // ✅ Rating display
+                              if (totalReviews > 0) ...[
+                                const SizedBox(height: 8),
+                                Row(
+                                  children: [
+                                    const Icon(
+                                      Icons.star,
+                                      color: Colors.amber,
+                                      size: 20,
+                                    ),
+                                    const SizedBox(width: 4),
+                                    Text(
+                                      distributorRating.toStringAsFixed(1),
+                                      style: const TextStyle(
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.bold,
+                                        color: Colors.white,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 4),
+                                    Text(
+                                      '($totalReviews ${totalReviews == 1 ? 'reseña' : 'reseñas'})',
+                                      style: const TextStyle(
+                                        fontSize: 12,
+                                        color: Colors.white70,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ],
                             ],
                           ),
                         ),

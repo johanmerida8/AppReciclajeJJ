@@ -21,7 +21,9 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
   bool _isLoading = true;
   int _pendingTasksCount = 0;
   int _completedTasksCount = 0;
-  List<Map<String, dynamic>> _todayTasks = [];
+  List<Map<String, dynamic>> _allTasks = [];
+  List<Map<String, dynamic>> _displayedTasks = [];
+  String _selectedFilter = 'pendiente'; // 'pendiente' or 'completado'
 
   @override
   void initState() {
@@ -113,15 +115,11 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
             t['workflowStatus'] == 'completado'
         ).length;
 
-        // Get today's tasks (only in progress for employee view)
-        final today = taskList.where((t) => 
-            t['workflowStatus'] == 'en_proceso'
-        ).toList();
-
         setState(() {
           _pendingTasksCount = pending;
           _completedTasksCount = completed;
-          _todayTasks = today;
+          _allTasks = taskList;
+          _filterTasks(); // Apply initial filter
           _isLoading = false;
         });
 
@@ -133,6 +131,27 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
         setState(() => _isLoading = false);
       }
     }
+  }
+
+  /// Filter tasks based on selected filter
+  void _filterTasks() {
+    if (_selectedFilter == 'pendiente') {
+      _displayedTasks = _allTasks.where((t) => 
+          t['workflowStatus'] == 'asignado' || t['workflowStatus'] == 'en_proceso'
+      ).toList();
+    } else {
+      _displayedTasks = _allTasks.where((t) => 
+          t['workflowStatus'] == 'completado'
+      ).toList();
+    }
+  }
+
+  /// Change filter
+  void _changeFilter(String filter) {
+    setState(() {
+      _selectedFilter = filter;
+      _filterTasks();
+    });
   }
 
   @override
@@ -216,31 +235,56 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
               ),
               const SizedBox(height: 30),
 
-              // Today's Tasks Section
-              const Text(
-                'Tareas de Hoy',
-                style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                  color: Color(0xFF2D8A8A),
-                ),
+              // Filter tabs header
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text(
+                    'Mis Tareas',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF2D8A8A),
+                    ),
+                  ),
+                  // Filter chips
+                  Row(
+                    children: [
+                      _buildFilterChip(
+                        label: 'Pendientes',
+                        value: 'pendiente',
+                        count: _pendingTasksCount,
+                      ),
+                      const SizedBox(width: 8),
+                      _buildFilterChip(
+                        label: 'Completadas',
+                        value: 'completado',
+                        count: _completedTasksCount,
+                      ),
+                    ],
+                  ),
+                ],
               ),
               const SizedBox(height: 16),
               
               // Tasks list or empty state
-              if (_todayTasks.isEmpty)
+              if (_displayedTasks.isEmpty)
                 Center(
                   child: Column(
                     children: [
                       const SizedBox(height: 40),
                       Icon(
-                        Icons.assignment_outlined,
+                        _selectedFilter == 'pendiente' 
+                            ? Icons.assignment_outlined
+                            : Icons.check_circle_outline,
                         size: 80,
                         color: Colors.grey[300],
                       ),
                       const SizedBox(height: 16),
                       Text(
-                        'No hay tareas asignadas',
+                        _selectedFilter == 'pendiente'
+                            ? 'No hay tareas pendientes'
+                            : 'No hay tareas completadas',
                         style: TextStyle(
                           fontSize: 16,
                           color: Colors.grey[600],
@@ -248,7 +292,9 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
                       ),
                       const SizedBox(height: 8),
                       Text(
-                        'Las tareas aparecerán aquí cuando se te asignen',
+                        _selectedFilter == 'pendiente'
+                            ? 'Las tareas aparecerán aquí cuando se te asignen'
+                            : 'Las tareas completadas aparecerán aquí',
                         style: TextStyle(
                           fontSize: 14,
                           color: Colors.grey[500],
@@ -259,7 +305,7 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
                   ),
                 )
               else
-                ..._todayTasks.map((task) => _buildTaskCard(task)).toList(),
+                ..._displayedTasks.map((task) => _buildTaskCard(task)).toList(),
             ],
           ),
         ),
@@ -507,6 +553,58 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildFilterChip({
+    required String label,
+    required String value,
+    required int count,
+  }) {
+    final isSelected = _selectedFilter == value;
+    
+    return GestureDetector(
+      onTap: () => _changeFilter(value),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: isSelected ? const Color(0xFF2D8A8A) : Colors.grey[200],
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: isSelected ? const Color(0xFF2D8A8A) : Colors.grey[300]!,
+            width: 1,
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              label,
+              style: TextStyle(
+                color: isSelected ? Colors.white : Colors.grey[700],
+                fontSize: 13,
+                fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+              ),
+            ),
+            const SizedBox(width: 6),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: isSelected ? Colors.white : const Color(0xFF2D8A8A),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Text(
+                '$count',
+                style: TextStyle(
+                  color: isSelected ? const Color(0xFF2D8A8A) : Colors.white,
+                  fontSize: 11,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

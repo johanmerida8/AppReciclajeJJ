@@ -97,6 +97,10 @@ class _RegisterRecycleScreenState extends State<RegisterRecycleScreen> {
   Future<void> _checkUserPublishStatus() async {
     final canPublish = await workflowService.canUserPublish();
     final usedCategories = await workflowService.getUsedPendingCategoryIds();
+    
+    // ✅ Check if widget is still mounted before calling setState
+    if (!mounted) return;
+    
     setState(() {
       _canPublish = canPublish;
       _usedCategoryIds = usedCategories;
@@ -122,6 +126,10 @@ class _RegisterRecycleScreenState extends State<RegisterRecycleScreen> {
   Future<void> _loadCategories() async {
     try {
       final categories = await categoryDatabase.getAllCategories();
+      
+      // ✅ Check if widget is still mounted
+      if (!mounted) return;
+      
       setState(() {
         _categories = categories;
         _isLoading = false;
@@ -129,6 +137,8 @@ class _RegisterRecycleScreenState extends State<RegisterRecycleScreen> {
       });
 
     } catch (e) {
+      if (!mounted) return;
+      
       setState(() {
         _isLoading = false;
       });
@@ -158,6 +168,9 @@ class _RegisterRecycleScreenState extends State<RegisterRecycleScreen> {
       if (res != null && res is Map<String, dynamic>) {
         final LatLng pickedLocation = res['location'];
         final String pickedAddress = res['address'];
+
+        // ✅ Check if widget is still mounted
+        if (!mounted) return;
 
         setState(() {
           _selectedLocation = pickedLocation;

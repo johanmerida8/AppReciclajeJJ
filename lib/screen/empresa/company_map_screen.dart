@@ -52,6 +52,10 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
   int? _companyId;
   int _approvedRequestCount = 0; // ✅ Notification count for approved requests
   
+  // ✅ Track requests and tasks by article ID for status determination
+  Map<int, Request> _requestsByArticleId = {}; // articleID -> Request
+  Map<int, Map<String, dynamic>> _tasksByArticleId = {}; // articleID -> Task data
+  
   // Filter states
   Set<String> _selectedStatuses = {'publicados', 'en_espera', 'sin_asignar', 'en_proceso', 'recogidos', 'vencidos'};
   String _sortBy = 'recent'; // 'recent', 'oldest', 'status'
@@ -122,6 +126,7 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
   Future<void> _initialize() async {
     await _loadUserData();
     await _loadEmployees();
+    await _loadRequestsAndTasks(); // ✅ Load requests and tasks for status tracking
     await _loadApprovedRequestCount(); // ✅ Load notification count
     await _loadData();
     await _checkLocationServices();
@@ -195,6 +200,62 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
       }
     } catch (e) {
       print('❌ Error loading employees: $e');
+    }
+  }
+
+  /// ✅ Load all requests and tasks for this company to determine article statuses
+  Future<void> _loadRequestsAndTasks() async {
+    if (_companyId == null) {
+      print('⚠️ Cannot load requests and tasks: _companyId is null');
+      return;
+    }
+    
+    print('🔍 Loading requests and tasks for company ID: $_companyId');
+    
+    try {
+      // Load all requests for this company
+      final requests = await Supabase.instance.client
+          .from('request')
+          .select('*')
+          .eq('companyID', _companyId!)
+          .eq('state', 1);
+      
+      print('📥 Received ${requests.length} requests from database');
+      
+      // Load all tasks for this company
+      final tasks = await Supabase.instance.client
+          .from('tasks')
+          .select('*')
+          .eq('companyID', _companyId!)
+          .eq('state', 1);
+      
+      print('📥 Received ${tasks.length} tasks from database');
+      
+      if (mounted) {
+        setState(() {
+          // Map requests by article ID
+          _requestsByArticleId = {};
+          for (var req in requests) {
+            final articleId = req['articleID'] as int?;
+            if (articleId != null) {
+              _requestsByArticleId[articleId] = Request.fromMap(req);
+            }
+          }
+          
+          // Map tasks by article ID
+          _tasksByArticleId = {};
+          for (var task in tasks) {
+            final articleId = task['articleID'] as int?;
+            if (articleId != null) {
+              _tasksByArticleId[articleId] = task;
+            }
+          }
+        });
+        
+        print('✅ Loaded ${_requestsByArticleId.length} requests and ${_tasksByArticleId.length} tasks for company');
+      }
+    } catch (e) {
+      print('❌ Error loading requests and tasks: $e');
     }
   }
 
@@ -335,6 +396,11 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
   }
 
   void _applyFilters() {
+    print('🔍 Applying filters...');
+    print('   Selected statuses: $_selectedStatuses');
+    print('   Sort by: $_sortBy');
+    print('   Total items: ${_allItems.length}');
+    
     List<RecyclingItem> filtered = List.from(_allItems);
     
     // ✅ DON'T filter by company - show ALL articles like distributor
@@ -345,6 +411,8 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
       final status = _getItemStatus(item);
       return _selectedStatuses.contains(status);
     }).toList();
+    
+    print('   After status filter: ${filtered.length} items');
     
     // Sort
     switch (_sortBy) {
@@ -362,18 +430,41 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
     setState(() {
       _filteredItems = filtered;
     });
+    
+    print('✅ Filters applied: ${_filteredItems.length} items displayed');
   }
 
   String _getItemStatus(RecyclingItem item) {
-    final status = item.workflowStatus?.toLowerCase() ?? 'publicados';
+    // Check if there's a task for this article (most recent status)
+    final task = _tasksByArticleId[item.id];
+    if (task != null) {
+      final taskStatus = task['workflowStatus'] as String?;
+      if (taskStatus == 'completado') return 'recogidos'; // ✅ Completed
+      if (taskStatus == 'en_proceso') return 'en_proceso'; // ✅ Employee working
+      if (taskStatus == 'asignado') return 'en_proceso'; // ✅ Employee assigned (treat as en_proceso)
+      // If task has employee assigned but unknown status, treat as en_proceso
+      final employeeId = task['employeeID'] as int?;
+      if (employeeId != null) return 'en_proceso';
+      // Task exists but no employee assigned yet
+      return 'sin_asignar';
+    }
     
-    if (status == 'completado') return 'recogidos';
-    if (status == 'en_proceso') return 'en_proceso';
-    if (status == 'sin_asignar') return 'sin_asignar'; // ✅ Task created but no employee assigned yet
-    if (status == 'solicitado') return 'en_espera'; // Request sent, waiting for distributor approval
+    // Check if there's a request for this article
+    final request = _requestsByArticleId[item.id];
+    if (request != null) {
+      // If request is approved, company needs to assign employee
+      if (request.status == 'aprobado') return 'sin_asignar';
+      // If request is rejected, article goes back to published
+      if (request.status == 'rechazado') return 'publicados';
+      // Otherwise it's waiting for distributor approval
+      return 'en_espera';
+    }
+    
+    // Check article's workflow status as fallback
+    final status = item.workflowStatus?.toLowerCase();
     if (status == 'vencido') return 'vencidos';
-    if (status == 'pendiente' || status == 'publicados') return 'publicados';
     
+    // No request, no task - article is just published
     return 'publicados';
   }
 
@@ -381,6 +472,7 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
     await _cacheService.clearCache();
     await _loadData(forceRefresh: true);
     await _loadEmployees();
+    await _loadRequestsAndTasks(); // ✅ Refresh requests and tasks
     await _loadApprovedRequestCount(); // ✅ Refresh notification count
 
     final lastLocation = _locationService.lastKnownLocation ?? _userLocation;
@@ -423,11 +515,15 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
         selectedStatuses: _selectedStatuses,
         sortBy: _sortBy,
         onApply: (statuses, sort) {
-          setState(() {
-            _selectedStatuses = statuses;
-            _sortBy = sort;
-            _applyFilters();
-          });
+          if (mounted) {
+            setState(() {
+              _selectedStatuses = statuses;
+              _sortBy = sort;
+              _applyFilters();
+            });
+            print('✅ Filters applied: ${statuses.length} statuses, sort: $sort');
+            print('   Filtered items: ${_filteredItems.length} of ${_allItems.length}');
+          }
         },
       ),
     );
@@ -687,15 +783,28 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
       options: MapOptions(
         initialCenter: _userLocation ?? MapService.cochabambaCenter,
         initialZoom: _currentZoom,
-        minZoom: 10.0,
+        minZoom: 6.0,  // ✅ Prevent zooming out beyond Bolivia
         maxZoom: 18.0,
-        onPositionChanged: (position, hasGesture) {
+        // ✅ Disable map rotation
+        interactionOptions: const InteractionOptions(
+          flags: InteractiveFlag.all & ~InteractiveFlag.rotate,
+        ),
+        cameraConstraint: CameraConstraint.contain(
+          bounds: LatLngBounds(
+            const LatLng(-22.9, -69.7), // Southwest corner of Bolivia
+            const LatLng(-9.6, -57.4),   // Northeast corner of Bolivia
+          ),
+        ),
+        onPositionChanged: (MapCamera position, bool hasGesture) {
           if (hasGesture) {
             setState(() {
               _currentZoom = position.zoom;
+              if (position.zoom >= 14 || position.zoom < 12) {
+                _expandedClusters.clear();
+              }
             });
           }
-        },
+        }
       ),
       children: [
         TileLayer(

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 // import 'package:flutter/services.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:reciclaje_app/auth/auth_service.dart';
@@ -10,16 +11,19 @@ import 'package:reciclaje_app/components/location_map_preview.dart';
 import 'package:reciclaje_app/components/photo_gallery_widget.dart';
 import 'package:reciclaje_app/components/photo_validation.dart';
 import 'package:reciclaje_app/components/schedule_pickup_dialog.dart'; // ✅ Add import
+import 'package:reciclaje_app/model/users.dart';
 import 'package:reciclaje_app/utils/Fixed43Cropper.dart';
 // import 'package:reciclaje_app/components/row_button_2.dart';
 import 'package:reciclaje_app/database/media_database.dart';
 import 'package:reciclaje_app/database/request_database.dart'; // ✅ Add request database
 import 'package:reciclaje_app/database/users_database.dart'; // ✅ Add users database
 import 'package:reciclaje_app/database/task_database.dart'; // ✅ Add task database
+import 'package:reciclaje_app/database/userPointsLog_database.dart'; // ✅ Add points log database
 import 'package:reciclaje_app/model/multimedia.dart';
 import 'package:reciclaje_app/model/recycling_items.dart';
 import 'package:reciclaje_app/model/request.dart'; // ✅ Add request model
 import 'package:reciclaje_app/model/task.dart'; // ✅ Add task model
+import 'package:reciclaje_app/model/userPointsLog.dart'; // ✅ Add points log model
 // import 'package:reciclaje_app/screen/home_screen.dart';
 import 'package:reciclaje_app/components/my_button.dart';
 import 'package:reciclaje_app/components/category_tags.dart';
@@ -40,9 +44,14 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 class DetailRecycleScreen extends StatefulWidget {
   final RecyclingItem item;
+  final bool isEmpresaView; // ✅ Flag to indicate empresa view (read-only, reviews only)
+  final Map<String, dynamic>? taskData; // ✅ Optional task data with reviews and schedule
+  
   const DetailRecycleScreen({
     super.key,
     required this.item,
+    this.isEmpresaView = false, // Default to false (normal admin view)
+    this.taskData, // Optional task data for empresa view
   });
 
   @override
@@ -63,13 +72,18 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
   final requestDatabase = RequestDatabase(); // ✅ Add request database
   final usersDatabase = UsersDatabase(); // ✅ Add users database
   final taskDatabase = TaskDatabase(); // ✅ Add task database
+  final pointsLogDatabase = UserpointslogDatabase(); // ✅ Add points log database
 
   final _authService = AuthService();
+  Users? currentUser;
+  Multimedia? currentUserAvatar;
+
   String? _currentUserEmail;
   String? _currentUserRole; // ✅ Track user role
   int? _currentUserId; // ✅ Track user ID
   int? _companyId; // ✅ Track company ID for admin-empresa
   Request? _existingRequest; // ✅ Track request status for this article
+  bool isLoading = true;
   bool _isLoadingRequest = false; // ✅ Loading request status
   List<Map<String, dynamic>> _employees = []; // ✅ Add employees list for company
   Set<int> _assignedEmployeeIds = {}; // ✅ Track employees with active tasks
@@ -1255,12 +1269,33 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
   /// ✅ Assign employee to an already approved request (update existing task)
   Future<void> _assignEmployeeToApprovedRequest(int requestId, int employeeId, int companyId) async {
     try {
+      print('🔍 Attempting to assign employee:');
+      print('   requestId: $requestId');
+      print('   employeeId: $employeeId');
+      print('   companyId: $companyId');
+      
       // ✅ Get existing task created by distributor with "sin_asignar" status
       final existingTask = await taskDatabase.getTaskByRequestId(requestId);
 
+      print('🔍 Task lookup result: ${existingTask != null ? "FOUND (ID: ${existingTask.idTask})" : "NOT FOUND"}');
+      
       if (existingTask == null) {
-        throw Exception('No se encontró la tarea para esta solicitud');
+        // ✅ Debug: Check if task exists in database directly
+        final directCheck = await Supabase.instance.client
+            .from('tasks')
+            .select()
+            .eq('requestID', requestId)
+            .maybeSingle();
+        
+        print('🔍 Direct DB check for requestID=$requestId: ${directCheck != null ? "FOUND" : "NOT FOUND"}');
+        if (directCheck != null) {
+          print('   Task in DB: $directCheck');
+        }
+        
+        throw Exception('No se encontró la tarea para esta solicitud (requestID: $requestId)');
       }
+
+      print('✅ Found existing task: ${existingTask.toString()}');
 
       // ✅ Update task to assign employee and change status to "en_proceso"
       final updatedTask = Task(
@@ -1849,7 +1884,7 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
 
       // Create review - distributor reviews the employee/company
       // ✅ Use _distributorEmployeeUserId (userID) instead of _distributorEmployeeId (employeeID)
-      await Supabase.instance.client.from('reviews').insert({
+      final reviewResponse = await Supabase.instance.client.from('reviews').insert({
         'starID': rating,
         'articleID': widget.item.id,
         'senderID': _currentUserId, // Distributor sending review
@@ -1857,9 +1892,10 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
         'comment': comment.isEmpty ? null : comment,
         'state': 1,
         'created_at': DateTime.now().toIso8601String(),
-      });
+      }).select().single();
 
-      print('✅ Distributor review created successfully');
+      final reviewId = reviewResponse['idReview'] as int;
+      print('✅ Distributor review created successfully - Review ID: $reviewId');
 
       // ✅ Check if employee has already confirmed (status should be 'esperando_confirmacion_distribuidor')
       final taskData = await Supabase.instance.client
@@ -1874,11 +1910,13 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
       // Otherwise, mark as 'esperando_confirmacion_empleado'
       String newStatus;
       String message;
+      bool taskCompleted = false;
       
       if (currentStatus == 'esperando_confirmacion_distribuidor') {
         // Employee already confirmed, now distributor confirms → completado
         newStatus = 'completado';
         message = '✅ ¡Entrega completada exitosamente!';
+        taskCompleted = true;
         print('✅ Task marked as completado - both parties confirmed');
       } else {
         // Distributor confirms first, waiting for employee
@@ -1895,6 +1933,13 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
             'lastUpdate': DateTime.now().toIso8601String(),
           })
           .eq('idTask', _distributorTaskId!);
+
+      // ℹ️ Note: Employees do NOT receive points in userPointsLog (Option B)
+      // Only distributors receive points when employees review them
+      print('ℹ️ Distributor reviewed employee (rating: $rating stars)');
+      print('   📝 Review ID: $reviewId saved to reviews table');
+      print('   ❌ No userPointsLog entry for employee (only distributors earn XP points)');
+      print('   📊 Task Status: $newStatus');
 
       // Close loading dialog
       if (mounted) Navigator.pop(context);
@@ -1915,6 +1960,9 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
         );
       }
     } catch (e) {
+      // Close loading dialog
+      if (mounted) Navigator.pop(context);
+      
       print('❌ Error submitting distributor review: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -1950,7 +1998,7 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
       );
 
       // 1. Create review
-      await Supabase.instance.client.from('reviews').insert({
+      final reviewResponse = await Supabase.instance.client.from('reviews').insert({
         'starID': rating,
         'articleID': widget.item.id,
         'senderID': _currentUserId, // ✅ Employee who is SENDING the review
@@ -1958,9 +2006,10 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
         'comment': comment.isEmpty ? null : comment,
         'state': 1,
         'created_at': DateTime.now().toIso8601String(),
-      });
+      }).select().single();
 
-      print('✅ Review created - Rating: $rating stars');
+      final reviewId = reviewResponse['idReview'] as int;
+      print('✅ Review created - Rating: $rating stars, Review ID: $reviewId');
 
       // 2. Check current task status to determine next status
       final taskData = await Supabase.instance.client
@@ -1974,11 +2023,13 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
       // Determine new status based on current workflow
       String newStatus;
       String message;
+      bool taskCompleted = false;
       
       if (currentStatus == 'esperando_confirmacion_empleado') {
         // Distributor already confirmed, now employee confirms → completado
         newStatus = 'completado';
         message = '✅ ¡Entrega completada exitosamente!';
+        taskCompleted = true;
         print('✅ Task marked as completado - both parties confirmed');
       } else {
         // Employee confirms first, waiting for distributor
@@ -1995,6 +2046,72 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
             'lastUpdate': DateTime.now().toIso8601String(),
           })
           .eq('idTask', _employeeTaskId!);
+
+      // ✅ 3. Create userPointsLog for distributor IMMEDIATELY (don't wait for task completion)
+      // Employee reviews distributor → distributor gets points right away
+      // Distributor confirmation is just for UI/workflow (notification), but points are already recorded
+      print('🎯 EMPLOYEE REVIEWED DISTRIBUTOR! Creating userPointsLog IMMEDIATELY...');
+      print('   📋 Distributor UserID: ${widget.item.ownerUserId}');
+      print('   📦 Article ID: ${widget.item.id}');
+      print('   ⭐ Rating given by employee: $rating stars');
+      print('   📝 Review ID: $reviewId');
+      print('   📊 Task Status: $newStatus (will wait for distributor confirmation for UI only)');
+      
+      try {
+        // Get current active cycle
+        print('   🔍 Querying active cycle (state=1)...');
+        final cycleData = await Supabase.instance.client
+            .from('cycle')
+            .select('idCycle')
+            .eq('state', 1)
+            .maybeSingle();
+
+        final cycleId = cycleData?['idCycle'] as int?;
+
+        if (cycleId != null) {
+          print('   ✅ Active cycle found: cycleId=$cycleId');
+          
+          // Get points from starValue table based on rating
+          print('   🔍 Querying starValue for rating $rating...');
+          final starValueData = await Supabase.instance.client
+              .from('starValue')
+              .select('points')
+              .eq('idStarValue', rating)
+              .single();
+
+          final points = starValueData['points'] as int;
+          print('   ✅ Points for rating $rating: $points XP');
+
+          // Create points log entry for distributor
+          final pointsLog = userPointsLog(
+            userId: widget.item.ownerUserId, // ✅ Distributor receives points
+            articleId: widget.item.id,
+            reviewId: reviewId,
+            cycleId: cycleId,
+            points: points,
+            reason: 'Puntos obtenidos por el artículo: ${widget.item.title}',
+            type: 'bono',
+            state: 1,
+            lastUpdate: DateTime.now(),
+          );
+
+          print('   📝 INSERTING userPointsLog into database for DISTRIBUTOR...');
+          await pointsLogDatabase.createPointsLog(pointsLog);
+          
+          print('✅✅✅ SUCCESS! UserPointsLog CREATED for DISTRIBUTOR:');
+          print('      👤 UserID: ${widget.item.ownerUserId} (Distributor)');
+          print('      🎁 Points Awarded: $points XP');
+          print('      📦 Article: ${widget.item.title}');
+          print('      🔄 Cycle: $cycleId');
+          print('      ⏰ Created immediately - NOT waiting for distributor confirmation');
+        } else {
+          print('⚠️⚠️⚠️ WARNING: No active cycle found (state=1) - userPointsLog NOT created for distributor');
+        }
+      } catch (e) {
+        print('❌❌❌ ERROR creating userPointsLog for DISTRIBUTOR: $e');
+        print('   Stack trace: ${StackTrace.current}');
+        // Don't fail the whole operation if points log fails
+      }
 
       // Close loading dialog
       if (mounted) Navigator.pop(context);
@@ -2651,8 +2768,8 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
         categoryID: _selectedCategory!.id,
         condition: _selectedCondition,
         address: _selectedAddress,
-        lat: widget.item.latitude,
-        lng: widget.item.longitude,
+        lat: _selectedLocation?.latitude ?? widget.item.latitude, // ✅ Use new location if changed
+        lng: _selectedLocation?.longitude ?? widget.item.longitude, // ✅ Use new location if changed
         userId: widget.item.ownerUserId,
         // workflowStatus: 'pendiente',
         state: 1,
@@ -2693,6 +2810,11 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
       // ✅ Recargar categorías bloqueadas después de guardar
       await _loadDisabledCategories();
       print('🔄 Categorías bloqueadas actualizadas después de guardar cambios');
+
+      // ✅ Navigate back to home screen with reload flag
+      if (mounted) {
+        Navigator.pop(context, true); // Return true to indicate changes were made
+      }
 
     } catch (e) {
       setState(() {
@@ -2779,6 +2901,43 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
     return '$hour:$minute';
   }
 
+  // ✅ Load reviewer avatar from multimedia table
+  Future<Multimedia?> _loadReviewerAvatar(String userId, String userRole) async {
+    try {
+      final role = userRole.toLowerCase();
+      
+      // Try new path first (with role)
+      String avatarPattern = 'users/$role/$userId/avatars/';
+      Multimedia? avatar = await mediaDatabase.getMainPhotoByPattern(avatarPattern);
+      
+      // If not found, try old path (without role) for backward compatibility
+      if (avatar == null) {
+        avatarPattern = 'users/$userId/avatars/';
+        avatar = await mediaDatabase.getMainPhotoByPattern(avatarPattern);
+      }
+      
+      return avatar;
+    } catch (e) {
+      print('Error loading reviewer avatar: $e');
+      return null;
+    }
+  }
+
+  // ✅ Get role display name
+  String _getRoleDisplayName(String role) {
+    switch (role.toLowerCase()) {
+      case 'admin-empresa':
+        return 'Administrador de Empresa';
+      case 'empresa':
+        return 'Empresa';
+      case 'employee':
+        return 'Empleado';
+      case 'user':
+      default:
+        return 'Distribuidor';
+    }
+  }
+
   Future<void> _deleteArticle() async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -2813,29 +2972,31 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
 
         await articleDatabase.deleteArticle(articleToDelete);
 
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Artículo eliminado correctamente'),
-            backgroundColor: Colors.green,
-          ),
-        );
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Artículo eliminado correctamente'),
+              backgroundColor: Colors.green,
+            ),
+          );
 
-        // Navigate back with result to refresh the home screen
-        Navigator.pop(context, true);
-
-        Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => NavigationScreens()));
+          // ✅ Navigate back to home screen with reload flag
+          Navigator.pop(context, true); // Return true to indicate article was deleted
+        }
 
       } catch (e) {
         setState(() {
           _isSubmitting = false;
         });
         
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error al eliminar: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Error al eliminar: $e'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
       }
     }
   }
@@ -3134,8 +3295,12 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
     final company = request['company'] as Map<String, dynamic>?;
     final companyLogo = request['companyLogo'] as Multimedia?;
     final scheduledDay = request['scheduledDay'] as String?;
-    final scheduledTime = request['scheduledStartTime'] as String?;
+    final scheduledStartTime = request['scheduledStartTime'] as String?;
+    final scheduledEndTime = request['scheduledEndTime'] as String?;
     final companyName = company?['nameCompany'] ?? 'Empresa';
+    
+    // ✅ Format the scheduled date and time in human-readable Spanish format
+    final formattedDateTime = _formatScheduledDateTime(scheduledDay, scheduledStartTime, scheduledEndTime);
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
@@ -3168,7 +3333,7 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
                     borderRadius: BorderRadius.circular(12),
                     image: companyLogo?.url != null
                         ? DecorationImage(
-                            image: NetworkImage(companyLogo!.url!),
+                            image: CachedNetworkImageProvider(companyLogo!.url!),
                             fit: BoxFit.cover,
                           )
                         : null,
@@ -3194,9 +3359,9 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
                           color: Color(0xFF2D8A8A),
                         ),
                       ),
-                      if (scheduledDay != null && scheduledTime != null)
+                      if (scheduledDay != null && scheduledStartTime != null)
                         Text(
-                          '$scheduledDay a las ${_formatTime(scheduledTime)}',
+                          formattedDateTime,
                           style: TextStyle(
                             fontSize: 13,
                             color: Colors.grey[600],
@@ -3536,24 +3701,201 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
                       ),
                     ],
                   ),
-                )
-              else if (!(_isOwner && _distributorTaskStatus != null))
-                // availability - only show if distributor doesn't have active task
-                AvailabilityPicker(
-                  selectedAvailability: _isEditing
-                      ? _selectedAvailability 
-                      : _originalAvailability, 
-                  onAvailabilitySelected: _isEditing
-                      ? (AvailabilityData? availability) {
-                          setState(() {
-                            _selectedAvailability = availability;
-                          });
-                        } 
-                      : null,
-                  labelText: _isOwner ? 'Fecha y Hora de Entrega' : 'Disponibilidad para entrega',
-                  prefixIcon: Icons.calendar_month,
-                  isRequired: false,
                 ),
+              // ✅ Disponibilidad section (hide for empresa view)
+              if (!widget.isEmpresaView) ...[
+                if (!(_isOwner && _distributorTaskStatus != null))
+                  // availability - only show if distributor doesn't have active task
+                  AvailabilityPicker(
+                    selectedAvailability: _isEditing
+                        ? _selectedAvailability 
+                        : _originalAvailability, 
+                    onAvailabilitySelected: _isEditing
+                        ? (AvailabilityData? availability) {
+                            setState(() {
+                              _selectedAvailability = availability;
+                            });
+                          } 
+                        : null,
+                    labelText: _isOwner ? 'Fecha y Hora de Entrega' : 'Disponibilidad para entrega',
+                    prefixIcon: Icons.calendar_month,
+                    isRequired: false,
+                  ),
+              ],
+
+              // ✅ Empresa view: Show ONLY reviews (no schedule, no user info)
+              if (widget.isEmpresaView && widget.taskData != null) ...[
+                const SizedBox(height: 20),
+                // Reviews section only
+                const Text(
+                  'Calificaciones',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    color: Color(0xFF2D8A8A),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                if (widget.taskData!['reviews'] != null && (widget.taskData!['reviews'] as List).isNotEmpty)
+                  ...((widget.taskData!['reviews'] as List).map((review) {
+                    // Get sender info
+                    final senderName = review['sender']?['names'] ?? 'Usuario';
+                    final senderRole = review['sender']?['role'] ?? 'user';
+                    final senderId = review['sender']?['idUser']?.toString();
+                    final createdAt = review['created_at'] != null 
+                        ? DateTime.parse(review['created_at']).toString().substring(0, 10)
+                        : '';
+                    
+                    return FutureBuilder<Multimedia?>(
+                      future: senderId != null 
+                          ? _loadReviewerAvatar(senderId, senderRole)
+                          : Future.value(null),
+                      builder: (context, snapshot) {
+                        final avatarUrl = snapshot.data?.url;
+                        
+                        return Container(
+                          margin: const EdgeInsets.only(bottom: 12),
+                          padding: const EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: Colors.grey[300]!),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  // Avatar
+                                  CircleAvatar(
+                                    radius: 24,
+                                    backgroundColor: const Color(0xFF2D8A8A),
+                                    backgroundImage: avatarUrl != null 
+                                        ? CachedNetworkImageProvider(avatarUrl) 
+                                        : null,
+                                    child: avatarUrl == null
+                                        ? Text(
+                                            senderName.isNotEmpty ? senderName[0].toUpperCase() : 'U',
+                                            style: const TextStyle(
+                                              color: Colors.white,
+                                              fontSize: 20,
+                                              fontWeight: FontWeight.bold,
+                                            ),
+                                          )
+                                        : null,
+                                  ),
+                                  const SizedBox(width: 12),
+                                  // Name and role
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          _getRoleDisplayName(senderRole),
+                                          style: TextStyle(
+                                            fontSize: 12,
+                                            color: Colors.grey[600],
+                                            fontWeight: FontWeight.w500,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 2),
+                                        Text(
+                                          senderName,
+                                          style: const TextStyle(
+                                            fontSize: 16,
+                                            fontWeight: FontWeight.w600,
+                                            color: Colors.black87,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  // Date and stars
+                                  Column(
+                                    crossAxisAlignment: CrossAxisAlignment.end,
+                                    children: [
+                                      Text(
+                                        createdAt,
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          color: Colors.grey[600],
+                                        ),
+                                      ),
+                                      const SizedBox(height: 4),
+                                      Row(
+                                        children: List.generate(
+                                          5,
+                                          (index) => Icon(
+                                            index < (review['starID'] as int? ?? 0)
+                                                ? Icons.star
+                                                : Icons.star_border,
+                                            color: Colors.amber,
+                                            size: 20,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ),
+                              if (review['comment'] != null && (review['comment'] as String).isNotEmpty) ...[
+                                const SizedBox(height: 12),
+                                Text(
+                                  review['comment'],
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    color: Colors.grey[800],
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
+                        );
+                      },
+                    );
+                  }).toList())
+                else
+                  Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: Colors.grey[100],
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Text(
+                      'No hay calificaciones disponibles',
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: Colors.grey,
+                      ),
+                    ),
+                  ),
+                // Add completion message for empresa view
+                const SizedBox(height: 20),
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: Colors.green.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.green.withOpacity(0.3)),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.check_circle, color: Colors.green),
+                      const SizedBox(width: 12),
+                      const Expanded(
+                        child: Text(
+                          'Este artículo ya fue entregado y está en el historial',
+                          style: TextStyle(
+                            color: Colors.green,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
 
               // ✅ Employee action button - Confirmar llegada (placed right after schedule)
               if (_isEmployee && _employeeTaskId != null && 
@@ -3667,8 +4009,8 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
                 _buildReviewsSection(),
               ],
 
-              // User info section (only in view mode)
-              if (!_isEditing && !_isOwner) ...[
+              // User info section (only in view mode, hide for empresa view)
+              if (!_isEditing && !_isOwner && !widget.isEmpresaView) ...[
                 const SizedBox(height: 20),
                 const Text(
                   'Información del usuario',
@@ -3858,8 +4200,8 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
                 ),
               ],
 
-              // ✅ Action buttons for admin-empresa (non-owner)
-              if (!_isOwner && _isCompanyAdmin) ...[
+              // ✅ Action buttons for admin-empresa (non-owner, hide for empresa view)
+              if (!_isOwner && _isCompanyAdmin && !widget.isEmpresaView) ...[
                 if (_isLoadingRequest)
                   const Center(
                     child: CircularProgressIndicator(

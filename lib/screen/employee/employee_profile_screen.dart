@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:reciclaje_app/auth/auth_service.dart';
 import 'package:reciclaje_app/database/media_database.dart';
 import 'package:reciclaje_app/database/users_database.dart';
 import 'package:reciclaje_app/model/multimedia.dart';
 import 'package:reciclaje_app/model/users.dart';
+import 'package:reciclaje_app/model/recycling_items.dart';
 import 'package:reciclaje_app/screen/distribuidor/login_screen.dart';
+import 'package:reciclaje_app/screen/distribuidor/detail_recycle_screen.dart';
 import 'package:reciclaje_app/screen/employee/edit_employee_profile_screen.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -22,8 +25,16 @@ class _EmployeeProfileScreenState extends State<EmployeeProfileScreen> {
 
   Users? currentUser;
   Multimedia? currentUserAvatar; // User's avatar from multimedia table
-  List<Map<String, dynamic>> completedTasks = []; // Completed tasks with reviews
+  List<Map<String, dynamic>> allTasks = []; // All tasks (completed, en_proceso, asignado)
+  List<Map<String, dynamic>> filteredTasks = []; // Filtered and sorted tasks
   bool isLoading = true;
+  double employeeRating = 0.0; // ✅ Average rating for employee
+  int totalReviews = 0; // ✅ Total number of reviews received
+  
+  // Filter and search state
+  String searchQuery = '';
+  bool sortAscending = false; // false = newest first, true = oldest first
+  Set<String> selectedStatusFilters = {'completado'}; // Default: show completed only
 
   @override
   void initState() {
@@ -72,8 +83,11 @@ class _EmployeeProfileScreenState extends State<EmployeeProfileScreen> {
           if (employeeData != null) {
             final employeeId = employeeData['idEmployee'] as int;
             
-            // Get completed tasks with reviews
-            await _loadCompletedTasks(employeeId);
+            // Get all tasks (completed, en_proceso, asignado)
+            await _loadAllTasks(employeeId);
+            
+            // ✅ Load employee rating
+            await _loadEmployeeRating();
           }
         }
       }
@@ -86,9 +100,10 @@ class _EmployeeProfileScreenState extends State<EmployeeProfileScreen> {
     }
   }
 
-  /// Load completed tasks with review information
-  Future<void> _loadCompletedTasks(int employeeId) async {
+  /// Load all tasks (completed, en_proceso, asignado) with review information
+  Future<void> _loadAllTasks(int employeeId) async {
     try {
+      // Get all tasks for this employee (not just completed)
       final tasks = await Supabase.instance.client
           .from('tasks')
           .select('''
@@ -108,10 +123,10 @@ class _EmployeeProfileScreenState extends State<EmployeeProfileScreen> {
             )
           ''')
           .eq('employeeID', employeeId)
-          .eq('workflowStatus', 'completado')
+          .inFilter('workflowStatus', ['completado', 'en_proceso', 'sin_asignar'])
           .order('lastUpdate', ascending: false);
 
-      // Get reviews for these tasks
+      // Get reviews and photos for these tasks
       final tasksWithReviews = <Map<String, dynamic>>[];
       for (var task in tasks) {
         final articleId = task['article']?['idArticle'];
@@ -146,11 +161,161 @@ class _EmployeeProfileScreenState extends State<EmployeeProfileScreen> {
 
       if (mounted) {
         setState(() {
-          completedTasks = tasksWithReviews;
+          allTasks = tasksWithReviews;
         });
+        _applyFilters();
       }
     } catch (e) {
-      print('❌ Error loading completed tasks: $e');
+      print('❌ Error loading tasks: $e');
+    }
+  }
+
+  /// Load employee rating from reviews
+  Future<void> _loadEmployeeRating() async {
+    if (currentUser?.id == null) return;
+    
+    try {
+      // Get all reviews where current user is the receiver (employee)
+      final reviews = await Supabase.instance.client
+          .from('reviews')
+          .select('starID')
+          .eq('receiverID', currentUser!.id!)
+          .eq('state', 1); // Only active reviews
+      
+      if (reviews.isEmpty) {
+        if (mounted) {
+          setState(() {
+            employeeRating = 0.0;
+            totalReviews = 0;
+          });
+        }
+        return;
+      }
+      
+      // Calculate average rating
+      int totalStars = 0;
+      for (var review in reviews) {
+        totalStars += (review['starID'] as int? ?? 0);
+      }
+      
+      final avgRating = totalStars / reviews.length;
+      
+      if (mounted) {
+        setState(() {
+          employeeRating = avgRating;
+          totalReviews = reviews.length;
+        });
+      }
+      
+      print('⭐ Employee rating: ${avgRating.toStringAsFixed(1)} stars (${reviews.length} reviews)');
+    } catch (e) {
+      print('❌ Error loading employee rating: $e');
+    }
+  }
+
+  void _applyFilters() {
+    List<Map<String, dynamic>> filtered = List.from(allTasks);
+    
+    // Filter by selected statuses
+    if (selectedStatusFilters.isNotEmpty) {
+      filtered = filtered.where((task) {
+        final status = task['workflowStatus'] as String?;
+        return selectedStatusFilters.contains(status);
+      }).toList();
+    }
+    
+    // Apply search filter
+    if (searchQuery.isNotEmpty) {
+      filtered = filtered.where((task) {
+        final article = task['article'] as Map<String, dynamic>?;
+        final name = article?['name']?.toString().toLowerCase() ?? '';
+        final description = article?['description']?.toString().toLowerCase() ?? '';
+        final query = searchQuery.toLowerCase();
+        return name.contains(query) || description.contains(query);
+      }).toList();
+    }
+    
+    // Sort by date
+    filtered.sort((a, b) {
+      final aDate = DateTime.tryParse(a['lastUpdate'] ?? '') ?? DateTime.now();
+      final bDate = DateTime.tryParse(b['lastUpdate'] ?? '') ?? DateTime.now();
+      
+      if (sortAscending) {
+        return aDate.compareTo(bDate); // Oldest first
+      } else {
+        return bDate.compareTo(aDate); // Newest first
+      }
+    });
+    
+    setState(() {
+      filteredTasks = filtered;
+    });
+  }
+
+  /// Navigate to task detail screen
+  Future<void> _navigateToTaskDetail(Map<String, dynamic> task) async {
+    final article = task['article'] as Map<String, dynamic>?;
+    if (article == null) return;
+
+    // Get category name
+    final categoryName = article['category']?['name'] as String? ?? 'Sin categoría';
+
+    // Get owner data from article
+    final ownerId = article['userID'] as int? ?? 0;
+    final ownerData = ownerId > 0
+        ? await _getUserData(ownerId)
+        : {'name': 'Desconocido', 'email': ''};
+
+    // Convert task article to RecyclingItem for detail screen
+    final recyclingItem = RecyclingItem(
+      id: article['idArticle'] as int,
+      title: article['name'] ?? '',
+      description: article['description'] ?? '',
+      condition: article['condition'] ?? '',
+      categoryName: categoryName,
+      categoryID: article['categoryID'] as int?,
+      ownerUserId: ownerId,
+      userName: ownerData['names']!,
+      userEmail: ownerData['email']!,
+      latitude: (article['lat'] as num?)?.toDouble() ?? 0.0,
+      longitude: (article['lng'] as num?)?.toDouble() ?? 0.0,
+      address: article['address'] ?? '',
+      createdAt: article['lastUpdate'] != null
+          ? DateTime.parse(article['lastUpdate'])
+          : DateTime.now(),
+      workflowStatus: task['workflowStatus'] as String? ?? 'en_proceso',
+      availableDays: null,
+      availableTimeStart: null,
+      availableTimeEnd: null,
+    );
+
+    // Navigate to detail screen
+    final result = await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => DetailRecycleScreen(item: recyclingItem),
+      ),
+    );
+
+    // Refresh data if changes were made
+    if (result == true) {
+      await _loadUserData();
+    }
+  }
+
+  Future<Map<String, String>> _getUserData(int userId) async {
+    try {
+      final response = await Supabase.instance.client
+          .from('users')
+          .select('names, email')
+          .eq('idUsers', userId)
+          .single();
+      return {
+        'names': response['names'] as String? ?? 'Desconocido',
+        'email': response['email'] as String? ?? '',
+      };
+    } catch (e) {
+      return {'names': 'Desconocido', 'email': ''};
     }
   }
 
@@ -200,6 +365,97 @@ class _EmployeeProfileScreenState extends State<EmployeeProfileScreen> {
     if (result == true) {
       await _loadUserData();
     }
+  }
+
+  void _showStatusFilterDialog() {
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) => StatefulBuilder(
+        builder: (context, setModalState) => Container(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Filtrar por estado',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFF2D8A8A),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  _buildFilterChip('Completado', 'completado', Colors.green, setModalState),
+                  _buildFilterChip('En Proceso', 'en_proceso', Colors.orange, setModalState),
+                  _buildFilterChip('Asignado', 'asignado', Colors.blue, setModalState),
+                ],
+              ),
+              const SizedBox(height: 16),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  TextButton(
+                    onPressed: () {
+                      setState(() {
+                        selectedStatusFilters = {'completado'}; // Reset to default
+                      });
+                      _applyFilters();
+                      Navigator.pop(context);
+                    },
+                    child: const Text('Limpiar filtros'),
+                  ),
+                  ElevatedButton(
+                    onPressed: () {
+                      Navigator.pop(context);
+                    },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF2D8A8A),
+                    ),
+                    child: const Text(
+                      'Aplicar',
+                      style: TextStyle(color: Colors.white),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildFilterChip(String label, String value, Color color, StateSetter setModalState) {
+    final isSelected = selectedStatusFilters.contains(value);
+    return FilterChip(
+      label: Text(label),
+      selected: isSelected,
+      onSelected: (selected) {
+        setModalState(() {
+          if (selected) {
+            selectedStatusFilters.add(value);
+          } else {
+            selectedStatusFilters.remove(value);
+          }
+        });
+        setState(() {});
+        _applyFilters();
+      },
+      selectedColor: color.withOpacity(0.3),
+      checkmarkColor: color,
+      labelStyle: TextStyle(
+        color: isSelected ? color : Colors.grey[700],
+        fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+      ),
+    );
   }
 
   void _showProfileMenu() {
@@ -259,7 +515,7 @@ class _EmployeeProfileScreenState extends State<EmployeeProfileScreen> {
                           radius: 50,
                           backgroundColor: Colors.white,
                           backgroundImage: currentUserAvatar?.url != null
-                              ? NetworkImage(currentUserAvatar!.url!)
+                              ? CachedNetworkImageProvider(currentUserAvatar!.url!)
                               : null,
                           child: currentUserAvatar?.url == null
                               ? const Icon(
@@ -317,6 +573,36 @@ class _EmployeeProfileScreenState extends State<EmployeeProfileScreen> {
                                   color: Colors.white70,
                                 ),
                               ),
+                              // ✅ Rating display
+                              if (totalReviews > 0) ...[
+                                const SizedBox(height: 8),
+                                Row(
+                                  children: [
+                                    const Icon(
+                                      Icons.star,
+                                      color: Colors.amber,
+                                      size: 20,
+                                    ),
+                                    const SizedBox(width: 4),
+                                    Text(
+                                      employeeRating.toStringAsFixed(1),
+                                      style: const TextStyle(
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.bold,
+                                        color: Colors.white,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 4),
+                                    Text(
+                                      '($totalReviews ${totalReviews == 1 ? 'reseña' : 'reseñas'})',
+                                      style: const TextStyle(
+                                        fontSize: 12,
+                                        color: Colors.white70,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ],
                             ],
                           ),
                         ),
@@ -352,9 +638,26 @@ class _EmployeeProfileScreenState extends State<EmployeeProfileScreen> {
                           Padding(
                             padding: const EdgeInsets.symmetric(horizontal: 25),
                             child: TextField(
+                              onChanged: (value) {
+                                setState(() {
+                                  searchQuery = value;
+                                });
+                                _applyFilters();
+                              },
                               decoration: InputDecoration(
                                 hintText: 'Buscar',
                                 prefixIcon: const Icon(Icons.search, color: Colors.grey),
+                                suffixIcon: searchQuery.isNotEmpty
+                                    ? IconButton(
+                                        icon: const Icon(Icons.clear, color: Colors.grey),
+                                        onPressed: () {
+                                          setState(() {
+                                            searchQuery = '';
+                                          });
+                                          _applyFilters();
+                                        },
+                                      )
+                                    : null,
                                 filled: true,
                                 fillColor: Colors.grey[100],
                                 border: OutlineInputBorder(
@@ -366,21 +669,57 @@ class _EmployeeProfileScreenState extends State<EmployeeProfileScreen> {
                             ),
                           ),
                           const SizedBox(height: 10),
-                          // Tasks count
+                          // Tasks count and controls
                           Padding(
                             padding: const EdgeInsets.symmetric(horizontal: 25),
-                            child: Text(
-                              'Total ${completedTasks.length} tareas finalizadas',
-                              style: TextStyle(
-                                fontSize: 14,
-                                color: Colors.grey[600],
-                              ),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Text(
+                                  'Total ${filteredTasks.length} tareas',
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    color: Colors.grey[600],
+                                  ),
+                                ),
+                                Row(
+                                  children: [
+                                    // Sort button
+                                    IconButton(
+                                      icon: Icon(
+                                        sortAscending ? Icons.arrow_upward : Icons.arrow_downward,
+                                        color: const Color(0xFF2D8A8A),
+                                        size: 20,
+                                      ),
+                                      onPressed: () {
+                                        setState(() {
+                                          sortAscending = !sortAscending;
+                                        });
+                                        _applyFilters();
+                                      },
+                                      tooltip: sortAscending ? 'Más antiguos primero' : 'Más recientes primero',
+                                    ),
+                                    // Filter button
+                                    IconButton(
+                                      icon: Icon(
+                                        Icons.filter_list,
+                                        color: selectedStatusFilters.length == 1 && selectedStatusFilters.contains('completado')
+                                            ? Colors.grey[600]
+                                            : const Color(0xFF2D8A8A),
+                                        size: 20,
+                                      ),
+                                      onPressed: _showStatusFilterDialog,
+                                      tooltip: 'Filtrar por estado',
+                                    ),
+                                  ],
+                                ),
+                              ],
                             ),
                           ),
                           const SizedBox(height: 15),
-                          // Grid of completed tasks
+                          // Grid of tasks
                           Expanded(
-                            child: _buildCompletedTasksGrid(),
+                            child: _buildTasksGrid(),
                           ),
                         ],
                       ),
@@ -392,21 +731,23 @@ class _EmployeeProfileScreenState extends State<EmployeeProfileScreen> {
     );
   }
 
-  // Build completed tasks grid
-  Widget _buildCompletedTasksGrid() {
-    if (completedTasks.isEmpty) {
+  // Build tasks grid
+  Widget _buildTasksGrid() {
+    if (filteredTasks.isEmpty) {
       return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Icon(
-              Icons.check_circle_outline,
+              Icons.assignment_outlined,
               size: 80,
               color: Colors.grey[300],
             ),
             const SizedBox(height: 16),
             Text(
-              'No hay tareas finalizadas',
+              searchQuery.isNotEmpty
+                  ? 'No se encontraron tareas'
+                  : 'No hay tareas disponibles',
               style: TextStyle(
                 fontSize: 16,
                 color: Colors.grey[600],
@@ -426,26 +767,28 @@ class _EmployeeProfileScreenState extends State<EmployeeProfileScreen> {
           crossAxisSpacing: 10,
           childAspectRatio: 0.85,
         ),
-        itemCount: completedTasks.length,
+        itemCount: filteredTasks.length,
         itemBuilder: (context, index) {
-          final task = completedTasks[index];
+          final task = filteredTasks[index];
           return GestureDetector(
-            onTap: () {
-              _showCompletedTaskDetail(task);
+            onTap: () async {
+              // Navigate to detail screen instead of showing dialog
+              await _navigateToTaskDetail(task);
             },
-            child: _buildCompletedTaskCard(task),
+            child: _buildTaskCard(task),
           );
         },
       ),
     );
   }
 
-  // Show completed task detail dialog (copy from distributor profile)
-  void _showCompletedTaskDetail(Map<String, dynamic> task) {
+  // Show task detail dialog
+  void _showTaskDetail(Map<String, dynamic> task) {
     final article = task['article'] as Map<String, dynamic>?;
     final reviews = task['reviews'] as List<dynamic>?;
     final request = task['request'] as Map<String, dynamic>?;
     final photo = task['photo'] as Multimedia?;
+    final workflowStatus = task['workflowStatus'] as String?;
     
     final articleName = article?['name'] ?? 'Sin título';
     final scheduledDay = request?['scheduledDay'] ?? 'No especificado';
@@ -472,10 +815,16 @@ class _EmployeeProfileScreenState extends State<EmployeeProfileScreen> {
                   child: SizedBox(
                     height: 150,
                     width: double.infinity,
-                    child: Image.network(
-                      photo!.url!,
+                    child: CachedNetworkImage(
+                      imageUrl: photo!.url!,
                       fit: BoxFit.cover,
-                      errorBuilder: (context, error, stackTrace) => Container(
+                      placeholder: (context, url) => Container(
+                        color: Colors.grey[300],
+                        child: const Center(
+                          child: CircularProgressIndicator(),
+                        ),
+                      ),
+                      errorWidget: (context, url, error) => Container(
                         color: Colors.grey[300],
                         child: Center(
                           child: Icon(
@@ -501,17 +850,18 @@ class _EmployeeProfileScreenState extends State<EmployeeProfileScreen> {
                 ],
               ),
               const SizedBox(height: 16),
-              // Reviews section
-              const Text(
-                'Calificaciones:',
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                  color: Color(0xFF2D8A8A),
+              // Reviews section (only for completed tasks)
+              if (workflowStatus == 'completado') ...[
+                const Text(
+                  'Calificaciones:',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: Color(0xFF2D8A8A),
+                  ),
                 ),
-              ),
-              const SizedBox(height: 12),
-              if (reviews != null && reviews.isNotEmpty)
+                const SizedBox(height: 12),
+                if (reviews != null && reviews.isNotEmpty)
                 ...reviews.map((review) {
                   final sender = review['sender'] as Map<String, dynamic>?;
                   final senderName = sender?['names'] ?? 'Usuario';
@@ -573,6 +923,7 @@ class _EmployeeProfileScreenState extends State<EmployeeProfileScreen> {
                     fontStyle: FontStyle.italic,
                   ),
                 ),
+              ],
             ],
           ),
           ),
@@ -605,20 +956,42 @@ class _EmployeeProfileScreenState extends State<EmployeeProfileScreen> {
     return timeStr;
   }
 
-  // Build completed task card
-  Widget _buildCompletedTaskCard(Map<String, dynamic> task) {
+  // Build task card
+  Widget _buildTaskCard(Map<String, dynamic> task) {
     final article = task['article'] as Map<String, dynamic>?;
     final photo = task['photo'] as Multimedia?;
     final category = article?['category'] as Map<String, dynamic>?;
     final reviews = task['reviews'] as List<dynamic>?;
+    final workflowStatus = task['workflowStatus'] as String?;
     
     final articleName = article?['name'] ?? 'Sin título';
     final categoryName = category?['name'] ?? '';
     final imageUrl = photo?.url;
     
-    // Calculate average rating
+    // Determine badge color and text based on status
+    Color badgeColor;
+    String badgeText;
+    switch (workflowStatus) {
+      case 'completado':
+        badgeColor = Colors.green;
+        badgeText = 'Completado';
+        break;
+      case 'en_proceso':
+        badgeColor = Colors.orange;
+        badgeText = 'En Proceso';
+        break;
+      case 'asignado':
+        badgeColor = Colors.blue;
+        badgeText = 'Asignado';
+        break;
+      default:
+        badgeColor = Colors.grey;
+        badgeText = 'Pendiente';
+    }
+    
+    // Calculate average rating (only for completed tasks)
     double avgRating = 0;
-    if (reviews != null && reviews.isNotEmpty) {
+    if (workflowStatus == 'completado' && reviews != null && reviews.isNotEmpty) {
       final totalStars = reviews.fold<int>(0, (sum, review) => sum + (review['starID'] as int? ?? 0));
       avgRating = totalStars / reviews.length;
     }
@@ -634,12 +1007,18 @@ class _EmployeeProfileScreenState extends State<EmployeeProfileScreen> {
           if (imageUrl != null)
             ClipRRect(
               borderRadius: BorderRadius.circular(12),
-              child: Image.network(
-                imageUrl,
+              child: CachedNetworkImage(
+                imageUrl: imageUrl,
                 width: double.infinity,
                 height: double.infinity,
                 fit: BoxFit.cover,
-                errorBuilder: (context, error, stackTrace) => Container(
+                placeholder: (context, url) => Container(
+                  color: Colors.grey[300],
+                  child: const Center(
+                    child: CircularProgressIndicator(),
+                  ),
+                ),
+                errorWidget: (context, url, error) => Container(
                   color: Colors.grey[300],
                   child: Center(
                     child: Icon(
@@ -666,18 +1045,18 @@ class _EmployeeProfileScreenState extends State<EmployeeProfileScreen> {
               ),
             ),
           ),
-          // Completed badge
+          // Status badge
           Positioned(
             top: 8,
             right: 8,
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
               decoration: BoxDecoration(
-                color: Colors.green,
+                color: badgeColor,
                 borderRadius: BorderRadius.circular(8),
               ),
-              child: const Text(
-                'Completado',
+              child: Text(
+                badgeText,
                 style: TextStyle(
                   color: Colors.white,
                   fontSize: 10,
@@ -766,141 +1145,5 @@ class _EmployeeProfileScreenState extends State<EmployeeProfileScreen> {
       ),
     );
   }
-
-  Widget _buildTaskCard(Map<String, dynamic> task) {
-    Color statusColor;
-    String statusText;
-    
-    switch (task['status']?.toString().toLowerCase()) {
-      case 'completado':
-        statusColor = Colors.green;
-        statusText = 'Completado';
-        break;
-      case 'en_proceso':
-        statusColor = Colors.orange;
-        statusText = 'En Proceso';
-        break;
-      case 'asignado':
-        statusColor = Colors.blue;
-        statusText = 'Asignado';
-        break;
-      default:
-        statusColor = Colors.grey;
-        statusText = 'Pendiente';
-    }
-
-    final article = task['article'];
-    final photos = article?['photo'];
-    String? imageUrl;
-    
-    if (photos != null) {
-      if (photos is List && photos.isNotEmpty) {
-        imageUrl = photos[0]['url'];
-      } else if (photos is Map) {
-        imageUrl = photos['url'];
-      }
-    }
-
-    final articleName = article?['name'] ?? 'Tarea sin título';
-
-    return Container(
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(12),
-        image: imageUrl != null
-            ? DecorationImage(
-                image: NetworkImage(imageUrl),
-                fit: BoxFit.cover,
-              )
-            : null,
-        color: imageUrl == null ? Colors.grey[300] : null,
-      ),
-      child: Stack(
-        children: [
-          Container(
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(12),
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [
-                  Colors.transparent,
-                  Colors.black.withOpacity(0.7),
-                ],
-                stops: const [0.5, 1.0],
-              ),
-            ),
-          ),
-          Positioned(
-            top: 8,
-            right: 8,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: BoxDecoration(
-                color: statusColor,
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Text(
-                statusText,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 10,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ),
-          ),
-          Positioned(
-            bottom: 10,
-            left: 10,
-            right: 10,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  articleName,
-                  style: const TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.white,
-                    shadows: [
-                      Shadow(
-                        color: Colors.black,
-                        blurRadius: 2,
-                      ),
-                    ],
-                  ),
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  'Tarea #${task['taskId'] ?? ''}',
-                  style: const TextStyle(
-                    fontSize: 11,
-                    color: Colors.white70,
-                    shadows: [
-                      Shadow(
-                        color: Colors.black,
-                        blurRadius: 2,
-                      ),
-                    ],
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ],
-            ),
-          ),
-          if (imageUrl == null)
-            Center(
-              child: Icon(
-                Icons.assignment,
-                size: 40,
-                color: Colors.grey[600],
-              ),
-            ),
-        ],
-      ),
-    );
-  }
 }
+
