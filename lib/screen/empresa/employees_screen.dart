@@ -7,6 +7,8 @@ import 'package:reciclaje_app/components/my_textfield.dart';
 import 'package:reciclaje_app/database/employee_database.dart';
 import 'package:reciclaje_app/database/media_database.dart';
 import 'package:reciclaje_app/model/multimedia.dart';
+import 'package:reciclaje_app/services/email_templates.dart';
+import 'package:reciclaje_app/services/smtp.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class EmployeesScreen extends StatefulWidget {
@@ -21,9 +23,60 @@ class EmployeesScreen extends StatefulWidget {
 class _EmployeesScreenState extends State<EmployeesScreen> {
   final EmployeeDatabase _employeeDb = EmployeeDatabase();
   final MediaDatabase _mediaDb = MediaDatabase();
+  final _formKey = GlobalKey<FormState>();
+  final ScrollController _scrollController = ScrollController();
   String _searchQuery = '';
   String _selectedFilter = 'todos'; // 'todos', 'calificación', 'estado'
   String _selectedSort = 'nombre'; // 'nombre', 'objetos', 'rating'
+  
+  // Pagination state
+  int _currentPage = 1;
+  final int _itemsPerPage = 10;
+  bool _isLoadingMore = false;
+  bool _hasMoreData = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _scrollController.addListener(_onScroll);
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  void _onScroll() {
+    if (_scrollController.position.pixels >= _scrollController.position.maxScrollExtent - 200) {
+      if (!_isLoadingMore && _hasMoreData) {
+        _loadMoreEmployees();
+      }
+    }
+  }
+
+  Future<void> _loadMoreEmployees() async {
+    if (_isLoadingMore || !_hasMoreData) return;
+    
+    setState(() {
+      _isLoadingMore = true;
+    });
+    
+    // Simulate loading delay
+    await Future.delayed(const Duration(milliseconds: 500));
+    
+    setState(() {
+      _currentPage++;
+      _isLoadingMore = false;
+    });
+  }
+
+  Future<void> _refreshEmployees() async {
+    setState(() {
+      _currentPage = 1;
+      _hasMoreData = true;
+    });
+  }
 
   /// Load employee statistics (completed tasks and rating)
   Future<Map<String, dynamic>> _loadEmployeeStats(int employeeId, int userId) async {
@@ -97,6 +150,17 @@ class _EmployeesScreenState extends State<EmployeesScreen> {
     return List.generate(8, (index) => chars[random.nextInt(chars.length)]).join();
   }
 
+  /// Determine email provider based on domain
+  String _getEmailProvider(String email) {
+    final domain = email.toLowerCase().split('@').last;
+    if (domain == 'gmail.com') {
+      return 'gmail';
+    } else if (domain == 'outlook.com' || domain == 'hotmail.com') {
+      return 'outlook';
+    }
+    return 'unknown';
+  }
+
   Future<void> _createEmployee(String name, String email, BuildContext dialogContext) async {
     if (name.isEmpty || email.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -138,6 +202,29 @@ class _EmployeesScreenState extends State<EmployeesScreen> {
         temporaryPassword: tempPassword,
       );
 
+      // Send email with temporary password
+      print('🔄 Starting email send process for: $email');
+      
+      // Detect email provider
+      final provider = _getEmailProvider(email);
+      print('📧 Detected email provider: $provider');
+      print('📤 Sending via Gmail SMTP (can send to any provider)');
+      
+      // Use Gmail SMTP to send to all email providers
+      // Gmail can send to Gmail, Outlook, Hotmail, and any other email
+      final emailSent = await sendMailFromGmail(
+        recipientEmail: email,
+        recipientName: name,
+        subject: 'Bienvenido a Reciclaje App - Credenciales de Acceso',
+        htmlBody: EmailTemplates.employeeTemporaryPassword(
+          employeeName: name,
+          email: email,
+          temporaryPassword: tempPassword,
+        ),
+      );
+      
+      print('📬 Email send result: ${emailSent ? "SUCCESS" : "FAILED"}');
+
       if (mounted) {
         // Show success dialog with temporary password
         showDialog(
@@ -156,6 +243,55 @@ class _EmployeesScreenState extends State<EmployeesScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const Text('Empleado creado exitosamente.'),
+                const SizedBox(height: 8),
+                if (emailSent)
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.green.shade50,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.green.shade300),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(Icons.email, color: Colors.green.shade700, size: 20),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            '✓ Credenciales enviadas a $email',
+                            style: TextStyle(
+                              color: Colors.green.shade900,
+                              fontSize: 13,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  )
+                else
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.orange.shade50,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.orange.shade300),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(Icons.warning, color: Colors.orange.shade700, size: 20),
+                        const SizedBox(width: 8),
+                        const Expanded(
+                          child: Text(
+                            'No se pudo enviar el email. Comparte las credenciales manualmente.',
+                            style: TextStyle(
+                              color: Colors.orange,
+                              fontSize: 13,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                 const SizedBox(height: 16),
                 const Text(
                   'Credenciales de Acceso:',
@@ -286,6 +422,7 @@ Descarga la app e inicia sesión con estas credenciales.
     final nameController = TextEditingController();
     final emailController = TextEditingController();
     bool isCreating = false; // Prevent double submission
+    final dialogFormKey = GlobalKey<FormState>();
 
     showDialog(
       context: context,
@@ -299,47 +436,88 @@ Descarga la app e inicia sesión con estas credenciales.
             Text('Nuevo Empleado'),
           ],
         ),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              MyTextField(
-                controller: nameController,
-                hintText: 'Nombre completo',
-                obscureText: false,
-                isEnabled: true,
-              ),
-              const SizedBox(height: 16),
-              MyTextField(
-                controller: emailController,
-                hintText: 'Correo electrónico',
-                obscureText: false,
-                isEnabled: true,
-              ),
-              const SizedBox(height: 16),
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: Colors.blue.shade50,
-                  borderRadius: BorderRadius.circular(8),
+        content: Form(
+          key: dialogFormKey,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextFormField(
+                  controller: nameController,
+                  decoration: InputDecoration(
+                    hintText: 'Nombre completo',
+                    filled: true,
+                    fillColor: Colors.grey[100],
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: BorderSide.none,
+                    ),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  ),
+                  validator: (value) {
+                    if (value == null || value.trim().isEmpty) {
+                      return 'Por favor ingresa el nombre completo';
+                    }
+                    if (value.trim().length < 3) {
+                      return 'El nombre debe tener al menos 3 caracteres';
+                    }
+                    return null;
+                  },
                 ),
-                child: Row(
-                  children: [
-                    Icon(Icons.info_outline, color: Colors.blue.shade700),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        'Se generará una contraseña temporal automáticamente',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: Colors.blue.shade700,
+                const SizedBox(height: 16),
+                TextFormField(
+                  controller: emailController,
+                  decoration: InputDecoration(
+                    hintText: 'Correo electrónico',
+                    filled: true,
+                    fillColor: Colors.grey[100],
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: BorderSide.none,
+                    ),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  ),
+                  keyboardType: TextInputType.emailAddress,
+                  validator: (value) {
+                    if (value == null || value.trim().isEmpty) {
+                      return 'Por favor ingresa el correo electrónico';
+                    }
+                    final emailRegex = RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$');
+                    if (!emailRegex.hasMatch(value)) {
+                      return 'Ingresa un correo válido';
+                    }
+                    final domain = value.toLowerCase().split('@').last;
+                    if (domain != 'gmail.com' && domain != 'outlook.com' && domain != 'hotmail.com') {
+                      return 'Solo se permiten correos de Gmail, Outlook o Hotmail';
+                    }
+                    return null;
+                  },
+                ),
+                const SizedBox(height: 16),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.blue.shade50,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.info_outline, color: Colors.blue.shade700),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Se generará una contraseña temporal automáticamente y se enviará al correo',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Colors.blue.shade700,
+                          ),
                         ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
         actions: [
@@ -354,6 +532,12 @@ Descarga la app e inicia sesión con estas credenciales.
           ElevatedButton(
             onPressed: isCreating ? null : () async {
               if (isCreating) return;
+              
+              // Validate form
+              if (!dialogFormKey.currentState!.validate()) {
+                return;
+              }
+              
               setState(() => isCreating = true);
               
               final name = nameController.text.trim();
@@ -559,6 +743,20 @@ Descarga la app e inicia sesión con estas credenciales.
                     );
                   }
 
+                  // ✅ Apply pagination
+                  final totalToShow = _currentPage * _itemsPerPage;
+                  final paginatedEmployees = filteredEmployees.take(totalToShow).toList();
+                  final hasMore = filteredEmployees.length > paginatedEmployees.length;
+                  
+                  // Update hasMoreData flag
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    if (mounted && _hasMoreData != hasMore) {
+                      setState(() {
+                        _hasMoreData = hasMore;
+                      });
+                    }
+                  });
+
                   return Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -574,15 +772,43 @@ Descarga la app e inicia sesión con estas credenciales.
                         ),
                       ),
                       
-                      // Employee cards
+                      // Employee cards with RefreshIndicator
                       Expanded(
-                        child: ListView.builder(
-                          padding: const EdgeInsets.symmetric(horizontal: 20),
-                          itemCount: filteredEmployees.length,
-                          itemBuilder: (context, index) {
-                            final employeeData = filteredEmployees[index];
-                            return _buildEmployeeCard(employeeData);
-                          },
+                        child: RefreshIndicator(
+                          color: const Color(0xFF2D8A8A),
+                          onRefresh: _refreshEmployees,
+                          child: ListView.builder(
+                            controller: _scrollController,
+                            padding: const EdgeInsets.symmetric(horizontal: 20),
+                            itemCount: paginatedEmployees.length + (hasMore ? 1 : 0),
+                            itemBuilder: (context, index) {
+                              if (index == paginatedEmployees.length) {
+                                // Loading indicator at bottom
+                                return Container(
+                                  padding: const EdgeInsets.symmetric(vertical: 20),
+                                  alignment: Alignment.center,
+                                  child: const Column(
+                                    children: [
+                                      CircularProgressIndicator(
+                                        color: Color(0xFF2D8A8A),
+                                      ),
+                                      SizedBox(height: 8),
+                                      Text(
+                                        'Cargando empleados...',
+                                        style: TextStyle(
+                                          fontSize: 14,
+                                          color: Colors.grey,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                );
+                              }
+                              
+                              final employeeData = paginatedEmployees[index];
+                              return _buildEmployeeCard(employeeData);
+                            },
+                          ),
                         ),
                       ),
                     ],

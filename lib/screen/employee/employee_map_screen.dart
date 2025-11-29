@@ -18,6 +18,7 @@ import 'package:reciclaje_app/widgets/status_indicator.dart';
 import 'package:reciclaje_app/screen/employee/employee_notifications_screen.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:internet_connection_checker/internet_connection_checker.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class EmployeeMapScreen extends StatefulWidget {
   const EmployeeMapScreen({super.key});
@@ -77,6 +78,9 @@ class _EmployeeMapScreenState extends State<EmployeeMapScreen> with WidgetsBindi
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    // ✅ Clear cached data to prevent memory leaks
+    _assignedArticles.clear();
+    _expandedClusters.clear();
     super.dispose();
   }
 
@@ -132,6 +136,9 @@ class _EmployeeMapScreenState extends State<EmployeeMapScreen> with WidgetsBindi
     if (_employeeId == null) return;
 
     try {
+      final prefs = await SharedPreferences.getInstance();
+      final readNotifications = prefs.getStringList('read_employee_notifications') ?? [];
+      
       final tasks = await Supabase.instance.client
           .from('tasks')
           .select('idTask')
@@ -139,11 +146,18 @@ class _EmployeeMapScreenState extends State<EmployeeMapScreen> with WidgetsBindi
           .eq('workflowStatus', 'asignado')
           .order('assignedDate', ascending: false);
 
+      // Filter out read notifications
+      final unreadTasks = (tasks as List).where((task) {
+        final taskId = task['idTask'].toString();
+        return !readNotifications.contains(taskId);
+      }).toList();
+
       if (mounted) {
         setState(() {
-          _pendingRequestCount = tasks.length;
+          _pendingRequestCount = unreadTasks.length;
         });
       }
+      print('📊 Unread tasks: ${unreadTasks.length} out of ${tasks.length} total');
     } catch (e) {
       print('❌ Error loading pending task count: $e');
     }
@@ -178,8 +192,9 @@ class _EmployeeMapScreenState extends State<EmployeeMapScreen> with WidgetsBindi
   }
 
   Future<void> _loadEmployeeData() async {
+    // ✅ Show map UI immediately
     setState(() {
-      _isLoading = true;
+      _isLoading = false;
       _hasError = false;
     });
 
@@ -201,13 +216,16 @@ class _EmployeeMapScreenState extends State<EmployeeMapScreen> with WidgetsBindi
 
       _employeeId = employeeData['idEmployee'] as int;
 
-      // Load assigned articles
-      await _loadAssignedArticles();
+      // ✅ Defer article loading - show map first
+      Future.delayed(const Duration(milliseconds: 300), () {
+        if (mounted) {
+          _loadAssignedArticles();
+        }
+      });
 
     } catch (e) {
       if (mounted) {
         setState(() {
-          _isLoading = false;
           _hasError = true;
           _errorMessage = e.toString();
         });
@@ -252,16 +270,27 @@ class _EmployeeMapScreenState extends State<EmployeeMapScreen> with WidgetsBindi
           .inFilter('workflowStatus', ['asignado', 'en_proceso'])
           .order('assignedDate', ascending: false);
 
-      if (mounted) {
-        final articles = <RecyclingItem>[];
+      if (!mounted) return;
+      
+      print('📦 Found ${tasks.length} tasks to load progressively');
+
+      // ✅ Load articles in batches of 5 for smooth progressive rendering
+      const batchSize = 5;
+      final allArticles = <RecyclingItem>[];
+      
+      for (var i = 0; i < tasks.length; i += batchSize) {
+        if (!mounted) break;
         
-        for (var task in tasks) {
+        final batch = tasks.skip(i).take(batchSize);
+        final batchArticles = <RecyclingItem>[];
+        
+        for (var task in batch) {
           final article = task['article'] as Map<String, dynamic>?;
           if (article != null) {
             final category = article['category'] as Map<String, dynamic>?;
             final user = article['user'] as Map<String, dynamic>?;
             
-            articles.add(RecyclingItem(
+            batchArticles.add(RecyclingItem(
               id: article['idArticle'] as int,
               title: article['name'] as String,
               description: article['description'] as String?,
@@ -278,24 +307,32 @@ class _EmployeeMapScreenState extends State<EmployeeMapScreen> with WidgetsBindi
             ));
           }
         }
-
-        setState(() {
-          _assignedArticles = articles;
-          _isLoading = false;
-        });
-
-        print('✅ Loaded ${_assignedArticles.length} assigned articles for employee $_employeeId');
-
-        // Fit map to show all articles
-        if (_assignedArticles.isNotEmpty) {
-          _fitMapToShowAllArticles();
+        
+        // ✅ Update UI with each batch
+        allArticles.addAll(batchArticles);
+        if (mounted) {
+          setState(() {
+            _assignedArticles = List.from(allArticles);
+          });
+          print('✅ Loaded batch: ${allArticles.length}/${tasks.length} articles');
         }
+        
+        // Small delay between batches for smooth rendering
+        if (i + batchSize < tasks.length) {
+          await Future.delayed(const Duration(milliseconds: 100));
+        }
+      }
+
+      print('✅ Finished loading ${allArticles.length} assigned articles');
+
+      // Fit map to show all articles after loading complete
+      if (mounted && _assignedArticles.isNotEmpty) {
+        _fitMapToShowAllArticles();
       }
     } catch (e) {
       print('❌ Error loading assigned articles: $e');
       if (mounted) {
         setState(() {
-          _isLoading = false;
           _hasError = true;
           _errorMessage = e.toString();
         });
@@ -591,8 +628,17 @@ class _EmployeeMapScreenState extends State<EmployeeMapScreen> with WidgetsBindi
   }
 
   Future<void> _refreshData() async {
-    await _loadAssignedArticles();
-    await _loadUserLocation();
+    setState(() => _isLoading = true);
+    
+    try {
+      await _loadAssignedArticles();
+      await _loadUserLocation();
+      await _loadPendingTaskCount();
+    } finally {
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
+    }
   }
 
   Widget _buildTopBar() {
@@ -1116,6 +1162,56 @@ class _EmployeeMapScreenState extends State<EmployeeMapScreen> with WidgetsBindi
                     },
             ),
 
+            // Opción 3: Recargar tareas
+            ListTile(
+              leading: const CircleAvatar(
+                backgroundColor: Color(0xFF2D8A8A),
+                child: Icon(Icons.refresh, color: Colors.white, size: 20),
+              ),
+              title: const Text(
+                'Recargar Tareas',
+                style: TextStyle(fontWeight: FontWeight.w600),
+              ),
+              subtitle: const Text('Actualizar lista de tareas asignadas'),
+              onTap: () async {
+                Navigator.pop(context);
+                
+                // Show loading snackbar
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Row(
+                      children: [
+                        SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(
+                            color: Colors.white,
+                            strokeWidth: 2,
+                          ),
+                        ),
+                        SizedBox(width: 12),
+                        Text('Recargando tareas...'),
+                      ],
+                    ),
+                    duration: Duration(seconds: 2),
+                    backgroundColor: Color(0xFF2D8A8A),
+                  ),
+                );
+                
+                await _refreshData();
+                
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('✅ ${_assignedArticles.length} tarea${_assignedArticles.length == 1 ? "" : "s"} cargada${_assignedArticles.length == 1 ? "" : "s"}'),
+                      duration: const Duration(seconds: 2),
+                      backgroundColor: Colors.green,
+                    ),
+                  );
+                }
+              },
+            ),
+
             const SizedBox(height: 16),
           ],
         ),
@@ -1125,10 +1221,18 @@ class _EmployeeMapScreenState extends State<EmployeeMapScreen> with WidgetsBindi
 
   Widget _buildLoadingOverlay() {
     return Container(
-      color: Colors.black.withOpacity(0.3),
+      color: Colors.white,
       child: const Center(
-        child: CircularProgressIndicator(
-          color: Color(0xFF2D8A8A),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            CircularProgressIndicator(color: Color(0xFF2D8A8A)),
+            SizedBox(height: 16),
+            Text(
+              'Cargando mapa...',
+              style: TextStyle(color: Color(0xFF2D8A8A), fontSize: 16),
+            ),
+          ],
         ),
       ),
     );

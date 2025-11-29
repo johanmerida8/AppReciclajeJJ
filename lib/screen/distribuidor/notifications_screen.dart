@@ -6,6 +6,7 @@ import 'package:reciclaje_app/database/task_database.dart'; // ✅ Add task data
 import 'package:reciclaje_app/model/multimedia.dart';
 import 'package:reciclaje_app/model/task.dart'; // ✅ Add task model
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class NotificationsScreen extends StatefulWidget {
   const NotificationsScreen({super.key});
@@ -24,13 +25,95 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   bool _isLoading = true;
   int? _currentUserId;
 
+  RealtimeChannel? _requestChannel;
+
   @override
   void initState() {
     super.initState();
     _loadNotifications();
+    _setupRealtimeListener();
+    _markAllAsReadLocally();
   }
 
+  @override
+  void dispose() {
+    // Unsubscribe from real-time channel
+    _requestChannel?.unsubscribe();
+    super.dispose();
+  }
+
+  void _setupRealtimeListener() {
+    _requestChannel = Supabase.instance.client
+        .channel('distributor-notifications')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'request',
+          callback: (payload) {
+            print('🔔 Real-time notification received: ${payload.eventType}');
+            _loadNotifications(); // Refresh notifications on any change
+          },
+        ).subscribe();
+  }
+
+  /// ✅ Mark all current notifications as read locally
+  Future<void> _markAllAsReadLocally() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final readNotifications = prefs.getStringList('read_distributor_notifications') ?? [];
+      
+      for (var request in _pendingRequests) {
+        final requestId = request['idRequest'].toString();
+        if (!readNotifications.contains(requestId)) {
+          readNotifications.add(requestId);
+        }
+      }
+      
+      await prefs.setStringList('read_distributor_notifications', readNotifications);
+      print('✅ Marked ${_pendingRequests.length} notifications as read locally');
+    } catch (e) {
+      print('❌ Error marking notifications as read: $e');
+    }
+  }
+
+  /// ✅ Get count of unread notifications
+  // static Future<int> getUnreadCount(int? userId) async {
+  //   if (userId == null) return 0;
+    
+  //   try {
+  //     final prefs = await SharedPreferences.getInstance();
+  //     final readNotifications = prefs.getStringList('read_distributor_notifications') ?? [];
+      
+  //     // Get pending requests for this user
+  //     final requests = await Supabase.instance.client
+  //         .from('request')
+  //         .select('''
+  //           idRequest,
+  //           article:articleID (
+  //             userID
+  //           )
+  //         ''')
+  //         .eq('status', 'pendiente');
+      
+  //     // Filter by user's articles and check if read
+  //     final unreadCount = requests.where((req) {
+  //       final article = req['article'] as Map<String, dynamic>?;
+  //       if (article == null || article['userID'] != userId) return false;
+        
+  //       final requestId = req['idRequest'].toString();
+  //       return !readNotifications.contains(requestId);
+  //     }).length;
+      
+  //     return unreadCount;
+  //   } catch (e) {
+  //     print('❌ Error getting unread count: $e');
+  //     return 0;
+  //   }
+  // }
+
   Future<void> _loadNotifications() async {
+    if (!mounted) return;
+    
     setState(() => _isLoading = true);
 
     try {
@@ -66,12 +149,6 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
           }).toList();
 
           print('🔔 Found ${myRequests.length} pending requests');
-          for (var req in myRequests) {
-            print('📋 Request ${req['idRequest']}: ${req['company']?['nameCompany']} - ${req['article']?['name']}');
-            print('   RequestDate: ${req['requestDate']}');
-            print('   ScheduledDay: ${req['scheduledDay']}');
-            print('   ScheduledStartTime: ${req['scheduledStartTime']}');
-          }
 
           // Load company logos for each request
           for (var request in myRequests) {
@@ -85,17 +162,25 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
             }
           }
 
-          setState(() {
-            _pendingRequests = myRequests;
-          });
+          if (mounted) {
+            setState(() {
+              _pendingRequests = myRequests;
+            });
+            // Mark as read after loading
+            await _markAllAsReadLocally();
+          }
         }
       }
     } catch (e) {
       print('❌ Error loading notifications: $e');
     } finally {
-      setState(() => _isLoading = false);
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
     }
   }
+
+
 
   Future<void> _handleAccept(Map<String, dynamic> requestData) async {
     try {
@@ -266,7 +351,9 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
           : _pendingRequests.isEmpty
               ? _buildEmptyState()
               : RefreshIndicator(
-                  onRefresh: _loadNotifications,
+                  onRefresh: () async {
+                    await _loadNotifications();
+                  },
                   color: const Color(0xFF2D8A8A),
                   child: ListView(
                     padding: const EdgeInsets.all(16),
@@ -305,30 +392,42 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   }
 
   Widget _buildEmptyState() {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
+    return RefreshIndicator(
+      onRefresh: () async {
+        await _loadNotifications();
+      },
+      color: const Color(0xFF2D8A8A),
+      child: ListView(
+        padding: const EdgeInsets.all(16),
         children: [
-          Icon(
-            Icons.notifications_off_outlined,
-            size: 80,
-            color: Colors.grey[300],
-          ),
-          const SizedBox(height: 16),
-          Text(
-            'No tienes notificaciones',
-            style: TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.w500,
-              color: Colors.grey[600],
-            ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'Las solicitudes de empresas aparecerán aquí',
-            style: TextStyle(
-              fontSize: 14,
-              color: Colors.grey[500],
+          SizedBox(
+            height: MediaQuery.of(context).size.height - 200,
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(
+                  Icons.notifications_off_outlined,
+                  size: 80,
+                  color: Colors.grey[300],
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  'No tienes notificaciones',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w500,
+                    color: Colors.grey[600],
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Las solicitudes de empresas aparecerán aquí',
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: Colors.grey[500],
+                  ),
+                ),
+              ],
             ),
           ),
         ],
@@ -349,7 +448,6 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     final timeAgo = _getTimeAgo(requestDate);
     final scheduledDay = request['scheduledDay'] as String?;
     final scheduledStartTime = request['scheduledStartTime'] as String?;
-    final scheduledEndTime = request['scheduledEndTime'] as String?;
     
     // Format the scheduled day to show day name and date
     String? formattedScheduledDay;

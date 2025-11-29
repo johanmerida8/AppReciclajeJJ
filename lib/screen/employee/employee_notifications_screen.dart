@@ -7,6 +7,7 @@ import 'package:reciclaje_app/screen/distribuidor/detail_recycle_screen.dart';
 import 'package:reciclaje_app/model/recycling_items.dart';
 import 'package:reciclaje_app/utils/category_utils.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 /// 🔔 Employee Notifications Screen
 /// Shows tasks with "asignado" status with article name and scheduled date/time
@@ -25,16 +26,89 @@ class _EmployeeNotificationsScreenState extends State<EmployeeNotificationsScree
   List<Map<String, dynamic>> _notifications = [];
   int? _employeeId;
   bool _isLoading = true;
+  
+  RealtimeChannel? _taskChannel;
 
   @override
   void initState() {
     super.initState();
     _initialize();
+    _setupRealtimeListener();
+  }
+
+  @override
+  void dispose() {
+    _taskChannel?.unsubscribe();
+    super.dispose();
+  }
+
+  /// ✅ Setup real-time listener for task changes
+  void _setupRealtimeListener() {
+    _taskChannel = Supabase.instance.client
+        .channel('employee-notifications')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'tasks',
+          callback: (payload) {
+            print('🔔 Real-time task update: ${payload.eventType}');
+            _loadNotifications();
+          },
+        ).subscribe();
+  }
+
+  /// ✅ Mark all current notifications as read locally
+  Future<void> _markAllAsReadLocally() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final readNotifications = prefs.getStringList('read_employee_notifications') ?? [];
+      
+      for (var notification in _notifications) {
+        final taskId = notification['idTask'].toString();
+        if (!readNotifications.contains(taskId)) {
+          readNotifications.add(taskId);
+        }
+      }
+      
+      await prefs.setStringList('read_employee_notifications', readNotifications);
+      print('✅ Marked ${_notifications.length} notifications as read locally');
+    } catch (e) {
+      print('❌ Error marking notifications as read: $e');
+    }
+  }
+
+  /// ✅ Get count of unread notifications for an employee
+  static Future<int> getUnreadCount(int? employeeId) async {
+    if (employeeId == null) return 0;
+    
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final readNotifications = prefs.getStringList('read_employee_notifications') ?? [];
+      
+      // Get tasks with "asignado" status for this employee
+      final tasks = await Supabase.instance.client
+          .from('tasks')
+          .select('idTask')
+          .eq('employeeID', employeeId)
+          .eq('workflowStatus', 'asignado');
+      
+      // Count unread
+      final unreadCount = tasks.where((task) {
+        final taskId = task['idTask'].toString();
+        return !readNotifications.contains(taskId);
+      }).length;
+      
+      return unreadCount;
+    } catch (e) {
+      print('❌ Error getting unread count: $e');
+      return 0;
+    }
   }
 
   Future<void> _initialize() async {
     await _loadEmployeeId();
     await _loadNotifications();
+    await _markAllAsReadLocally();
   }
 
   Future<void> _loadEmployeeId() async {
@@ -62,7 +136,7 @@ class _EmployeeNotificationsScreenState extends State<EmployeeNotificationsScree
   }
 
   Future<void> _loadNotifications() async {
-    if (_employeeId == null) return;
+    if (_employeeId == null || !mounted) return;
 
     setState(() => _isLoading = true);
 
@@ -118,9 +192,10 @@ class _EmployeeNotificationsScreenState extends State<EmployeeNotificationsScree
           }
         }
         
-        // Trigger rebuild after photos are loaded
+        // Trigger rebuild after photos are loaded and mark as read
         if (mounted) {
           setState(() {});
+          await _markAllAsReadLocally();
         }
       }
     } catch (e) {
@@ -165,13 +240,6 @@ class _EmployeeNotificationsScreenState extends State<EmployeeNotificationsScree
             fontWeight: FontWeight.bold,
           ),
         ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh, color: Colors.white),
-            onPressed: _loadNotifications,
-            tooltip: 'Actualizar',
-          ),
-        ],
       ),
       body: _isLoading
           ? const Center(
@@ -187,7 +255,9 @@ class _EmployeeNotificationsScreenState extends State<EmployeeNotificationsScree
 
   Widget _buildNotificationsList() {
     return RefreshIndicator(
-      onRefresh: _loadNotifications,
+      onRefresh: () async {
+        await _loadNotifications();
+      },
       color: const Color(0xFF2D8A8A),
       child: ListView(
         padding: const EdgeInsets.all(16),
@@ -207,34 +277,46 @@ class _EmployeeNotificationsScreenState extends State<EmployeeNotificationsScree
   }
 
   Widget _buildEmptyState() {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
+    return RefreshIndicator(
+      onRefresh: () async {
+        await _loadNotifications();
+      },
+      color: const Color(0xFF2D8A8A),
+      child: ListView(
+        padding: const EdgeInsets.all(16),
         children: [
-          Icon(
-            Icons.notifications_none,
-            size: 100,
-            color: Colors.grey[300],
-          ),
-          const SizedBox(height: 16),
-          Text(
-            'No hay notificaciones',
-            style: TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.w500,
-              color: Colors.grey[700],
-            ),
-          ),
-          const SizedBox(height: 8),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 40),
-            child: Text(
-              'Las nuevas tareas asignadas aparecerán aquí',
-              style: TextStyle(
-                fontSize: 14,
-                color: Colors.grey[600],
-              ),
-              textAlign: TextAlign.center,
+          SizedBox(
+            height: MediaQuery.of(context).size.height - 200,
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(
+                  Icons.notifications_none,
+                  size: 100,
+                  color: Colors.grey[300],
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  'No hay notificaciones',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w500,
+                    color: Colors.grey[700],
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 40),
+                  child: Text(
+                    'Las nuevas tareas asignadas aparecerán aquí',
+                    style: TextStyle(
+                      fontSize: 14,
+                      color: Colors.grey[600],
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+              ],
             ),
           ),
         ],

@@ -3,9 +3,8 @@ import 'package:reciclaje_app/auth/auth_service.dart';
 import 'package:reciclaje_app/database/media_database.dart';
 import 'package:reciclaje_app/database/users_database.dart';
 import 'package:reciclaje_app/model/multimedia.dart';
-import 'package:reciclaje_app/screen/distribuidor/detail_recycle_screen.dart';
-import 'package:reciclaje_app/services/recycling_data.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 /// ✅ Notifications screen for companies (admin-empresa)
 /// Shows approved/rejected requests from distributors
@@ -20,20 +19,94 @@ class _CompanyNotificationsScreenState extends State<CompanyNotificationsScreen>
   final _authService = AuthService();
   final _usersDatabase = UsersDatabase();
   final _mediaDatabase = MediaDatabase();
-  final _dataService = RecyclingDataService();
 
   List<Map<String, dynamic>> _allNotifications = []; // ✅ Combined list
   bool _isLoading = true;
   int? _currentUserId;
   int? _companyId;
+  
+  RealtimeChannel? _requestChannel;
 
   @override
   void initState() {
     super.initState();
     _loadNotifications();
+    _setupRealtimeListener();
+    _markAllAsReadLocally();
+  }
+
+  @override
+  void dispose() {
+    _requestChannel?.unsubscribe();
+    super.dispose();
+  }
+
+  /// ✅ Setup real-time listener for request changes
+  void _setupRealtimeListener() {
+    _requestChannel = Supabase.instance.client
+        .channel('company-notifications')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'request',
+          callback: (payload) {
+            print('🔔 Real-time update received: ${payload.eventType}');
+            _loadNotifications();
+          },
+        ).subscribe();
+  }
+
+  /// ✅ Mark all current notifications as read locally
+  Future<void> _markAllAsReadLocally() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final readNotifications = prefs.getStringList('read_company_notifications') ?? [];
+      
+      for (var notification in _allNotifications) {
+        final requestId = notification['idRequest'].toString();
+        if (!readNotifications.contains(requestId)) {
+          readNotifications.add(requestId);
+        }
+      }
+      
+      await prefs.setStringList('read_company_notifications', readNotifications);
+      print('✅ Marked ${_allNotifications.length} notifications as read locally');
+    } catch (e) {
+      print('❌ Error marking notifications as read: $e');
+    }
+  }
+
+  /// ✅ Get count of unread notifications for a company
+  static Future<int> getUnreadCount(int? companyId) async {
+    if (companyId == null) return 0;
+    
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final readNotifications = prefs.getStringList('read_company_notifications') ?? [];
+      
+      // Get approved/rejected requests for this company
+      final requests = await Supabase.instance.client
+          .from('request')
+          .select('idRequest')
+          .eq('companyID', companyId)
+          .inFilter('status', ['aprobado', 'rechazado']);
+      
+      // Count unread
+      final unreadCount = requests.where((req) {
+        final requestId = req['idRequest'].toString();
+        return !readNotifications.contains(requestId);
+      }).length;
+      
+      return unreadCount;
+    } catch (e) {
+      print('❌ Error getting unread count: $e');
+      return 0;
+    }
   }
 
   Future<void> _loadNotifications() async {
+    if (!mounted) return;
+    
     setState(() => _isLoading = true);
 
     try {
@@ -80,6 +153,10 @@ class _CompanyNotificationsScreenState extends State<CompanyNotificationsScreen>
           if (_companyId != null) {
             // Load all notifications (approved and rejected combined)
             await _loadAllNotifications();
+            // Mark as read after loading
+            if (mounted) {
+              await _markAllAsReadLocally();
+            }
           } else {
             print('❌ No company found for this user');
           }
@@ -88,7 +165,9 @@ class _CompanyNotificationsScreenState extends State<CompanyNotificationsScreen>
     } catch (e) {
       print('❌ Error loading notifications: $e');
     } finally {
-      setState(() => _isLoading = false);
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
     }
   }
 
@@ -162,40 +241,6 @@ class _CompanyNotificationsScreenState extends State<CompanyNotificationsScreen>
     }
   }
 
-  Future<void> _navigateToArticleDetails(Map<String, dynamic> requestData) async {
-    try {
-      final article = requestData['article'] as Map<String, dynamic>?;
-      if (article == null) return;
-
-      final articleId = article['idArticle'];
-      
-      // Load full article details
-      final items = await _dataService.loadRecyclingItems();
-      final fullArticle = items.firstWhere((item) => item.id == articleId);
-
-      if (mounted) {
-        await Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (context) => DetailRecycleScreen(item: fullArticle),
-          ),
-        );
-        // Refresh after returning
-        _loadNotifications();
-      }
-    } catch (e) {
-      print('❌ Error navigating to article: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('❌ Error: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    }
-  }
-
   String _getTimeAgo(DateTime dateTime) {
     final now = DateTime.now();
     final difference = now.difference(dateTime);
@@ -245,7 +290,9 @@ class _CompanyNotificationsScreenState extends State<CompanyNotificationsScreen>
 
   Widget _buildNotificationsList() {
     return RefreshIndicator(
-      onRefresh: _loadNotifications,
+      onRefresh: () async {
+        await _loadNotifications();
+      },
       color: const Color(0xFF2D8A8A),
       child: ListView(
         padding: const EdgeInsets.all(16),
@@ -265,32 +312,44 @@ class _CompanyNotificationsScreenState extends State<CompanyNotificationsScreen>
   }
 
   Widget _buildEmptyState() {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
+    return RefreshIndicator(
+      onRefresh: () async {
+        await _loadNotifications();
+      },
+      color: const Color(0xFF2D8A8A),
+      child: ListView(
+        padding: const EdgeInsets.all(16),
         children: [
-          Icon(
-            Icons.notifications_off_outlined,
-            size: 80,
-            color: Colors.grey[300],
-          ),
-          const SizedBox(height: 16),
-          Text(
-            'No tienes notificaciones',
-            style: TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.w500,
-              color: Colors.grey[600],
+          SizedBox(
+            height: MediaQuery.of(context).size.height - 200,
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(
+                  Icons.notifications_off_outlined,
+                  size: 80,
+                  color: Colors.grey[300],
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  'No tienes notificaciones',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w500,
+                    color: Colors.grey[600],
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Las solicitudes aprobadas o rechazadas aparecerán aquí',
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: Colors.grey[500],
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+              ],
             ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'Las solicitudes aprobadas o rechazadas aparecerán aquí',
-            style: TextStyle(
-              fontSize: 14,
-              color: Colors.grey[500],
-            ),
-            textAlign: TextAlign.center,
           ),
         ],
       ),

@@ -102,6 +102,13 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
   String? _distributorScheduledDay; // Track scheduled day for distributor
   String? _distributorScheduledTime; // Track scheduled time for distributor
   
+  // ✅ Company task tracking (for company admin viewing their requests)
+  int? _companyTaskId; // Track task ID for company
+  String? _companyTaskStatus; // Track company's task workflow status (en_proceso, completado, etc.)
+  Map<String, dynamic>? _companyTaskData; // Store full task data including reviews
+  String? _companyScheduledDay; // Track scheduled day for company
+  String? _companyScheduledTime; // Track scheduled time for company
+  
   // ✅ Real-time subscription for task updates
   RealtimeChannel? _taskSubscription;
   
@@ -155,6 +162,7 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
     _loadPendingRequests(); // ✅ Load pending requests for this article
     _loadEmployeeTask(); // ✅ Load employee's task if employee
     _loadDistributorTask(); // ✅ Load distributor's task if owner
+    // ✅ _loadCompanyTask() is now called AFTER _loadUserRoleAndRequest() completes
     // ❌ DON'T load employees here - they need _companyId to be set first
     
     // Initialize basic data (non-async)
@@ -287,6 +295,9 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
       
       // ✅ Load employees AFTER user role and company ID are set
       await _loadEmployees();
+      
+      // ✅ Load company task AFTER company ID is set (for admin-empresa)
+      await _loadCompanyTask();
     }
   }
 
@@ -651,6 +662,51 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
     print('🔔 Real-time listener setup for task $_distributorTaskId');
   }
 
+  /// ✅ Load company admin's task to check status and show appropriate UI
+  Future<void> _loadCompanyTask() async {
+    if (_isOwner || !_isCompanyAdmin || _companyId == null) {
+      print('ℹ️ Skipping _loadCompanyTask: _isOwner=$_isOwner, _isCompanyAdmin=$_isCompanyAdmin, _companyId=$_companyId');
+      return; // Only for company admin viewing other's articles
+    }
+    
+    try {
+      print('🔍 Loading company task for company $_companyId and article ${widget.item.id}');
+      
+      // Get task for this article and company with request details
+      // Note: Reviews are loaded separately via _loadReviews() since they reference articleID directly
+      final taskData = await Supabase.instance.client
+          .from('tasks')
+          .select('''
+            *,
+            request:requestID(
+              scheduledDay,
+              scheduledStartTime,
+              scheduledEndTime
+            )
+          ''')
+          .eq('articleID', widget.item.id)
+          .eq('companyID', _companyId!)
+          .eq('state', 1)
+          .maybeSingle();
+
+      if (taskData != null && mounted) {
+        final request = taskData['request'] as Map<String, dynamic>?;
+        setState(() {
+          _companyTaskId = taskData['idTask'] as int?;
+          _companyTaskStatus = taskData['workflowStatus'] as String?;
+          _companyTaskData = taskData;
+          _companyScheduledDay = request?['scheduledDay'] as String?;
+          _companyScheduledTime = request?['scheduledStartTime'] as String?;
+        });
+        print('✅ Loaded company task (ID: $_companyTaskId, Status: $_companyTaskStatus, Scheduled: $_companyScheduledDay at $_companyScheduledTime)');
+      } else {
+        print('ℹ️ No task found for company on this article');
+      }
+    } catch (e) {
+      print('❌ Error loading company task: $e');
+    }
+  }
+
   /// ✅ Show notification when employee confirms arrival
   void _showEmployeeConfirmedNotification() {
     if (!mounted) return;
@@ -751,7 +807,50 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
   Future<void> _handleAcceptRequest(Map<String, dynamic> requestData) async {
     try {
       final requestId = requestData['idRequest'];
+      final articleId = requestData['articleID'] ?? widget.item.id;
+      final companyId = requestData['companyID'];
 
+      if (companyId == null) {
+        throw Exception('Missing company ID in request data');
+      }
+
+      // ✅ Check if task already exists for this request (prevent duplicates)
+      final existingTask = await Supabase.instance.client
+          .from('tasks')
+          .select('idTask')
+          .eq('requestID', requestId)
+          .maybeSingle();
+
+      if (existingTask != null) {
+        print('⚠️ Task already exists for requestID $requestId - skipping creation');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('⚠️ Esta solicitud ya fue procesada'),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        }
+        return;
+      }
+
+      print('🔍 Accepting request:');
+      print('   requestId: $requestId');
+      print('   articleId: $articleId');
+      print('   companyId: $companyId');
+
+      // ✅ Show loading dialog to prevent double-tap
+      if (mounted) {
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (context) => const Center(
+            child: CircularProgressIndicator(color: Color(0xFF2D8A8A)),
+          ),
+        );
+      }
+
+      // 1. Update request status to 'aprobado'
       await Supabase.instance.client
           .from('request')
           .update({
@@ -759,6 +858,43 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
             'lastUpdate': DateTime.now().toIso8601String(),
           })
           .eq('idRequest', requestId);
+
+      print('✅ Request $requestId approved');
+
+      // 2. ✅ Create task with "sin_asignar" status (no employee assigned yet)
+      final taskInsertResponse = await Supabase.instance.client
+          .from('tasks')
+          .insert({
+            'articleID': articleId,
+            'companyID': companyId,
+            'requestID': requestId,
+            'assignedDate': DateTime.now().toIso8601String(),
+            'workflowStatus': 'sin_asignar',
+            'state': 1,
+            'lastUpdate': DateTime.now().toIso8601String(),
+          })
+          .select()
+          .single();
+
+      final createdTaskId = taskInsertResponse['idTask'];
+      print('✅ Task created with "sin_asignar" status (ID: $createdTaskId)');
+
+      // 3. ✅ Verify task was created
+      final verifyTask = await Supabase.instance.client
+          .from('tasks')
+          .select()
+          .eq('requestID', requestId)
+          .maybeSingle();
+
+      print('🔍 Verification - Task in DB: ${verifyTask != null ? "FOUND (ID: ${verifyTask['idTask']})" : "NOT FOUND"}');
+      if (verifyTask != null) {
+        print('   Task details: workflowStatus=${verifyTask['workflowStatus']}, articleID=${verifyTask['articleID']}, companyID=${verifyTask['companyID']}');
+      } else {
+        throw Exception('Task creation failed - not found in database after insert');
+      }
+
+      // ✅ Close loading dialog
+      if (mounted) Navigator.pop(context);
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -770,6 +906,11 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
         _loadPendingRequests(); // Refresh list
       }
     } catch (e) {
+      // ✅ Close loading dialog on error
+      if (mounted && Navigator.canPop(context)) {
+        Navigator.pop(context);
+      }
+      
       print('❌ Error accepting request: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -1889,7 +2030,7 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
         'articleID': widget.item.id,
         'senderID': _currentUserId, // Distributor sending review
         'receiverID': _distributorEmployeeUserId, // Employee's userID receiving review
-        'comment': comment.isEmpty ? null : comment,
+        'comment': comment.isEmpty ? 'sin comentario' : comment,
         'state': 1,
         'created_at': DateTime.now().toIso8601String(),
       }).select().single();
@@ -2003,7 +2144,7 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
         'articleID': widget.item.id,
         'senderID': _currentUserId, // ✅ Employee who is SENDING the review
         'receiverID': widget.item.ownerUserId, // ✅ Distributor who is RECEIVING the review
-        'comment': comment.isEmpty ? null : comment,
+        'comment': comment.isEmpty ? 'sin comentario' : comment,
         'state': 1,
         'created_at': DateTime.now().toIso8601String(),
       }).select().single();
@@ -2060,16 +2201,29 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
       try {
         // Get current active cycle
         print('   🔍 Querying active cycle (state=1)...');
+        final now = DateTime.now();
+
         final cycleData = await Supabase.instance.client
             .from('cycle')
-            .select('idCycle')
+            .select('idCycle, startDate, endDate, name')
             .eq('state', 1)
+            .lte('startDate', now.toIso8601String())
+            .gte('endDate', now.toIso8601String())
             .maybeSingle();
 
         final cycleId = cycleData?['idCycle'] as int?;
 
         if (cycleId != null) {
-          print('   ✅ Active cycle found: cycleId=$cycleId');
+          final cycleName = cycleData?['name'] ?? 'Ciclo ${cycleId}';
+          final startDate = cycleData?['startDate'] ?? 'N/A';
+          final endDate = cycleData?['endDate'] ?? 'N/A';
+          
+
+          print('   ✅ Active cycle found for current period:');
+          print('      🆔 Cycle ID: $cycleId');
+          print('      📛 Cycle Name: $cycleName');
+          print('      📅 Period: $startDate to $endDate');
+          print('      🕒 Current Date: ${now.toIso8601String()}');
           
           // Get points from starValue table based on rating
           print('   🔍 Querying starValue for rating $rating...');
@@ -2938,6 +3092,26 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
     }
   }
 
+  // ✅ Get contextual role label based on sender relationship to article
+  String _getContextualRoleLabel(Map<String, dynamic> review) {
+    final senderId = review['sender']?['idUser'] as int?;
+    final senderRole = review['sender']?['role'] as String?;
+    
+    // If sender is the distributor (article owner), they delivered
+    if (senderId == widget.item.ownerUserId) {
+      return 'Entregado por';
+    }
+    
+    // If sender is employee or company, they received
+    if (senderRole?.toLowerCase() == 'empleado' || 
+        senderRole?.toLowerCase() == 'admin-empresa') {
+      return 'Recibido por';
+    }
+    
+    // Default fallback
+    return 'Calificado por';
+  }
+
   Future<void> _deleteArticle() async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -3277,8 +3451,8 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
             created_at,
             senderID,
             receiverID,
-            sender:senderID(names),
-            receiver:receiverID(names)
+            sender:senderID(idUser, names, role),
+            receiver:receiverID(idUser, names, role)
           ''')
           .eq('articleID', widget.item.id)
           .order('created_at', ascending: false);
@@ -3293,6 +3467,9 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
   /// ✅ Build request card widget
   Widget _buildRequestCard(Map<String, dynamic> request) {
     final company = request['company'] as Map<String, dynamic>?;
+    final companyId = company?['idCompany'] as int?;
+    final articleId = request['articleID'] as int? ?? widget.item.id;
+    final requestId = request['idRequest'] as int?;
     final companyLogo = request['companyLogo'] as Multimedia?;
     final scheduledDay = request['scheduledDay'] as String?;
     final scheduledStartTime = request['scheduledStartTime'] as String?;
@@ -3400,6 +3577,17 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
                 Expanded(
                   child: ElevatedButton(
                     onPressed: () {
+
+                      final requestData = {
+                        'requestId': requestId,
+                        'articleId': articleId,
+                        'companyId': companyId,
+                        'company': company,
+                        'scheduledDay': scheduledDay,
+                        'scheduledStartTime': scheduledStartTime,
+                        'scheduledEndTime': scheduledEndTime,
+                      };
+
                       // If company admin with employees, show assignment dialog
                       // Otherwise, just accept the request
                       if (_isCompanyAdmin && _employees.isNotEmpty) {
@@ -3626,16 +3814,6 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
               ),
               const SizedBox(height: 16),
 
-              // Location section
-              // Text(
-              //   _isEditing ? 'Preferencia de entrega' : 'Ubicación de entrega',
-              //   style: const TextStyle(
-              //     fontSize: 16,
-              //     fontWeight: FontWeight.bold,
-              //     color: Color(0xFF2D8A8A),
-              //   ),
-              // ),
-
               LocationMapPreview(
                 location: _selectedLocation ?? _originalLocation,
                 originalLocation: _isEditing ? _originalLocation : null,
@@ -3653,29 +3831,44 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
 
               const SizedBox(height: 16),
 
-              // ✅ Show scheduled time for employees and distributors with active tasks (but not completed)
+              // ✅ Show scheduled time for employees, distributors, AND company admins with active tasks (but not completed)
               if (((_isEmployee && _employeeScheduledDay != null && _employeeScheduledTime != null && _employeeTaskStatus != 'completado') ||
-                  (_isOwner && _distributorTaskStatus != null && _distributorTaskStatus != 'completado' && _distributorScheduledDay != null && _distributorScheduledTime != null)))
+                  (_isOwner && _distributorTaskStatus != null && _distributorTaskStatus != 'completado' && _distributorScheduledDay != null && _distributorScheduledTime != null) ||
+                  (!_isOwner && _isCompanyAdmin && _companyTaskStatus != null && _companyTaskStatus != 'completado' && _companyScheduledDay != null && _companyScheduledTime != null)))
                 Container(
                   padding: const EdgeInsets.all(16),
                   decoration: BoxDecoration(
-                    color: _isEmployee ? Colors.amber.shade50 : Colors.blue.shade50,
+                    color: _isEmployee 
+                        ? Colors.amber.shade50 
+                        : (_isOwner ? Colors.blue.shade50 : Colors.green.shade50),
                     borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: _isEmployee ? Colors.amber.shade200 : Colors.blue.shade200),
+                    border: Border.all(
+                      color: _isEmployee 
+                          ? Colors.amber.shade200 
+                          : (_isOwner ? Colors.blue.shade200 : Colors.green.shade200)
+                    ),
                   ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Row(
                         children: [
-                          Icon(Icons.schedule, color: _isEmployee ? Colors.amber : Colors.blue, size: 20),
+                          Icon(
+                            Icons.schedule, 
+                            color: _isEmployee 
+                                ? Colors.amber 
+                                : (_isOwner ? Colors.blue : Colors.green), 
+                            size: 20
+                          ),
                           const SizedBox(width: 8),
                           Text(
                             'Fecha y Hora de Entrega',
                             style: TextStyle(
                               fontSize: 14,
                               fontWeight: FontWeight.bold,
-                              color: _isEmployee ? Colors.amber : Colors.blue,
+                              color: _isEmployee 
+                                  ? Colors.amber 
+                                  : (_isOwner ? Colors.blue : Colors.green),
                             ),
                           ),
                         ],
@@ -3683,13 +3876,21 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
                       const SizedBox(height: 12),
                       Row(
                         children: [
-                          Icon(Icons.calendar_today, size: 18, color: _isEmployee ? Colors.amber : Colors.blue),
+                          Icon(
+                            Icons.calendar_today, 
+                            size: 18, 
+                            color: _isEmployee 
+                                ? Colors.amber 
+                                : (_isOwner ? Colors.blue : Colors.green)
+                          ),
                           const SizedBox(width: 8),
                           Expanded(
                             child: Text(
                               _isEmployee 
                                   ? _formatScheduledDateTime(_employeeScheduledDay, _employeeScheduledTime, null)
-                                  : _formatScheduledDateTime(_distributorScheduledDay, _distributorScheduledTime, null),
+                                  : (_isOwner 
+                                      ? _formatScheduledDateTime(_distributorScheduledDay, _distributorScheduledTime, null)
+                                      : _formatScheduledDateTime(_companyScheduledDay, _companyScheduledTime, null)),
                               style: const TextStyle(
                                 fontSize: 16,
                                 fontWeight: FontWeight.w600,
@@ -3702,8 +3903,8 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
                     ],
                   ),
                 ),
-              // ✅ Disponibilidad section (hide for empresa view)
-              if (!widget.isEmpresaView) ...[
+              // ✅ Disponibilidad section (hide for empresa view, employees, and company admins with active tasks)
+              if (!widget.isEmpresaView && !_isEmployee && !(!_isOwner && _isCompanyAdmin && _companyTaskStatus != null)) ...[
                 if (!(_isOwner && _distributorTaskStatus != null))
                   // availability - only show if distributor doesn't have active task
                   AvailabilityPicker(
@@ -3723,8 +3924,11 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
                   ),
               ],
 
-              // ✅ Empresa view: Show ONLY reviews (no schedule, no user info)
-              if (widget.isEmpresaView && widget.taskData != null) ...[
+              // ✅ Empresa view OR Company admin with completed task OR Employee with completed task OR Distributor with completed task: Show ONLY reviews (no schedule, no user info)
+              if ((widget.isEmpresaView && widget.taskData != null) || 
+                  (!_isOwner && _isCompanyAdmin && _companyTaskStatus == 'completado') ||
+                  (_isEmployee && (widget.item.workflowStatus == 'completado' || _employeeTaskStatus == 'completado')) ||
+                  (_isOwner && (widget.item.workflowStatus == 'completado' || _distributorTaskStatus == 'completado'))) ...[
                 const SizedBox(height: 20),
                 // Reviews section only
                 const Text(
@@ -3736,141 +3940,175 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
                   ),
                 ),
                 const SizedBox(height: 12),
-                if (widget.taskData!['reviews'] != null && (widget.taskData!['reviews'] as List).isNotEmpty)
-                  ...((widget.taskData!['reviews'] as List).map((review) {
-                    // Get sender info
-                    final senderName = review['sender']?['names'] ?? 'Usuario';
-                    final senderRole = review['sender']?['role'] ?? 'user';
-                    final senderId = review['sender']?['idUser']?.toString();
-                    final createdAt = review['created_at'] != null 
-                        ? DateTime.parse(review['created_at']).toString().substring(0, 10)
-                        : '';
+                // Load reviews dynamically for both empresa and company admin
+                FutureBuilder<List<Map<String, dynamic>>>(
+                  future: _loadReviews(),
+                  builder: (context, snapshot) {
+                    if (snapshot.connectionState == ConnectionState.waiting) {
+                      return const Center(
+                        child: CircularProgressIndicator(color: Color(0xFF2D8A8A)),
+                      );
+                    }
                     
-                    return FutureBuilder<Multimedia?>(
-                      future: senderId != null 
-                          ? _loadReviewerAvatar(senderId, senderRole)
-                          : Future.value(null),
-                      builder: (context, snapshot) {
-                        final avatarUrl = snapshot.data?.url;
-                        
-                        return Container(
-                          margin: const EdgeInsets.only(bottom: 12),
-                          padding: const EdgeInsets.all(16),
-                          decoration: BoxDecoration(
-                            color: Colors.white,
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(color: Colors.grey[300]!),
+                    if (snapshot.hasError) {
+                      return Container(
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          color: Colors.red[50],
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: const Text(
+                          'Error al cargar calificaciones',
+                          style: TextStyle(color: Colors.red),
+                        ),
+                      );
+                    }
+                    
+                    final reviews = snapshot.data ?? [];
+                    
+                    if (reviews.isEmpty) {
+                      return Container(
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          color: Colors.grey[100],
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: const Text(
+                          'No hay calificaciones disponibles',
+                          style: TextStyle(
+                            fontSize: 14,
+                            color: Colors.grey,
                           ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
+                        ),
+                      );
+                    }
+                    
+                    return Column(
+                      children: reviews.map((review) {
+                        // Get sender info
+                        final senderName = review['sender']?['names'] ?? 'Usuario';
+                        final senderRole = review['sender']?['role'] ?? 'user';
+                        final senderId = review['sender']?['idUser']?.toString();
+                        final createdAt = review['created_at'] != null 
+                            ? DateTime.parse(review['created_at']).toString().substring(0, 10)
+                            : '';
+                        
+                        // ✅ Get contextual label (Entregado por / Recibido por)
+                        final contextualLabel = _getContextualRoleLabel(review);
+                        
+                        return FutureBuilder<Multimedia?>(
+                          future: senderId != null 
+                              ? _loadReviewerAvatar(senderId, senderRole)
+                              : Future.value(null),
+                          builder: (context, avatarSnapshot) {
+                            final avatarUrl = avatarSnapshot.data?.url;
+                        
+                            return Container(
+                              margin: const EdgeInsets.only(bottom: 12),
+                              padding: const EdgeInsets.all(16),
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(color: Colors.grey[300]!),
+                              ),
+                              child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  // Avatar
-                                  CircleAvatar(
-                                    radius: 24,
-                                    backgroundColor: const Color(0xFF2D8A8A),
-                                    backgroundImage: avatarUrl != null 
-                                        ? CachedNetworkImageProvider(avatarUrl) 
-                                        : null,
-                                    child: avatarUrl == null
-                                        ? Text(
-                                            senderName.isNotEmpty ? senderName[0].toUpperCase() : 'U',
-                                            style: const TextStyle(
-                                              color: Colors.white,
-                                              fontSize: 20,
-                                              fontWeight: FontWeight.bold,
-                                            ),
-                                          )
-                                        : null,
-                                  ),
-                                  const SizedBox(width: 12),
-                                  // Name and role
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          _getRoleDisplayName(senderRole),
-                                          style: TextStyle(
-                                            fontSize: 12,
-                                            color: Colors.grey[600],
-                                            fontWeight: FontWeight.w500,
-                                          ),
-                                        ),
-                                        const SizedBox(height: 2),
-                                        Text(
-                                          senderName,
-                                          style: const TextStyle(
-                                            fontSize: 16,
-                                            fontWeight: FontWeight.w600,
-                                            color: Colors.black87,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                  // Date and stars
-                                  Column(
-                                    crossAxisAlignment: CrossAxisAlignment.end,
+                                  Row(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
                                     children: [
-                                      Text(
-                                        createdAt,
-                                        style: TextStyle(
-                                          fontSize: 12,
-                                          color: Colors.grey[600],
+                                      // Avatar
+                                      CircleAvatar(
+                                        radius: 24,
+                                        backgroundColor: const Color(0xFF2D8A8A),
+                                        backgroundImage: avatarUrl != null 
+                                            ? CachedNetworkImageProvider(avatarUrl) 
+                                            : null,
+                                        child: avatarUrl == null
+                                            ? Text(
+                                                senderName.isNotEmpty ? senderName[0].toUpperCase() : 'U',
+                                                style: const TextStyle(
+                                                  color: Colors.white,
+                                                  fontSize: 20,
+                                                  fontWeight: FontWeight.bold,
+                                                ),
+                                              )
+                                            : null,
+                                      ),
+                                      const SizedBox(width: 12),
+                                      // Name and contextual role
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              contextualLabel,
+                                              style: TextStyle(
+                                                fontSize: 12,
+                                                color: Colors.grey[600],
+                                                fontWeight: FontWeight.w500,
+                                              ),
+                                            ),
+                                            const SizedBox(height: 2),
+                                            Text(
+                                              senderName,
+                                              style: const TextStyle(
+                                                fontSize: 16,
+                                                fontWeight: FontWeight.w600,
+                                                color: Colors.black87,
+                                              ),
+                                            ),
+                                          ],
                                         ),
                                       ),
-                                      const SizedBox(height: 4),
-                                      Row(
-                                        children: List.generate(
-                                          5,
-                                          (index) => Icon(
-                                            index < (review['starID'] as int? ?? 0)
-                                                ? Icons.star
-                                                : Icons.star_border,
-                                            color: Colors.amber,
-                                            size: 20,
+                                      // Date and stars
+                                      Column(
+                                        crossAxisAlignment: CrossAxisAlignment.end,
+                                        children: [
+                                          Text(
+                                            createdAt,
+                                            style: TextStyle(
+                                              fontSize: 12,
+                                              color: Colors.grey[600],
+                                            ),
                                           ),
-                                        ),
+                                          const SizedBox(height: 4),
+                                          Row(
+                                            children: List.generate(
+                                              5,
+                                              (index) => Icon(
+                                                index < (review['starID'] as int? ?? 0)
+                                                    ? Icons.star
+                                                    : Icons.star_border,
+                                                color: Colors.amber,
+                                                size: 20,
+                                              ),
+                                            ),
+                                          ),
+                                        ],
                                       ),
                                     ],
                                   ),
+                                  if (review['comment'] != null && (review['comment'] as String).isNotEmpty) ...[
+                                    const SizedBox(height: 12),
+                                    Text(
+                                      review['comment'],
+                                      style: TextStyle(
+                                        fontSize: 14,
+                                        color: Colors.grey[800],
+                                      ),
+                                    ),
+                                  ],
                                 ],
                               ),
-                              if (review['comment'] != null && (review['comment'] as String).isNotEmpty) ...[
-                                const SizedBox(height: 12),
-                                Text(
-                                  review['comment'],
-                                  style: TextStyle(
-                                    fontSize: 14,
-                                    color: Colors.grey[800],
-                                  ),
-                                ),
-                              ],
-                            ],
-                          ),
+                            );
+                          },
                         );
-                      },
+                      }).toList(),
                     );
-                  }).toList())
-                else
-                  Container(
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: Colors.grey[100],
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: const Text(
-                      'No hay calificaciones disponibles',
-                      style: TextStyle(
-                        fontSize: 14,
-                        color: Colors.grey,
-                      ),
-                    ),
-                  ),
-                // Add completion message for empresa view
+                  },
+                ),
+                // Add completion message for both empresa view and company admin
                 const SizedBox(height: 20),
                 Container(
                   padding: const EdgeInsets.all(16),
@@ -3880,16 +4118,19 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
                     border: Border.all(color: Colors.green.withOpacity(0.3)),
                   ),
                   child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
                     children: [
                       const Icon(Icons.check_circle, color: Colors.green),
-                      const SizedBox(width: 12),
-                      const Expanded(
-                        child: Text(
-                          'Este artículo ya fue entregado y está en el historial',
-                          style: TextStyle(
-                            color: Colors.green,
-                            fontWeight: FontWeight.w600,
-                          ),
+                      const SizedBox(width: 8),
+                      Text(
+                        _isEmployee 
+                            ? 'Tarea completada' 
+                            : (_isOwner 
+                                ? 'Artículo entregado' 
+                                : 'Artículo Recibido'),
+                        style: const TextStyle(
+                          color: Colors.green,
+                          fontWeight: FontWeight.w600,
                         ),
                       ),
                     ],
@@ -3993,24 +4234,10 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
                 ),
               ],
 
-              // ✅ Reviews section (show after task is completed)
-              if ((_isEmployee && _employeeTaskStatus == 'completado') || 
-                  (_isOwner && _distributorTaskStatus == 'completado')) ...[
-                const SizedBox(height: 20),
-                const Text(
-                  'Calificaciones',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                    color: Color(0xFF2D8A8A),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                _buildReviewsSection(),
-              ],
-
-              // User info section (only in view mode, hide for empresa view)
-              if (!_isEditing && !_isOwner && !widget.isEmpresaView) ...[
+              // User info section (only in view mode, hide for empresa view, employees with completed tasks, and company admin with completed tasks)
+              if (!_isEditing && !_isOwner && !widget.isEmpresaView && 
+                  !(_isEmployee && (widget.item.workflowStatus == 'completado' || _employeeTaskStatus == 'completado')) &&
+                  !(_isCompanyAdmin && _companyTaskStatus == 'completado')) ...[
                 const SizedBox(height: 20),
                 const Text(
                   'Información del usuario',
@@ -4133,50 +4360,42 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
               else
                 Column(
                   children: [
-                    // ✅ Hide edit/delete when task is completed or in progress
+                    // ✅ Hide edit/delete when task is in progress or completed
                     if (_distributorTaskStatus != null && 
                         (_distributorTaskStatus == 'completado' ||
                          _distributorTaskStatus == 'en_proceso' || 
                          _distributorTaskStatus == 'esperando_confirmacion_distribuidor' ||
                          _distributorTaskStatus == 'esperando_confirmacion_empleado')) ...[
-                      Container(
-                        padding: const EdgeInsets.all(16),
-                        decoration: BoxDecoration(
-                          color: _distributorTaskStatus == 'completado' 
-                              ? Colors.green.withOpacity(0.1) 
-                              : Colors.orange.withOpacity(0.1),
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(
-                            color: _distributorTaskStatus == 'completado'
-                                ? Colors.green.withOpacity(0.3)
-                                : Colors.orange.withOpacity(0.3)
-                          ),
-                        ),
-                        child: Row(
-                          children: [
-                            Icon(
-                              _distributorTaskStatus == 'completado' ? Icons.check_circle : Icons.lock,
-                              color: _distributorTaskStatus == 'completado' 
-                                  ? Colors.green.shade700 
-                                  : Colors.orange.shade700,
+                      // Only show lock message for in-process tasks (not completed)
+                      if (_distributorTaskStatus != 'completado')
+                        Container(
+                          padding: const EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            color: Colors.orange.withOpacity(0.1),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                              color: Colors.orange.withOpacity(0.3)
                             ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Text(
-                                _distributorTaskStatus == 'completado'
-                                    ? 'Este artículo ya fue entregado y está en el historial'
-                                    : 'No puedes editar o eliminar este artículo mientras está en proceso',
-                                style: TextStyle(
-                                  color: _distributorTaskStatus == 'completado'
-                                      ? Colors.green.shade900
-                                      : Colors.orange.shade900,
-                                  fontSize: 14,
+                          ),
+                          child: Row(
+                            children: [
+                              Icon(
+                                Icons.lock,
+                                color: Colors.orange.shade700,
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Text(
+                                  'No puedes editar o eliminar este artículo mientras está en proceso',
+                                  style: TextStyle(
+                                    color: Colors.orange.shade900,
+                                    fontSize: 14,
+                                  ),
                                 ),
                               ),
-                            ),
-                          ],
+                            ],
+                          ),
                         ),
-                      ),
                     ] else ...[
                       MyButton(
                         onTap: () async {
@@ -4239,8 +4458,37 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
                       ],
                     ),
                   )
-                else if (_existingRequest!.status == 'aprobado')
-                  // Show "Asignar Empleado" button
+                else if (_companyTaskStatus == 'en_proceso' || _companyTaskStatus == 'esperando_confirmacion_empleado' || _companyTaskStatus == 'esperando_confirmacion_distribuidor')
+                  // Show "En Proceso" indicator (amber, non-clickable)
+                  Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: Colors.amber.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.amber.withOpacity(0.3)),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Icon(Icons.timelapse, color: Colors.amber),
+                        const SizedBox(width: 8),
+                        Text(
+                          _companyTaskStatus == 'esperando_confirmacion_empleado'
+                              ? 'Esperando Confirmación del Empleado'
+                              : _companyTaskStatus == 'esperando_confirmacion_distribuidor'
+                                  ? 'Esperando Confirmación del Distribuidor'
+                                  : 'En Proceso',
+                          style: const TextStyle(
+                            color: Colors.amber,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 14,
+                          ),
+                        ),
+                      ],
+                    ),
+                  )
+                else if (_existingRequest!.status == 'aprobado' && (_companyTaskStatus == null || _companyTaskStatus == 'sin_asignar'))
+                  // Show "Asignar Empleado" button (only when no task yet or task not assigned)
                   MyButton(
                     onTap: () {
                       // ✅ Show employee assignment dialog

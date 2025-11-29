@@ -22,6 +22,7 @@ import 'package:reciclaje_app/widgets/status_indicator.dart';
 import 'package:reciclaje_app/database/media_database.dart';
 import 'package:reciclaje_app/model/multimedia.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 // import 'package:reciclaje_app/widgets/category_utils.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -177,17 +178,27 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (_currentUserId == null) return;
     
     try {
+      final prefs = await SharedPreferences.getInstance();
+      final readNotifications = prefs.getStringList('read_distributor_notifications') ?? [];
+      
       final response = await Supabase.instance.client
         .from('request')
         .select('*, article!inner(userID)')
         .eq('status', 'pendiente')
         .eq('article.userID', _currentUserId!);
       
+      // Filter out read notifications
+      final unreadRequests = (response as List).where((req) {
+        final requestId = req['idRequest'].toString();
+        return !readNotifications.contains(requestId);
+      }).toList();
+      
       if (mounted) {
         setState(() {
-          _pendingRequestCount = (response as List).length;
+          _pendingRequestCount = unreadRequests.length;
         });
       }
+      print('📊 Unread notifications: ${unreadRequests.length} out of ${response.length} total');
     } catch (e) {
       print('Error loading pending request count: $e');
     }
@@ -711,7 +722,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     Navigator.pop(context);
 
     if (_quickRegisterLocation != null) {
-      final result = await Navigator.push<bool>(
+      await Navigator.push(
         context,
         MaterialPageRoute(
           builder: (context) => RegisterRecycleScreen(
@@ -729,20 +740,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         _showTemporaryMarker = false;
       });
 
-      if (result == true && mounted) {
-        print('✅ Registro exitoso, refrescando datos...');
-        await _refreshData();
-        
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('✅ Mapa actualizado con tu nuevo artículo'),
-              backgroundColor: Colors.green,
-              duration: Duration(seconds: 2),
-            ),
-          );
-        }
-      }
+      // ✅ Siempre refrescar datos al volver del registro
+      print('🔄 Reloading data after returning from registration...');
+      await _refreshData();
     }
   }
 

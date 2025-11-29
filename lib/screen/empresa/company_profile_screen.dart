@@ -41,12 +41,20 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
   Map<int, String> categoryNames = {};
   Map<int, String> articleStatuses = {}; // Store status for each article
   bool isLoading = true;
+  bool isLoadingArticles = true; // ✅ Track article loading state
   bool isViewingCompanyProfile = true; // Toggle between company and admin profile
   
   // Filter and search state
   String searchQuery = '';
   bool sortAscending = false; // false = newest first, true = oldest first
   Set<String> selectedStatusFilters = {}; // For admin view filtering
+  
+  // Pagination state
+  final ScrollController _scrollController = ScrollController();
+  int _currentArticlePage = 1;
+  final int _articlesPerPage = 6;
+  bool _isLoadingMoreArticles = false;
+  bool _hasMoreArticles = true;
   
   // Stats data
   Map<String, int> articleStats = {
@@ -62,7 +70,45 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
   @override
   void initState() {
     super.initState();
+    _scrollController.addListener(_onArticleScroll);
     _loadUserData();
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    // ✅ Clear cached data to prevent memory leaks
+    articlePhotos.clear();
+    categoryNames.clear();
+    articleStatuses.clear();
+    companyArticles.clear();
+    filteredArticles.clear();
+    completedTasks.clear();
+    super.dispose();
+  }
+
+  void _onArticleScroll() {
+    if (_scrollController.position.pixels >= _scrollController.position.maxScrollExtent - 200) {
+      if (!_isLoadingMoreArticles && _hasMoreArticles && !isLoadingArticles) {
+        _loadMoreArticles();
+      }
+    }
+  }
+
+  Future<void> _loadMoreArticles() async {
+    if (_isLoadingMoreArticles || !_hasMoreArticles) return;
+    
+    setState(() {
+      _isLoadingMoreArticles = true;
+    });
+    
+    // Simulate loading delay
+    await Future.delayed(const Duration(milliseconds: 500));
+    
+    setState(() {
+      _currentArticlePage++;
+      _isLoadingMoreArticles = false;
+    });
   }
 
   Future<void> _loadUserData() async {
@@ -109,47 +155,44 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
               print('🏢 Company logo: ${companyAvatar?.url ?? "No company logo"}');
             }
             
-            // Load article stats first (to get task/request data)
-            await _loadArticleStats();
-            
-            // Load company rating from all employee reviews
+            // Load company rating from all employee reviews (lightweight)
             await _loadCompanyRating();
             
-            // Fetch company's articles from tasks (not from user's created articles)
-            await _loadArticlesFromTasks();
-            
-            // Load article statuses from requests/tasks
-            await _loadArticleStatuses();
-            
-            // Load completed tasks with reviews for empresa view
-            await _loadCompletedTasks();
-            
-            // Load photos and category names for each article
-            for (var article in companyArticles) {
-              if (article.id != null) {
-                final photo = await mediaDatabase.getMainPhotoByPattern('articles/${article.id}');
-                articlePhotos[article.id!] = photo;
-                
-                // Fetch category name
-                if (article.categoryID != null) {
-                  final category = await Supabase.instance.client
-                      .from('category')
-                      .select('name')
-                      .eq('idCategory', article.categoryID!)
-                      .single();
-                  categoryNames[article.id!] = category['name'] as String;
-                }
-              }
+            // ✅ Show profile UI immediately after loading avatars and rating
+            if (mounted) {
+              setState(() => isLoading = false);
             }
             
-            // Apply filters after loading all data
-            _applyFilters();
+            // ✅ Load heavy data in background after UI is shown
+            Future.delayed(const Duration(milliseconds: 100), () async {
+              if (!mounted) return;
+              
+              // ✅ Set loading articles state
+              if (mounted) {
+                setState(() => isLoadingArticles = true);
+              }
+              
+              await _loadArticleStats();
+              await _loadArticlesFromTasks();
+              await _loadArticleStatuses();
+              _applyFilters();
+              
+              // ✅ Load article photos and categories progressively
+              await _loadArticlePhotosProgressively();
+              
+              // ✅ Load completed tasks with reviews last
+              await _loadCompletedTasks();
+              
+              // ✅ Mark article loading as complete
+              if (mounted) {
+                setState(() => isLoadingArticles = false);
+              }
+            });
           }
         }
       }
     } catch (e) {
       print('❌ Error loading user data: $e');
-    } finally {
       if (mounted) {
         setState(() => isLoading = false);
       }
@@ -275,7 +318,7 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
   Future<String> _getCategoryName(int categoryID) async {
     try {
       final response = await Supabase.instance.client
-          .from('categories')
+          .from('category')
           .select('name')
           .eq('idCategory', categoryID)
           .single();
@@ -442,7 +485,7 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
 
       print('📦 Loading ${articleIds.length} articles from tasks/requests');
 
-      // Load articles by IDs
+      // Load articles by IDs (without photos - photos loaded progressively later)
       final articlesData = await Supabase.instance.client
           .from('article')
           .select()
@@ -451,28 +494,64 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
       
       companyArticles = articlesData.map((data) => Article.fromMap(data)).toList();
       
-      // Load photos and category names for each article
-      for (var article in companyArticles) {
+      print('✅ Loaded ${companyArticles.length} articles (photos will load progressively)');
+    } catch (e) {
+      print('❌ Error loading articles from tasks: $e');
+    }
+  }
+
+  /// ✅ Load article photos and categories progressively in batches
+  Future<void> _loadArticlePhotosProgressively() async {
+    if (companyArticles.isEmpty) return;
+    
+    print('📸 Loading article photos progressively...');
+    
+    // ✅ Load in batches of 3 to prevent memory spikes
+    const batchSize = 3;
+    for (var i = 0; i < companyArticles.length; i += batchSize) {
+      if (!mounted) break;
+      
+      final batch = companyArticles.skip(i).take(batchSize);
+      
+      for (var article in batch) {
         if (article.id != null) {
+          // Load photo
           final photo = await mediaDatabase.getMainPhotoByPattern('articles/${article.id}');
-          articlePhotos[article.id!] = photo;
           
           // Fetch category name
+          String? categoryName;
           if (article.categoryID != null) {
-            final category = await Supabase.instance.client
-                .from('category')
-                .select('name')
-                .eq('idCategory', article.categoryID!)
-                .single();
-            categoryNames[article.id!] = category['name'] as String;
+            try {
+              final category = await Supabase.instance.client
+                  .from('category')
+                  .select('name')
+                  .eq('idCategory', article.categoryID!)
+                  .single();
+              categoryName = category['name'] as String;
+            } catch (e) {
+              print('⚠️ Error loading category for article ${article.id}: $e');
+            }
+          }
+          
+          // Update UI with loaded data
+          if (mounted) {
+            setState(() {
+              articlePhotos[article.id!] = photo;
+              if (categoryName != null) {
+                categoryNames[article.id!] = categoryName;
+              }
+            });
           }
         }
       }
       
-      print('✅ Loaded ${companyArticles.length} articles with photos');
-    } catch (e) {
-      print('❌ Error loading articles from tasks: $e');
+      // Small delay between batches for smooth rendering
+      if (i + batchSize < companyArticles.length) {
+        await Future.delayed(const Duration(milliseconds: 50));
+      }
     }
+    
+    print('✅ Finished loading ${articlePhotos.length} article photos');
   }
 
   Future<void> _loadArticleStatuses() async {
@@ -836,25 +915,40 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
       isViewingCompanyProfile = !isViewingCompanyProfile;
       selectedStatusFilters.clear();
       searchQuery = '';
+      // Articles are already loaded, just apply filters
+      isLoadingArticles = false;
+      // Reset pagination
+      _currentArticlePage = 1;
+      _hasMoreArticles = true;
     });
     _applyFilters();
   }
 
   /// Refresh all data (stats, articles, ratings)
   Future<void> _refreshData() async {
-    setState(() => isLoading = true);
+    setState(() {
+      isLoading = true;
+      isLoadingArticles = true;
+      // Reset pagination
+      _currentArticlePage = 1;
+      _hasMoreArticles = true;
+    });
     try {
       await _loadArticleStats();
       await _loadCompanyRating();
       await _loadArticlesFromTasks();
       await _loadArticleStatuses();
+      await _loadArticlePhotosProgressively();
       await _loadCompletedTasks();
       _applyFilters();
     } catch (e) {
       print('❌ Error refreshing data: $e');
     } finally {
       if (mounted) {
-        setState(() => isLoading = false);
+        setState(() {
+          isLoading = false;
+          isLoadingArticles = false;
+        });
       }
     }
   }
@@ -1003,12 +1097,25 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
         backgroundColor: const Color(0xFF2D8A8A),
         body: isLoading
             ? const Center(child: CircularProgressIndicator(color: Colors.white))
-            : Column(
-                children: [
+            : RefreshIndicator(
+                color: const Color(0xFF2D8A8A),
+                onRefresh: _refreshData,
+                child: CustomScrollView(
+                  controller: _scrollController,
+                  slivers: [
+                        // Profile header as collapsible app bar
+                        SliverAppBar(
+                          expandedHeight: !isViewingCompanyProfile ? 150 : 250,
+                          floating: false,
+                          pinned: false,
+                          backgroundColor: const Color(0xFF2D8A8A),
+                          flexibleSpace: FlexibleSpaceBar(
+                            background: Column(
+                              children: [
                   // Profile header section
                   Container(
                     width: double.infinity,
-                    padding: const EdgeInsets.fromLTRB(25, 20, 25, 30),
+                    padding: const EdgeInsets.fromLTRB(25, 20, 25, 10),
                     child: Row(
                       children: [
                         // Avatar on the left (company or admin based on toggle)
@@ -1116,98 +1223,109 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
                       ],
                     ),
                   ),
-                  // Objetos stats - only show in Admin view
-                  if (!isViewingCompanyProfile)
-                    Container(
-                      margin: const EdgeInsets.symmetric(horizontal: 25, vertical: 10),
-                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 15),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(15),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              const Text(
-                                'Objetos',
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.w600,
-                                  color: Color(0xFF2D8A8A),
-                                ),
-                              ),
-                              IconButton(
-                                icon: const Icon(Icons.refresh, size: 20),
-                                color: const Color(0xFF2D8A8A),
-                                onPressed: _refreshData,
-                                tooltip: 'Actualizar estadísticas',
-                              ),
-                            ],
+                  // ✅ Spacing before Objetos card
+                  if (!isViewingCompanyProfile) const SizedBox(height: 20),
+                              ],
+                            ),
                           ),
-                          const SizedBox(height: 15),
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceAround,
-                            children: [
-                              _buildObjectStatItem(
-                                '${articleStats['enEspera']}', 
-                                'En espera', 
-                                Colors.orange
-                              ),
-                              _buildObjectStatItem(
-                                '${articleStats['sinAsignar']}', 
-                                'Sin Asignar', 
-                                Colors.purple
-                              ),
-                              _buildObjectStatItem(
-                                '${articleStats['enProceso']}', 
-                                'En Proceso', 
-                                Colors.amber
-                              ),
-                              _buildObjectStatItem(
-                                '${articleStats['recibido']}', 
-                                'Recibido', 
-                                Colors.teal
-                              ),
-                              _buildObjectStatItem(
-                                '${articleStats['vencido']}', 
-                                'Vencido', 
-                                Colors.red
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                    ),
-                  const SizedBox(height: 20),
-                  // Publications section
-                  Expanded(
-                    child: Container(
-                      decoration: const BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.only(
-                          topLeft: Radius.circular(30),
-                          topRight: Radius.circular(30),
                         ),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Padding(
-                            padding: EdgeInsets.fromLTRB(25, 25, 25, 10),
-                            child: Text(
-                              'Publicaciones',
-                              style: TextStyle(
-                                fontSize: 20,
-                                fontWeight: FontWeight.bold,
-                                color: Color(0xFF2D8A8A),
+                        // ✅ Objetos card (only in Admin view) - inline between header and publications
+                        if (!isViewingCompanyProfile)
+                          SliverToBoxAdapter(
+                            child: Transform.translate(
+                              offset: const Offset(0, 55),
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(horizontal: 25),
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 15),
+                                  decoration: BoxDecoration(
+                                    color: Colors.white,
+                                    borderRadius: BorderRadius.circular(15),
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: Colors.black.withOpacity(0.15),
+                                        blurRadius: 15,
+                                        offset: const Offset(0, 5),
+                                      ),
+                                    ],
+                                  ),
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      const Text(
+                                        'Objetos',
+                                        style: TextStyle(
+                                          fontSize: 14,
+                                          fontWeight: FontWeight.w600,
+                                          color: Color(0xFF2D8A8A),
+                                        ),
+                                      ),
+                                      const SizedBox(height: 15),
+                                      Row(
+                                        mainAxisAlignment: MainAxisAlignment.spaceAround,
+                                        children: [
+                                          _buildObjectStatItem(
+                                            '${articleStats['enEspera']}', 
+                                            'En espera', 
+                                            Colors.orange
+                                          ),
+                                          _buildObjectStatItem(
+                                            '${articleStats['sinAsignar']}', 
+                                            'Sin Asignar', 
+                                            Colors.purple
+                                          ),
+                                          _buildObjectStatItem(
+                                            '${articleStats['enProceso']}', 
+                                            'En Proceso', 
+                                            Colors.amber
+                                          ),
+                                          _buildObjectStatItem(
+                                            '${articleStats['recibido']}', 
+                                            'Recibido', 
+                                            Colors.teal
+                                          ),
+                                          _buildObjectStatItem(
+                                            '${articleStats['vencido']}', 
+                                            'Vencido', 
+                                            Colors.red
+                                          ),
+                                        ],
+                                      ),
+                                    ],
+                                  ),
+                                ),
                               ),
                             ),
                           ),
-                          // Search bar
-                          Padding(
+                        // White publications section with rounded top
+                        SliverToBoxAdapter(
+                          child: Container(
+                            decoration: const BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.only(
+                                topLeft: Radius.circular(30),
+                                topRight: Radius.circular(30),
+                              ),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                SizedBox(height: !isViewingCompanyProfile ? 80 : 25),
+                                const Padding(
+                                  padding: EdgeInsets.fromLTRB(25, 0, 25, 10),
+                                  child: Center(
+                                    child: Text(
+                                      'Publicaciones',
+                                      style: TextStyle(
+                                        fontSize: 20,
+                                        fontWeight: FontWeight.bold,
+                                        color: Color(0xFF2D8A8A),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                            // Search bar
+                            Padding(
                             padding: const EdgeInsets.symmetric(horizontal: 25),
                             child: TextField(
                               onChanged: (value) {
@@ -1290,64 +1408,137 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
                             ),
                           ),
                           const SizedBox(height: 15),
-                          // Grid of articles
-                          Expanded(
-                            child: filteredArticles.isEmpty
-                                ? Center(
-                                    child: Column(
-                                      mainAxisAlignment: MainAxisAlignment.center,
-                                      children: [
-                                        Icon(
-                                          Icons.inventory_2_outlined,
-                                          size: 80,
-                                          color: Colors.grey[300],
-                                        ),
-                                        const SizedBox(height: 16),
-                                        Text(
-                                          searchQuery.isNotEmpty
-                                              ? 'No se encontraron publicaciones'
-                                              : (isViewingCompanyProfile
-                                                  ? 'No hay objetos recibidos'
-                                                  : 'No tienes publicaciones'),
-                                          style: TextStyle(
-                                            fontSize: 16,
-                                            color: Colors.grey[600],
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  )
-                                : Padding(
-                                    padding: const EdgeInsets.symmetric(horizontal: 15),
-                                    child: GridView.builder(
-                                      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                                        crossAxisCount: 2,
-                                        mainAxisSpacing: 10,
-                                        crossAxisSpacing: 10,
-                                        childAspectRatio: 0.85,
-                                      ),
-                                      itemCount: filteredArticles.length,
-                                      itemBuilder: (context, index) {
-                                        final article = filteredArticles[index];
-                                        return GestureDetector(
-                                          onTap: () async {
-                                            // Navigate to detail screen
-                                            _navigateToDetail(article);
-                                          },
-                                          child: _buildArticleCard(article),
-                                        );
-                                      },
+                              ],
+                            ),
+                          ),
+                        ),
+                        // Grid of articles as sliver
+                        if (isLoadingArticles)
+                          const SliverFillRemaining(
+                            hasScrollBody: false,
+                            child: Center(
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  CircularProgressIndicator(
+                                    color: Color(0xFF2D8A8A),
+                                  ),
+                                  SizedBox(height: 12),
+                                  Text(
+                                    'Cargando artículos...',
+                                    style: TextStyle(
+                                      fontSize: 14,
+                                      color: Colors.grey,
                                     ),
                                   ),
+                                ],
+                              ),
+                            ),
+                          )
+                        else if (filteredArticles.isEmpty)
+                          SliverFillRemaining(
+                            hasScrollBody: false,
+                            child: Center(
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(
+                                    Icons.inventory_2_outlined,
+                                    size: 60,
+                                    color: Colors.grey[300],
+                                  ),
+                                  const SizedBox(height: 12),
+                                  Text(
+                                    searchQuery.isNotEmpty
+                                        ? 'No se encontraron publicaciones'
+                                        : (isViewingCompanyProfile
+                                            ? 'No hay objetos recibidos'
+                                            : 'No tienes publicaciones'),
+                                    style: TextStyle(
+                                      fontSize: 14,
+                                      color: Colors.grey[600],
+                                    ),
+                                    textAlign: TextAlign.center,
+                                  ),
+                                ],
+                              ),
+                            ),
+                          )
+                        else
+                          SliverPadding(
+                            padding: const EdgeInsets.fromLTRB(15, 10, 15, 15),
+                            sliver: SliverGrid(
+                              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                                crossAxisCount: 2,
+                                mainAxisSpacing: 10,
+                                crossAxisSpacing: 10,
+                                childAspectRatio: 0.85,
+                              ),
+                              delegate: SliverChildBuilderDelegate(
+                                (context, index) {
+                                  // ✅ Apply pagination
+                                  final totalToShow = _currentArticlePage * _articlesPerPage;
+                                  final paginatedArticles = filteredArticles.take(totalToShow).toList();
+                                  final hasMore = filteredArticles.length > paginatedArticles.length;
+                                  
+                                  // Update hasMoreArticles flag
+                                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                                    if (mounted && _hasMoreArticles != hasMore) {
+                                      setState(() {
+                                        _hasMoreArticles = hasMore;
+                                      });
+                                    }
+                                  });
+                                  
+                                  if (index == paginatedArticles.length) {
+                                    // Loading indicator at bottom
+                                    return Container(
+                                      padding: const EdgeInsets.symmetric(vertical: 20),
+                                      alignment: Alignment.center,
+                                      child: const Column(
+                                        mainAxisAlignment: MainAxisAlignment.center,
+                                        children: [
+                                          CircularProgressIndicator(
+                                            color: Color(0xFF2D8A8A),
+                                          ),
+                                          SizedBox(height: 8),
+                                          Text(
+                                            'Cargando artículos...',
+                                            style: TextStyle(
+                                              fontSize: 12,
+                                              color: Colors.grey,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    );
+                                  }
+                                  
+                                  final article = paginatedArticles[index];
+                                  return GestureDetector(
+                                    onTap: () async {
+                                      // Navigate to detail screen
+                                      _navigateToDetail(article);
+                                    },
+                                    child: _buildArticleCard(article),
+                                  );
+                                },
+                                childCount: () {
+                                  final totalToShow = _currentArticlePage * _articlesPerPage;
+                                  final paginatedArticles = filteredArticles.take(totalToShow).toList();
+                                  final hasMore = filteredArticles.length > paginatedArticles.length;
+                                  return paginatedArticles.length + (hasMore ? 1 : 0);
+                                }(),
+                              ),
+                            ),
                           ),
-                        ],
-                      ),
+                      ],
                     ),
                   ),
-                ],
-              ),
-      ),
-    );
+                ),
+      );
   }
 
   Widget _buildObjectStatItem(String value, String label, Color color) {

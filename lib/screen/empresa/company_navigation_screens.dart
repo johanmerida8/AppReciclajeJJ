@@ -23,9 +23,8 @@ class _CompanyNavigationScreensState extends State<CompanyNavigationScreens> {
   int? _companyId;
   bool _isLoading = true;
   
-  // Cache screens for better performance
-  late List<Widget> _screens;
-  bool _screensInitialized = false;
+  // ✅ Store screens to prevent rebuilding
+  List<Widget> _screens = [];
 
   @override
   void initState() {
@@ -44,45 +43,28 @@ class _CompanyNavigationScreensState extends State<CompanyNavigationScreens> {
               .eq('adminUserID', user.id!)
               .maybeSingle();
           
-          if (companyData != null) {
+          if (companyData != null && mounted) {
             setState(() {
               _companyId = companyData['idCompany'] as int?;
-              _initializeScreens();
               _isLoading = false;
+              // ✅ Initialize screens once after companyId is loaded
+              _screens = [
+                const CompanyMapScreen(),
+                EmployeesScreen(companyId: _companyId!),
+                const CompanyProfileScreen(),
+              ];
             });
-          } else {
+          } else if (mounted) {
             setState(() => _isLoading = false);
           }
         }
       }
     } catch (e) {
       print('Error loading company: $e');
-      setState(() => _isLoading = false);
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
     }
-  }
-
-  void _initializeScreens() {
-    if (_companyId == null) {
-      _screens = [
-        const Center(child: Text('Error: No se encontró la empresa')),
-        const Center(child: Text('Error: No se encontró la empresa')),
-        const Center(child: Text('Error: No se encontró la empresa')),
-      ];
-    } else {
-      _screens = [
-        const CompanyMapScreen(),
-        EmployeesScreen(companyId: _companyId!),
-        const CompanyProfileScreen(),
-      ];
-    }
-    _screensInitialized = true;
-  }
-
-  List<Widget> _getScreens() {
-    if (!_screensInitialized) {
-      _initializeScreens();
-    }
-    return _screens;
   }
 
   final List<Widget> _navigationItems = [
@@ -101,10 +83,12 @@ class _CompanyNavigationScreensState extends State<CompanyNavigationScreens> {
 
     return Scaffold(
       backgroundColor: Colors.white,
-      body: IndexedStack(
-        index: _currentIndex,
-        children: _getScreens(),
-      ),
+      body: _screens.isEmpty
+          ? const Center(child: Text('Error: No se encontró la empresa'))
+          : IndexedStack(
+              index: _currentIndex,
+              children: _screens,
+            ),
       bottomNavigationBar: CurvedNavigationBar(
         backgroundColor: Colors.transparent,
         color: const Color(0xFF2D8A8A),

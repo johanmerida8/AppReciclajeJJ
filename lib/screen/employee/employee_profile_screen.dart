@@ -31,6 +31,13 @@ class _EmployeeProfileScreenState extends State<EmployeeProfileScreen> {
   double employeeRating = 0.0; // ✅ Average rating for employee
   int totalReviews = 0; // ✅ Total number of reviews received
   
+  // Stats data for Objetos card
+  Map<String, int> taskStats = {
+    'asignado': 0,
+    'enProceso': 0,
+    'recogidos': 0,
+  };
+  
   // Filter and search state
   String searchQuery = '';
   bool sortAscending = false; // false = newest first, true = oldest first
@@ -40,6 +47,31 @@ class _EmployeeProfileScreenState extends State<EmployeeProfileScreen> {
   void initState() {
     super.initState();
     _loadUserData();
+  }
+
+  @override
+  void dispose() {
+    // ✅ Clear cached data to prevent memory leaks
+    allTasks.clear();
+    filteredTasks.clear();
+    super.dispose();
+  }
+
+  /// Refresh all data
+  Future<void> _refreshData() async {
+    setState(() {
+      isLoading = true;
+    });
+    
+    try {
+      await _loadUserData();
+    } catch (e) {
+      print('❌ Error refreshing data: $e');
+    } finally {
+      if (mounted) {
+        setState(() => isLoading = false);
+      }
+    }
   }
 
   Future<void> _loadUserData() async {
@@ -71,7 +103,12 @@ class _EmployeeProfileScreenState extends State<EmployeeProfileScreen> {
           print('📸 User avatar: ${currentUserAvatar?.url ?? "No avatar"}');
         }
         
-        // Fetch employee's completed tasks
+        // ✅ Show UI first
+        if (mounted) {
+          setState(() => isLoading = false);
+        }
+        
+        // ✅ Defer heavy data loading to background
         if (currentUser?.id != null) {
           // First, get employee ID from employees table
           final employeeData = await Supabase.instance.client
@@ -83,17 +120,21 @@ class _EmployeeProfileScreenState extends State<EmployeeProfileScreen> {
           if (employeeData != null) {
             final employeeId = employeeData['idEmployee'] as int;
             
-            // Get all tasks (completed, en_proceso, asignado)
-            await _loadAllTasks(employeeId);
-            
-            // ✅ Load employee rating
-            await _loadEmployeeRating();
+            // ✅ Load tasks and rating in background
+            Future.delayed(const Duration(milliseconds: 200), () async {
+              if (!mounted) return;
+              
+              // Get all tasks (completed, en_proceso, asignado)
+              await _loadAllTasks(employeeId);
+              
+              // ✅ Load employee rating
+              await _loadEmployeeRating();
+            });
           }
         }
       }
     } catch (e) {
       print('❌ Error loading user data: $e');
-    } finally {
       if (mounted) {
         setState(() => isLoading = false);
       }
@@ -114,8 +155,15 @@ class _EmployeeProfileScreenState extends State<EmployeeProfileScreen> {
               idArticle,
               name,
               description,
+              address,
+              lat,
+              lng,
+              condition,
+              userID,
+              lastUpdate,
               categoryID,
-              category:categoryID(name)
+              category:categoryID(name),
+              user:userID(names, email)
             ),
             request:requestID(
               scheduledDay,
@@ -123,48 +171,103 @@ class _EmployeeProfileScreenState extends State<EmployeeProfileScreen> {
             )
           ''')
           .eq('employeeID', employeeId)
-          .inFilter('workflowStatus', ['completado', 'en_proceso', 'sin_asignar'])
+          .inFilter('workflowStatus', ['completado', 'en_proceso'])
           .order('lastUpdate', ascending: false);
 
-      // Get reviews and photos for these tasks
-      final tasksWithReviews = <Map<String, dynamic>>[];
-      for (var task in tasks) {
-        final articleId = task['article']?['idArticle'];
-        if (articleId != null) {
-          // Get reviews for this article
-          final reviews = await Supabase.instance.client
-              .from('reviews')
-              .select('''
-                idReview,
-                starID,
-                comment,
-                senderID,
-                receiverID,
-                created_at,
-                sender:senderID(names),
-                receiver:receiverID(names)
-              ''')
-              .eq('articleID', articleId)
-              .order('created_at', ascending: false);
+      if (!mounted) return;
+      
+      // ✅ Calculate task statistics
+      // Note: 'asignado' and 'enProceso' both count 'en_proceso' tasks
+      // since tasks go directly to 'en_proceso' when assigned
+      int enProcesoCount = tasks.where((task) => task['workflowStatus'] == 'en_proceso').length;
+      int recogidos = tasks.where((task) => task['workflowStatus'] == 'completado').length;
+      
+      setState(() {
+        taskStats = {
+          'asignado': enProcesoCount, // Same as en_proceso
+          'enProceso': enProcesoCount, // Tasks currently being worked on
+          'recogidos': recogidos,
+        };
+      });
+      
+      print('📦 Found ${tasks.length} tasks to load progressively');
+
+      // ✅ First pass: Show tasks with basic info (no photos/reviews yet)
+      final tasksWithBasicInfo = tasks.map((task) => {
+        ...task,
+        'reviews': <dynamic>[], // Empty initially
+        'photo': null, // No photo initially
+      }).toList();
+      
+      if (mounted) {
+        setState(() {
+          allTasks = tasksWithBasicInfo;
+        });
+        _applyFilters();
+        print('✅ Showing ${tasks.length} tasks with basic info');
+      }
+
+      // ✅ Second pass: Load photos and reviews in batches of 3
+      const batchSize = 3;
+      for (var i = 0; i < tasks.length; i += batchSize) {
+        if (!mounted) break;
+        
+        final batch = tasks.skip(i).take(batchSize);
+        
+        for (var task in batch) {
+          if (!mounted) break;
           
-          // Load article photo
-          final urlPattern = 'articles/$articleId';
-          final photo = await mediaDatabase.getMainPhotoByPattern(urlPattern);
-          
-          tasksWithReviews.add({
-            ...task,
-            'reviews': reviews,
-            'photo': photo,
-          });
+          final articleId = task['article']?['idArticle'];
+          if (articleId != null) {
+            // Load reviews
+            final reviews = await Supabase.instance.client
+                .from('reviews')
+                .select('''
+                  idReview,
+                  starID,
+                  comment,
+                  senderID,
+                  receiverID,
+                  created_at,
+                  sender:senderID(names),
+                  receiver:receiverID(names)
+                ''')
+                .eq('articleID', articleId)
+                .order('created_at', ascending: false);
+            
+            // Load article photo
+            final urlPattern = 'articles/$articleId';
+            final photo = await mediaDatabase.getMainPhotoByPattern(urlPattern);
+            
+            // Update this specific task with photo and reviews
+            if (mounted) {
+              final taskIndex = allTasks.indexWhere((t) => t['idTask'] == task['idTask']);
+              if (taskIndex != -1) {
+                setState(() {
+                  allTasks[taskIndex] = {
+                    ...allTasks[taskIndex],
+                    'reviews': reviews,
+                    'photo': photo,
+                  };
+                });
+              }
+            }
+          }
+        }
+        
+        // Apply filters after each batch
+        if (mounted) {
+          _applyFilters();
+          print('✅ Loaded photos/reviews for ${(i + batchSize).clamp(0, tasks.length)}/${tasks.length} tasks');
+        }
+        
+        // Small delay between batches
+        if (i + batchSize < tasks.length) {
+          await Future.delayed(const Duration(milliseconds: 150));
         }
       }
 
-      if (mounted) {
-        setState(() {
-          allTasks = tasksWithReviews;
-        });
-        _applyFilters();
-      }
+      print('✅ Finished loading all task details');
     } catch (e) {
       print('❌ Error loading tasks: $e');
     }
@@ -213,6 +316,33 @@ class _EmployeeProfileScreenState extends State<EmployeeProfileScreen> {
     }
   }
 
+  /// Generate dynamic label based on selected filters
+  String _getFilteredTasksLabel() {
+    final count = filteredTasks.length;
+    
+    // If multiple filters selected, show generic label
+    if (selectedStatusFilters.length > 1) {
+      return 'Total $count publicaciones';
+    }
+    
+    // Single filter - show specific label
+    if (selectedStatusFilters.isEmpty) {
+      return 'Total $count publicaciones';
+    }
+    
+    final filter = selectedStatusFilters.first;
+    switch (filter) {
+      case 'completado':
+        return 'Total $count recogidos';
+      case 'en_proceso':
+        return 'Total $count en procesos';
+      case 'asignado':
+        return 'Total $count asignados';
+      default:
+        return 'Total $count publicaciones';
+    }
+  }
+
   void _applyFilters() {
     List<Map<String, dynamic>> filtered = List.from(allTasks);
     
@@ -220,6 +350,14 @@ class _EmployeeProfileScreenState extends State<EmployeeProfileScreen> {
     if (selectedStatusFilters.isNotEmpty) {
       filtered = filtered.where((task) {
         final status = task['workflowStatus'] as String?;
+        // Map 'asignado' filter to 'en_proceso' status
+        if (selectedStatusFilters.contains('asignado') && status == 'en_proceso') {
+          return true;
+        }
+        // Map 'en_proceso' filter to 'en_proceso' status
+        if (selectedStatusFilters.contains('en_proceso') && status == 'en_proceso') {
+          return true;
+        }
         return selectedStatusFilters.contains(status);
       }).toList();
     }
@@ -260,11 +398,11 @@ class _EmployeeProfileScreenState extends State<EmployeeProfileScreen> {
     // Get category name
     final categoryName = article['category']?['name'] as String? ?? 'Sin categoría';
 
-    // Get owner data from article
+    // Get owner data from article (already loaded in the query)
+    final user = article['user'] as Map<String, dynamic>?;
+    final userName = user?['names'] as String? ?? 'Desconocido';
+    final userEmail = user?['email'] as String? ?? '';
     final ownerId = article['userID'] as int? ?? 0;
-    final ownerData = ownerId > 0
-        ? await _getUserData(ownerId)
-        : {'name': 'Desconocido', 'email': ''};
 
     // Convert task article to RecyclingItem for detail screen
     final recyclingItem = RecyclingItem(
@@ -275,8 +413,8 @@ class _EmployeeProfileScreenState extends State<EmployeeProfileScreen> {
       categoryName: categoryName,
       categoryID: article['categoryID'] as int?,
       ownerUserId: ownerId,
-      userName: ownerData['names']!,
-      userEmail: ownerData['email']!,
+      userName: userName,
+      userEmail: userEmail,
       latitude: (article['lat'] as num?)?.toDouble() ?? 0.0,
       longitude: (article['lng'] as num?)?.toDouble() ?? 0.0,
       address: article['address'] ?? '',
@@ -502,282 +640,377 @@ class _EmployeeProfileScreenState extends State<EmployeeProfileScreen> {
         backgroundColor: const Color(0xFF2D8A8A),
         body: isLoading
             ? const Center(child: CircularProgressIndicator(color: Colors.white))
-            : Column(
-                children: [
-                  // Profile header section
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.fromLTRB(25, 20, 25, 30),
-                    child: Row(
-                      children: [
-                        // Avatar on the left
-                        CircleAvatar(
-                          radius: 50,
-                          backgroundColor: Colors.white,
-                          backgroundImage: currentUserAvatar?.url != null
-                              ? CachedNetworkImageProvider(currentUserAvatar!.url!)
-                              : null,
-                          child: currentUserAvatar?.url == null
-                              ? const Icon(
-                                  Icons.person,
-                                  size: 60,
-                                  color: Color(0xFF2D8A8A),
-                                )
-                              : null,
-                        ),
-                        const SizedBox(width: 20),
-                        // Name and role on the right
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              // User name with menu icon
-                              Row(
+            : RefreshIndicator(
+                color: const Color(0xFF2D8A8A),
+                onRefresh: _refreshData,
+                child: CustomScrollView(
+                  slivers: [
+                    // Profile header as collapsible app bar
+                    SliverAppBar(
+                      expandedHeight: 155,
+                      floating: false,
+                      pinned: false,
+                      backgroundColor: const Color(0xFF2D8A8A),
+                      flexibleSpace: FlexibleSpaceBar(
+                        background: Column(
+                          children: [
+                            // Profile header section
+                            Container(
+                              width: double.infinity,
+                              padding: const EdgeInsets.fromLTRB(25, 20, 25, 10),
+                              child: Row(
                                 children: [
-                                  Flexible(
-                                    child: Text(
-                                      currentUser?.names ?? 'Empleado',
-                                      style: const TextStyle(
-                                        fontSize: 24,
-                                        fontWeight: FontWeight.bold,
-                                        color: Colors.white,
-                                      ),
-                                      maxLines: 2,
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
+                                  // Avatar on the left
+                                  CircleAvatar(
+                                    radius: 50,
+                                    backgroundColor: Colors.white,
+                                    child: currentUserAvatar?.url != null
+                                        ? ClipOval(
+                                            child: CachedNetworkImage(
+                                              imageUrl: currentUserAvatar!.url!,
+                                              width: 100,
+                                              height: 100,
+                                              fit: BoxFit.cover,
+                                              placeholder: (context, url) => const Center(
+                                                child: CircularProgressIndicator(
+                                                  color: Color(0xFF2D8A8A),
+                                                  strokeWidth: 2,
+                                                ),
+                                              ),
+                                              errorWidget: (context, url, error) => const Icon(
+                                                Icons.person,
+                                                size: 60,
+                                                color: Color(0xFF2D8A8A),
+                                              ),
+                                            ),
+                                          )
+                                        : const Icon(
+                                            Icons.person,
+                                            size: 60,
+                                            color: Color(0xFF2D8A8A),
+                                          ),
                                   ),
-                                  const SizedBox(width: 8),
-                                  GestureDetector(
-                                    onTap: _showProfileMenu,
-                                    child: Container(
-                                      padding: const EdgeInsets.all(6),
-                                      decoration: BoxDecoration(
-                                        color: Colors.white.withOpacity(0.2),
-                                        shape: BoxShape.circle,
-                                      ),
-                                      child: const Icon(
-                                        Icons.more_vert,
-                                        color: Colors.white,
-                                        size: 18,
-                                      ),
+                                  const SizedBox(width: 20),
+                                  // Name and role on the right
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        // User name with menu icon
+                                        Row(
+                                          children: [
+                                            Flexible(
+                                              child: Text(
+                                                currentUser?.names ?? 'Empleado',
+                                                style: const TextStyle(
+                                                  fontSize: 24,
+                                                  fontWeight: FontWeight.bold,
+                                                  color: Colors.white,
+                                                ),
+                                                maxLines: 2,
+                                                overflow: TextOverflow.ellipsis,
+                                              ),
+                                            ),
+                                            const SizedBox(width: 8),
+                                            GestureDetector(
+                                              onTap: _showProfileMenu,
+                                              child: Container(
+                                                padding: const EdgeInsets.all(6),
+                                                decoration: BoxDecoration(
+                                                  color: Colors.white.withOpacity(0.2),
+                                                  shape: BoxShape.circle,
+                                                ),
+                                                child: const Icon(
+                                                  Icons.more_vert,
+                                                  color: Colors.white,
+                                                  size: 18,
+                                                ),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                        const SizedBox(height: 4),
+                                        // User role
+                                        const Text(
+                                          'Empleado',
+                                          style: TextStyle(
+                                            fontSize: 14,
+                                            color: Colors.white70,
+                                          ),
+                                        ),
+                                        // ✅ Rating display
+                                        if (totalReviews > 0) ...[
+                                          const SizedBox(height: 8),
+                                          Row(
+                                            children: [
+                                              const Icon(
+                                                Icons.star,
+                                                color: Colors.amber,
+                                                size: 20,
+                                              ),
+                                              const SizedBox(width: 4),
+                                              Text(
+                                                employeeRating.toStringAsFixed(1),
+                                                style: const TextStyle(
+                                                  fontSize: 16,
+                                                  fontWeight: FontWeight.bold,
+                                                  color: Colors.white,
+                                                ),
+                                              ),
+                                              const SizedBox(width: 4),
+                                              Text(
+                                                '($totalReviews ${totalReviews == 1 ? 'reseña' : 'reseñas'})',
+                                                style: const TextStyle(
+                                                  fontSize: 12,
+                                                  color: Colors.white70,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ],
+                                      ],
                                     ),
                                   ),
                                 ],
                               ),
-                              const SizedBox(height: 4),
-                              // User role
-                              const Text(
-                                'Empleado',
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  color: Colors.white70,
+                            ),
+                            const SizedBox(height: 20),
+                          ],
+                        ),
+                      ),
+                    ),
+                    // Objetos card - inline between header and tasks section
+                    SliverToBoxAdapter(
+                      child: Transform.translate(
+                        offset: const Offset(0, 55),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 25),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 15),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(15),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withOpacity(0.15),
+                                  blurRadius: 15,
+                                  offset: const Offset(0, 5),
                                 ),
-                              ),
-                              // ✅ Rating display
-                              if (totalReviews > 0) ...[
-                                const SizedBox(height: 8),
+                              ],
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Text(
+                                  'Objetos',
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w600,
+                                    color: Color(0xFF2D8A8A),
+                                  ),
+                                ),
+                                const SizedBox(height: 15),
                                 Row(
+                                  mainAxisAlignment: MainAxisAlignment.spaceAround,
                                   children: [
-                                    const Icon(
-                                      Icons.star,
-                                      color: Colors.amber,
-                                      size: 20,
+                                    _buildObjectStatItem(
+                                      '${taskStats['asignado']}',
+                                      'Asignado',
+                                      Colors.blue,
                                     ),
-                                    const SizedBox(width: 4),
-                                    Text(
-                                      employeeRating.toStringAsFixed(1),
-                                      style: const TextStyle(
-                                        fontSize: 16,
-                                        fontWeight: FontWeight.bold,
-                                        color: Colors.white,
-                                      ),
+                                    _buildObjectStatItem(
+                                      '${taskStats['enProceso']}',
+                                      'En Procesos',
+                                      Colors.orange,
                                     ),
-                                    const SizedBox(width: 4),
-                                    Text(
-                                      '($totalReviews ${totalReviews == 1 ? 'reseña' : 'reseñas'})',
-                                      style: const TextStyle(
-                                        fontSize: 12,
-                                        color: Colors.white70,
-                                      ),
+                                    _buildObjectStatItem(
+                                      '${taskStats['recogidos']}',
+                                      'Recogidos',
+                                      Colors.green,
                                     ),
                                   ],
                                 ),
                               ],
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 20),
-                  // Tasks section
-                  Expanded(
-                    child: Container(
-                      decoration: const BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.only(
-                          topLeft: Radius.circular(30),
-                          topRight: Radius.circular(30),
-                        ),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Padding(
-                            padding: EdgeInsets.fromLTRB(25, 25, 25, 10),
-                            child: Text(
-                              'Mis Tareas',
-                              style: TextStyle(
-                                fontSize: 20,
-                                fontWeight: FontWeight.bold,
-                                color: Color(0xFF2D8A8A),
-                              ),
                             ),
                           ),
-                          // Search bar
-                          Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 25),
-                            child: TextField(
-                              onChanged: (value) {
-                                setState(() {
-                                  searchQuery = value;
-                                });
-                                _applyFilters();
-                              },
-                              decoration: InputDecoration(
-                                hintText: 'Buscar',
-                                prefixIcon: const Icon(Icons.search, color: Colors.grey),
-                                suffixIcon: searchQuery.isNotEmpty
-                                    ? IconButton(
-                                        icon: const Icon(Icons.clear, color: Colors.grey),
+                        ),
+                      ),
+                    ),
+                    // White tasks section with rounded top
+                    SliverToBoxAdapter(
+                      child: Container(
+                        decoration: const BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.only(
+                            topLeft: Radius.circular(30),
+                            topRight: Radius.circular(30),
+                          ),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const SizedBox(height: 80),
+                            const Padding(
+                              padding: EdgeInsets.fromLTRB(25, 0, 25, 10),
+                              child: Text(
+                                'Mis Tareas',
+                                style: TextStyle(
+                                  fontSize: 20,
+                                  fontWeight: FontWeight.bold,
+                                  color: Color(0xFF2D8A8A),
+                                ),
+                              ),
+                            ),
+                            // Search bar
+                            Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 25),
+                              child: TextField(
+                                onChanged: (value) {
+                                  setState(() {
+                                    searchQuery = value;
+                                  });
+                                  _applyFilters();
+                                },
+                                decoration: InputDecoration(
+                                  hintText: 'Buscar',
+                                  prefixIcon: const Icon(Icons.search, color: Colors.grey),
+                                  suffixIcon: searchQuery.isNotEmpty
+                                      ? IconButton(
+                                          icon: const Icon(Icons.clear, color: Colors.grey),
+                                          onPressed: () {
+                                            setState(() {
+                                              searchQuery = '';
+                                            });
+                                            _applyFilters();
+                                          },
+                                        )
+                                      : null,
+                                  filled: true,
+                                  fillColor: Colors.grey[100],
+                                  border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                    borderSide: BorderSide.none,
+                                  ),
+                                  contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 10),
+                            // Tasks count and controls
+                            Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 25),
+                              child: Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Text(
+                                    _getFilteredTasksLabel(),
+                                    style: TextStyle(
+                                      fontSize: 14,
+                                      color: Colors.grey[600],
+                                    ),
+                                  ),
+                                  Row(
+                                    children: [
+                                      // Sort button
+                                      IconButton(
+                                        icon: Icon(
+                                          sortAscending ? Icons.arrow_upward : Icons.arrow_downward,
+                                          color: const Color(0xFF2D8A8A),
+                                          size: 20,
+                                        ),
                                         onPressed: () {
                                           setState(() {
-                                            searchQuery = '';
+                                            sortAscending = !sortAscending;
                                           });
                                           _applyFilters();
                                         },
-                                      )
-                                    : null,
-                                filled: true,
-                                fillColor: Colors.grey[100],
-                                border: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(12),
-                                  borderSide: BorderSide.none,
-                                ),
-                                contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                                        tooltip: sortAscending ? 'Más antiguos primero' : 'Más recientes primero',
+                                      ),
+                                      // Filter button
+                                      IconButton(
+                                        icon: Icon(
+                                          Icons.filter_list,
+                                          color: selectedStatusFilters.length == 1 && selectedStatusFilters.contains('completado')
+                                              ? Colors.grey[600]
+                                              : const Color(0xFF2D8A8A),
+                                          size: 20,
+                                        ),
+                                        onPressed: _showStatusFilterDialog,
+                                        tooltip: 'Filtrar por estado',
+                                      ),
+                                    ],
+                                  ),
+                                ],
                               ),
                             ),
-                          ),
-                          const SizedBox(height: 10),
-                          // Tasks count and controls
-                          Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 25),
-                            child: Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                Text(
-                                  'Total ${filteredTasks.length} tareas',
-                                  style: TextStyle(
-                                    fontSize: 14,
-                                    color: Colors.grey[600],
-                                  ),
-                                ),
-                                Row(
-                                  children: [
-                                    // Sort button
-                                    IconButton(
-                                      icon: Icon(
-                                        sortAscending ? Icons.arrow_upward : Icons.arrow_downward,
-                                        color: const Color(0xFF2D8A8A),
-                                        size: 20,
-                                      ),
-                                      onPressed: () {
-                                        setState(() {
-                                          sortAscending = !sortAscending;
-                                        });
-                                        _applyFilters();
-                                      },
-                                      tooltip: sortAscending ? 'Más antiguos primero' : 'Más recientes primero',
-                                    ),
-                                    // Filter button
-                                    IconButton(
-                                      icon: Icon(
-                                        Icons.filter_list,
-                                        color: selectedStatusFilters.length == 1 && selectedStatusFilters.contains('completado')
-                                            ? Colors.grey[600]
-                                            : const Color(0xFF2D8A8A),
-                                        size: 20,
-                                      ),
-                                      onPressed: _showStatusFilterDialog,
-                                      tooltip: 'Filtrar por estado',
-                                    ),
-                                  ],
-                                ),
-                              ],
-                            ),
-                          ),
-                          const SizedBox(height: 15),
-                          // Grid of tasks
-                          Expanded(
-                            child: _buildTasksGrid(),
-                          ),
-                        ],
+                            const SizedBox(height: 15),
+                          ],
+                        ),
                       ),
                     ),
-                  ),
-                ],
+                    // Grid of tasks as sliver
+                    _buildTasksSliverGrid(),
+                  ],
+                ),
               ),
       ),
     );
   }
 
-  // Build tasks grid
-  Widget _buildTasksGrid() {
+  // Build tasks grid as sliver
+  Widget _buildTasksSliverGrid() {
     if (filteredTasks.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              Icons.assignment_outlined,
-              size: 80,
-              color: Colors.grey[300],
-            ),
-            const SizedBox(height: 16),
-            Text(
-              searchQuery.isNotEmpty
-                  ? 'No se encontraron tareas'
-                  : 'No hay tareas disponibles',
-              style: TextStyle(
-                fontSize: 16,
-                color: Colors.grey[600],
+      return SliverFillRemaining(
+        hasScrollBody: false,
+        child: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.assignment_outlined,
+                size: 60,
+                color: Colors.grey[300],
               ),
-            ),
-          ],
+              const SizedBox(height: 12),
+              Text(
+                searchQuery.isNotEmpty
+                    ? 'No se encontraron tareas'
+                    : 'No hay tareas disponibles',
+                style: TextStyle(
+                  fontSize: 14,
+                  color: Colors.grey[600],
+                ),
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ),
         ),
       );
     }
 
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 15),
-      child: GridView.builder(
+    return SliverPadding(
+      padding: const EdgeInsets.fromLTRB(15, 10, 15, 15),
+      sliver: SliverGrid(
         gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
           crossAxisCount: 2,
           mainAxisSpacing: 10,
           crossAxisSpacing: 10,
           childAspectRatio: 0.85,
         ),
-        itemCount: filteredTasks.length,
-        itemBuilder: (context, index) {
-          final task = filteredTasks[index];
-          return GestureDetector(
-            onTap: () async {
-              // Navigate to detail screen instead of showing dialog
-              await _navigateToTaskDetail(task);
-            },
-            child: _buildTaskCard(task),
-          );
-        },
+        delegate: SliverChildBuilderDelegate(
+          (context, index) {
+            final task = filteredTasks[index];
+            return GestureDetector(
+              onTap: () async {
+                // Navigate to detail screen instead of showing dialog
+                await _navigateToTaskDetail(task);
+              },
+              child: _buildTaskCard(task),
+            );
+          },
+          childCount: filteredTasks.length,
+        ),
       ),
     );
   }
@@ -1143,6 +1376,30 @@ class _EmployeeProfileScreenState extends State<EmployeeProfileScreen> {
             ),
         ],
       ),
+    );
+  }
+
+  Widget _buildObjectStatItem(String value, String label, Color color) {
+    return Column(
+      children: [
+        Text(
+          value,
+          style: TextStyle(
+            fontSize: 28,
+            fontWeight: FontWeight.bold,
+            color: color,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: 12,
+            color: Colors.grey[600],
+          ),
+          textAlign: TextAlign.center,
+        ),
+      ],
     );
   }
 }

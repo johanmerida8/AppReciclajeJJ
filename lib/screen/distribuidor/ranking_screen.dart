@@ -71,7 +71,7 @@ class _RankingScreenState extends State<RankingScreen> {
 
       // Fetch rankings from current_ranking view
       final rankingsData = await Supabase.instance.client
-          .from('current_ranking')
+          .from('current_ranking2')
           .select()
           .order('position', ascending: true)
           .limit(100);
@@ -117,31 +117,40 @@ class _RankingScreenState extends State<RankingScreen> {
       }
 
       // Calculate days remaining in current cycle by querying the cycle table
-      if (rankingsData.isNotEmpty) {
+       if (rankingsData.isNotEmpty) {
         final cycleId = rankingsData.first['idCycle'];
-        final cycleState = rankingsData.first['cyclestate'];
+        // final cycleState = rankingsData.first['cyclestate'];
         
         if (cycleId != null) {
           try {
             // Query cycle table directly to get endDate
+            final now = DateTime.now();
+            
             final cycleData = await Supabase.instance.client
                 .from('cycle')
-                .select('endDate, state')
+                .select('endDate, startDate, state, name')
                 .eq('idCycle', cycleId)
-                .single();
+                .eq('state', 1)  // ✅ Only active cycles
+                .lte('startDate', now.toIso8601String())  // ✅ Must have started
+                .gte('endDate', now.toIso8601String())    // ✅ Must not have ended
+                .maybeSingle();
             
-            final endDateStr = cycleData['endDate'] as String?;
-            print('🔍 Debug - cycleId: $cycleId, cycleState: $cycleState, endDateStr: $endDateStr');
+            final endDateStr = cycleData?['endDate'] as String?;
+            final startDateStr = cycleData?['startDate'] as String?;
+            final cycleName = cycleData?['name'];
             
-            if (endDateStr != null) {
+            print('🔍 Debug - cycleId: $cycleId, cycleName: $cycleName');
+            print('   📅 Period: $startDateStr to $endDateStr');
+            print('   🕒 Current: ${now.toIso8601String()}');
+            
+            if (endDateStr != null && cycleData != null) {
               final endDate = DateTime.parse(endDateStr);
-              final now = DateTime.now();
               
               // Calculate difference in days
               final difference = endDate.difference(DateTime(now.year, now.month, now.day));
               final daysLeft = difference.inDays + 1;
               
-              if (daysLeft <= 0 || cycleState == 0) {
+              if (daysLeft <= 0) {
                 // Cycle has expired
                 _isCycleExpired = true;
                 _daysRemaining = null;
@@ -153,8 +162,10 @@ class _RankingScreenState extends State<RankingScreen> {
                 print('✅ Cycle active. $daysLeft days remaining until $endDate');
               }
             } else {
-              _isCycleExpired = false;
+              // No active cycle found for current date period
+              _isCycleExpired = true;
               _daysRemaining = null;
+              print('⚠️ No active cycle found for current date period');
             }
           } catch (e) {
             print('❌ Error loading cycle data: $e');
@@ -247,6 +258,11 @@ class _RankingScreenState extends State<RankingScreen> {
                   ),
                 ],
               ),
+      ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: _loadRankings,
+        backgroundColor: const Color(0xFF2D8A8A),
+        child: const Icon(Icons.refresh, color: Colors.white),
       ),
     );
   }

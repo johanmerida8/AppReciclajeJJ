@@ -236,8 +236,8 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
               const SizedBox(height: 30),
 
               // Filter tabs header
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const Text(
                     'Mis Tareas',
@@ -247,19 +247,24 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
                       color: Color(0xFF2D8A8A),
                     ),
                   ),
+                  const SizedBox(height: 12),
                   // Filter chips
                   Row(
                     children: [
-                      _buildFilterChip(
-                        label: 'Pendientes',
-                        value: 'pendiente',
-                        count: _pendingTasksCount,
+                      Expanded(
+                        child: _buildFilterChip(
+                          label: 'Pendientes',
+                          value: 'pendiente',
+                          count: _pendingTasksCount,
+                        ),
                       ),
                       const SizedBox(width: 8),
-                      _buildFilterChip(
-                        label: 'Completadas',
-                        value: 'completado',
-                        count: _completedTasksCount,
+                      Expanded(
+                        child: _buildFilterChip(
+                          label: 'Completadas',
+                          value: 'completado',
+                          count: _completedTasksCount,
+                        ),
                       ),
                     ],
                   ),
@@ -577,14 +582,18 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
           ),
         ),
         child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(
-              label,
-              style: TextStyle(
-                color: isSelected ? Colors.white : Colors.grey[700],
-                fontSize: 13,
-                fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+            Flexible(
+              child: Text(
+                label,
+                style: TextStyle(
+                  color: isSelected ? Colors.white : Colors.grey[700],
+                  fontSize: 13,
+                  fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+                ),
+                overflow: TextOverflow.ellipsis,
               ),
             ),
             const SizedBox(width: 6),

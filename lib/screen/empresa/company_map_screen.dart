@@ -1,5 +1,6 @@
 import 'dart:math';
 import 'package:flutter/material.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:reciclaje_app/auth/auth_service.dart';
@@ -20,7 +21,9 @@ import 'package:reciclaje_app/utils/category_utils.dart';
 import 'package:reciclaje_app/screen/distribuidor/detail_recycle_screen.dart';
 import 'package:reciclaje_app/screen/empresa/company_notifications_screen.dart'; // ✅ Add import
 import 'package:reciclaje_app/components/schedule_pickup_dialog.dart'; // ✅ Add schedule dialog import
+import 'package:reciclaje_app/widgets/status_indicator.dart'; // ✅ Add StatusIndicators widget
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class CompanyMapScreen extends StatefulWidget {
   const CompanyMapScreen({super.key});
@@ -63,7 +66,6 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
   int _currentArticleIndex = 0;
   bool _showArticleNavigation = false;
   double _currentZoom = 13.0;
-  Map<LatLng, bool> _expandedClusters = {};
 
   // Location state
   LatLng? _userLocation;
@@ -76,8 +78,10 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
   String _errorMessage = '';
 
   // Connection state
+  bool _isConnected = true;
   bool _hasLocationPermission = false;
   bool _isLocationServiceEnabled = false;
+  bool _hasCheckedLocation = false;
 
   @override
   void initState() {
@@ -89,6 +93,12 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    // ✅ Clear cached data to prevent memory leaks
+    _allItems.clear();
+    _filteredItems.clear();
+    _employees.clear();
+    _requestsByArticleId.clear();
+    _tasksByArticleId.clear();
     super.dispose();
   }
 
@@ -128,12 +138,24 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
     await _loadEmployees();
     await _loadRequestsAndTasks(); // ✅ Load requests and tasks for status tracking
     await _loadApprovedRequestCount(); // ✅ Load notification count
-    await _loadData();
+    
+    // ✅ Show map immediately after basic data loads
+    if (mounted) {
+      setState(() => _isLoading = false);
+    }
+    
     await _checkLocationServices();
     
     if (_isLocationServiceEnabled && _hasLocationPermission) {
       await _loadUserLocation();
     }
+    
+    // ✅ Load articles after map is ready (deferred for faster initial render)
+    Future.delayed(const Duration(milliseconds: 300), () {
+      if (mounted) {
+        _loadData();
+      }
+    });
   }
 
   Future<void> _loadUserData() async {
@@ -264,33 +286,39 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
     if (_companyId == null) return;
     
     try {
+      final prefs = await SharedPreferences.getInstance();
+      final readNotifications = prefs.getStringList('read_company_notifications') ?? [];
+      
       final approvedRequests = await Supabase.instance.client
           .from('request')
           .select('idRequest')
           .eq('companyID', _companyId!)
           .eq('status', 'aprobado');
       
+      // Filter out read notifications
+      final unreadRequests = (approvedRequests as List).where((req) {
+        final requestId = req['idRequest'].toString();
+        return !readNotifications.contains(requestId);
+      }).toList();
+      
       if (mounted) {
         setState(() {
-          _approvedRequestCount = approvedRequests.length;
+          _approvedRequestCount = unreadRequests.length;
         });
       }
-      print('✅ Loaded $_approvedRequestCount approved requests');
+      print('📊 Unread approved requests: ${unreadRequests.length} out of ${approvedRequests.length} total');
     } catch (e) {
       print('❌ Error loading approved request count: $e');
     }
   }
 
   Future<void> _loadData({bool forceRefresh = false}) async {
+    // ✅ Don't change loading state - keep map visible
+    
     if (!forceRefresh && await _loadFromCache()) {
       _loadFreshDataInBackground();
       return;
     }
-
-    setState(() {
-      _isLoading = true;
-      _hasError = false;
-    });
 
     await _loadFreshData();
   }
@@ -318,22 +346,45 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
       final items = await _dataService.loadRecyclingItems();
       final categories = await _dataService.loadCategories();
 
-      if (mounted) {
-        setState(() {
-          _allItems = items;
-          _applyFilters();
-          _hasError = false;
-          _isLoading = false;
-        });
+      if (!mounted) return;
+      
+      print('📦 Found ${items.length} items to load progressively');
 
-        await _cacheService.saveCache(items, categories, _currentUserId);
-        print('✅ Loaded ${items.length} items fresh');
-
-        if (_filteredItems.isNotEmpty) {
-          Future.delayed(const Duration(milliseconds: 300), () {
-            if (mounted) _fitMapToShowAllArticles();
+      // ✅ Load items in batches of 10 for smooth progressive rendering
+      const batchSize = 10;
+      final allItems = <RecyclingItem>[];
+      
+      for (var i = 0; i < items.length; i += batchSize) {
+        if (!mounted) break;
+        
+        final batch = items.skip(i).take(batchSize).toList();
+        allItems.addAll(batch);
+        
+        // ✅ Update UI with each batch
+        if (mounted) {
+          setState(() {
+            _allItems = List.from(allItems);
+            _applyFilters();
+            _hasError = false;
+            _isLoading = false;
           });
+          print('✅ Loaded batch: ${allItems.length}/${items.length} items');
         }
+        
+        // Small delay between batches for smooth rendering
+        if (i + batchSize < items.length) {
+          await Future.delayed(const Duration(milliseconds: 80));
+        }
+      }
+
+      // Save cache after all items loaded
+      await _cacheService.saveCache(items, categories, _currentUserId);
+      print('✅ Finished loading ${items.length} items');
+
+      if (mounted && _filteredItems.isNotEmpty) {
+        Future.delayed(const Duration(milliseconds: 300), () {
+          if (mounted) _fitMapToShowAllArticles();
+        });
       }
     } catch (e) {
       if (mounted) {
@@ -389,10 +440,13 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
   Future<void> _checkLocationServices() async {
     final status = await _locationService.checkLocationStatus();
     
-    setState(() {
-      _isLocationServiceEnabled = status['serviceEnabled'] ?? false;
-      _hasLocationPermission = status['hasPermission'] ?? false;
-    });
+    if (mounted) {
+      setState(() {
+        _isLocationServiceEnabled = status['serviceEnabled'] ?? false;
+        _hasLocationPermission = status['hasPermission'] ?? false;
+        _hasCheckedLocation = true;
+      });
+    }
   }
 
   void _applyFilters() {
@@ -469,19 +523,27 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
   }
 
   Future<void> _refreshData() async {
-    await _cacheService.clearCache();
-    await _loadData(forceRefresh: true);
-    await _loadEmployees();
-    await _loadRequestsAndTasks(); // ✅ Refresh requests and tasks
-    await _loadApprovedRequestCount(); // ✅ Refresh notification count
+    setState(() => _isLoading = true);
+    
+    try {
+      await _cacheService.clearCache();
+      await _loadData(forceRefresh: true);
+      await _loadEmployees();
+      await _loadRequestsAndTasks(); // ✅ Refresh requests and tasks
+      await _loadApprovedRequestCount(); // ✅ Refresh notification count
 
-    final lastLocation = _locationService.lastKnownLocation ?? _userLocation;
-    if (lastLocation != null) {
-      Future.microtask(() {
-        if (_mapService.isMapReady(_mapController)) {
-          _mapController.move(lastLocation, _currentZoom);
-        }
-      });
+      final lastLocation = _locationService.lastKnownLocation ?? _userLocation;
+      if (lastLocation != null) {
+        Future.microtask(() {
+          if (_mapService.isMapReady(_mapController)) {
+            _mapController.move(lastLocation, _currentZoom);
+          }
+        });
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
     }
   }
 
@@ -606,7 +668,9 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
+            onPressed: () {
+              Navigator.of(context).pop();
+            },
             child: Text('Cancelar', style: TextStyle(color: Colors.grey[600])),
           ),
           ElevatedButton(
@@ -799,9 +863,6 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
           if (hasGesture) {
             setState(() {
               _currentZoom = position.zoom;
-              if (position.zoom >= 14 || position.zoom < 12) {
-                _expandedClusters.clear();
-              }
             });
           }
         }
@@ -842,12 +903,8 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
     List<Marker> markers = [];
 
     for (var cluster in clusters) {
-      final isExpanded = _expandedClusters[cluster.center] ?? false;
-
       if (cluster.isSingleItem) {
         markers.add(_buildSingleMarker(cluster.items[0]));
-      } else if (isExpanded) {
-        markers.addAll(_buildExpandedClusterMarkers(cluster));
       } else {
         markers.add(_buildClusterMarker(cluster));
       }
@@ -902,12 +959,8 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
       height: 70,
       child: GestureDetector(
         onTap: () {
-          setState(() {
-            _expandedClusters[cluster.center] = true;
-          });
-          if (_mapService.isMapReady(_mapController)) {
-            _mapController.move(cluster.center, min(_currentZoom + 2, 18.0));
-          }
+          // ✅ Show navigation modal instead of expanding cluster
+          _onClusterTap(cluster);
         },
         child: Container(
           decoration: BoxDecoration(
@@ -946,92 +999,83 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
       ),
     );
   }
-
-  List<Marker> _buildExpandedClusterMarkers(MarkerCluster cluster) {
-    List<Marker> markers = [];
-    final itemCount = cluster.items.length;
-    const double radius = 0.0015;
-
-    for (int i = 0; i < itemCount; i++) {
-      double angle = (2 * pi * i) / itemCount;
-      double offsetLat = radius * cos(angle);
-      double offsetLng = radius * sin(angle);
-
-      LatLng position = LatLng(
-        cluster.center.latitude + offsetLat,
-        cluster.center.longitude + offsetLng,
-      );
-
-      final item = cluster.items[i];
-      final isSelected = _showArticleNavigation && 
-                        _filteredItems[_currentArticleIndex].id == item.id;
-      final status = _getItemStatus(item);
-      final color = _getStatusColor(status);
-
-      markers.add(
-        Marker(
-          point: position,
-          width: isSelected ? 60 : 50,
-          height: isSelected ? 60 : 50,
-          child: GestureDetector(
-            onTap: () => _onMarkerTap(item),
-            child: Container(
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: color,
-                border: isSelected
-                    ? Border.all(color: Colors.white, width: 4)
-                    : Border.all(color: Colors.white, width: 2),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.3),
-                    blurRadius: 8,
-                    offset: const Offset(0, 4),
-                  ),
-                ],
-              ),
-              child: Center(
-                child: Icon(
-                  _getStatusIcon(status),
-                  color: Colors.white,
-                  size: isSelected ? 28 : 24,
-                ),
-              ),
-            ),
-          ),
-        ),
-      );
+  
+  /// ✅ Handle cluster tap - Show navigation modal
+  void _onClusterTap(MarkerCluster cluster) {
+    // Find the index of the first article in the cluster
+    final firstItem = cluster.items[0];
+    final index = _filteredItems.indexWhere((i) => i.id == firstItem.id);
+    
+    // Activate navigation and update index
+    setState(() {
+      _currentArticleIndex = index;
+      _showArticleNavigation = true;
+    });
+    
+    // ✅ Center map on the cluster
+    if (_mapService.isMapReady(_mapController)) {
+      _mapController.move(cluster.center, 16.0);
     }
-
-    markers.add(_buildCollapseMarker(cluster));
-    return markers;
+    
+    // Show modal with navigation through the cluster's articles
+    _showClusterNavigationModal(cluster);
+    
+    print('📦 Cluster tapped - ${cluster.count} articles to navigate');
   }
+  
+  /// ✅ Modal for navigating through clustered articles
+  void _showClusterNavigationModal(MarkerCluster cluster) {
+    if (!mounted) return;
 
-  Marker _buildCollapseMarker(MarkerCluster cluster) {
-    return Marker(
-      point: cluster.center,
-      width: 40,
-      height: 40,
-      child: GestureDetector(
-        onTap: () {
-          setState(() {
-            _expandedClusters[cluster.center] = false;
-          });
+    final clusterItems = cluster.items;
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      isDismissible: true,
+      enableDrag: true,
+      builder: (context) => _CompanyArticleNavigationModal(
+        articles: clusterItems,
+        initialIndex: 0,
+        mediaDatabase: _mediaDatabase,
+        onAssignEmployee: (item) {
+          Navigator.pop(context);
+          _showSendRequestDialog(item);
         },
-        child: Container(
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: Colors.red,
-            border: Border.all(color: Colors.white, width: 2),
-          ),
-          child: const Icon(Icons.close, color: Colors.white, size: 20),
-        ),
+        onAssignEmployeeApproved: (article, request) {
+          Navigator.pop(context);
+          _showAssignEmployeeDialogWithRequest(article, request);
+        },
+        onNavigateToDetails: (article) {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => DetailRecycleScreen(item: article),
+            ),
+          );
+        },
+        onArticleChange: (article) {
+          // Update map position when navigating
+          if (_mapService.isMapReady(_mapController)) {
+            _mapController.move(LatLng(article.latitude, article.longitude), 16.0);
+          }
+        },
       ),
-    );
+    ).then((_) {
+      if (mounted) {
+        setState(() {
+          _showArticleNavigation = false;
+        });
+      }
+    });
   }
 
   void _onMarkerTap(RecyclingItem item) {
     final index = _filteredItems.indexWhere((i) => i.id == item.id);
+    
+    // ✅ Find nearby articles within 300 meters
+    final nearbyArticles = _findNearbyArticles(item, maxDistance: 300.0);
     
     setState(() {
       _currentArticleIndex = index;
@@ -1039,10 +1083,104 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
     });
     
     if (_mapService.isMapReady(_mapController)) {
-      _mapController.move(LatLng(item.latitude, item.longitude), 15.0);
+      _mapController.move(LatLng(item.latitude, item.longitude), 16.0);
     }
     
-    _showArticleDetailModal(item);
+    // ✅ Show navigation modal if multiple articles nearby, otherwise single modal
+    if (nearbyArticles.length > 1) {
+      _showArticleNavigationModal(nearbyArticles, item);
+    } else {
+      _showArticleDetailModal(item);
+    }
+  }
+  
+  /// ✅ Find articles near the given article
+  List<RecyclingItem> _findNearbyArticles(RecyclingItem item, {required double maxDistance}) {
+    List<RecyclingItem> nearbyArticles = [item]; // Include current article
+    
+    for (var otherItem in _filteredItems) {
+      if (otherItem.id == item.id) continue; // Skip same article
+      
+      final distance = _calculateDistance(
+        item.latitude,
+        item.longitude,
+        otherItem.latitude,
+        otherItem.longitude,
+      );
+      
+      if (distance <= maxDistance) {
+        nearbyArticles.add(otherItem);
+      }
+    }
+    
+    return nearbyArticles;
+  }
+  
+  /// ✅ Calculate distance between two points in meters (Haversine formula)
+  double _calculateDistance(double lat1, double lon1, double lat2, double lon2) {
+    const double earthRadius = 6371000; // meters
+    
+    final dLat = _toRadians(lat2 - lat1);
+    final dLon = _toRadians(lon2 - lon1);
+    
+    final a = sin(dLat / 2) * sin(dLat / 2) +
+        cos(_toRadians(lat1)) * cos(_toRadians(lat2)) *
+        sin(dLon / 2) * sin(dLon / 2);
+    
+    final c = 2 * atan2(sqrt(a), sqrt(1 - a));
+    return earthRadius * c;
+  }
+  
+  double _toRadians(double degrees) {
+    return degrees * pi / 180;
+  }
+  
+  /// ✅ Show article navigation modal (with anterior/siguiente buttons)
+  void _showArticleNavigationModal(List<RecyclingItem> articles, RecyclingItem currentItem) {
+    if (!mounted) return;
+
+    final currentIndex = articles.indexWhere((a) => a.id == currentItem.id);
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      isDismissible: true,
+      enableDrag: true,
+      builder: (context) => _CompanyArticleNavigationModal(
+        articles: articles,
+        initialIndex: currentIndex,
+        mediaDatabase: _mediaDatabase,
+        onAssignEmployee: (item) {
+          Navigator.pop(context);
+          _showSendRequestDialog(item);
+        },
+        onAssignEmployeeApproved: (article, request) {
+          Navigator.pop(context);
+          _showAssignEmployeeDialogWithRequest(article, request);
+        },
+        onNavigateToDetails: (article) {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => DetailRecycleScreen(item: article),
+            ),
+          );
+        },
+        onArticleChange: (article) {
+          // Update map position when navigating
+          if (_mapService.isMapReady(_mapController)) {
+            _mapController.move(LatLng(article.latitude, article.longitude), 16.0);
+          }
+        },
+      ),
+    ).then((_) {
+      if (mounted) {
+        setState(() {
+          _showArticleNavigation = false;
+        });
+      }
+    });
   }
 
   void _showArticleDetailModal(RecyclingItem item) async {
@@ -1140,7 +1278,7 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
           const SizedBox(height: 10),
           FloatingActionButton(
             heroTag: 'location',
-            onPressed: _goToUserLocation,
+            onPressed: _showLocationMenu,
             backgroundColor: const Color(0xFF2D8A8A),
             child: const Icon(Icons.my_location, color: Colors.white),
           ),
@@ -1149,116 +1287,403 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
     );
   }
 
+  /// ✅ Mostrar menú de opciones de ubicación
+  void _showLocationMenu() {
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) => Container(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.location_on, color: Color(0xFF2D8A8A)),
+                const SizedBox(width: 12),
+                const Text(
+                  'Opciones de Ubicación',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    color: Color(0xFF2D8A8A),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 20),
+            ListTile(
+              leading: const CircleAvatar(
+                backgroundColor: Color(0xFF2D8A8A),
+                child: Icon(Icons.my_location, color: Colors.white),
+              ),
+              title: const Text(
+                'Ir a mi ubicación',
+                style: TextStyle(fontWeight: FontWeight.w600),
+              ),
+              subtitle: const Text('Centrar mapa en mi posición actual'),
+              onTap: () {
+                Navigator.pop(context);
+                _goToUserLocation();
+              },
+            ),
+            ListTile(
+              leading: CircleAvatar(
+                backgroundColor: const Color(0xFF2D8A8A),
+                child: Icon(
+                  _showUserMarker ? Icons.visibility : Icons.visibility_off,
+                  color: Colors.white,
+                ),
+              ),
+              title: const Text(
+                'Ocultar mi marcador',
+                style: TextStyle(fontWeight: FontWeight.w600),
+              ),
+              subtitle: const Text('El marcador azul desaparecerá del mapa'),
+              trailing: Switch(
+                value: _showUserMarker,
+                onChanged: (value) {
+                  setState(() {
+                    _showUserMarker = value;
+                  });
+                  Navigator.pop(context);
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(
+                        _showUserMarker 
+                            ? '✅ Marcador visible' 
+                            : '❌ Marcador oculto'
+                      ),
+                      duration: const Duration(seconds: 1),
+                      backgroundColor: _showUserMarker ? Colors.green : Colors.grey,
+                    ),
+                  );
+                },
+                activeColor: const Color(0xFF2D8A8A),
+              ),
+            ),
+            const SizedBox(height: 16),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// ✅ Ir a la ubicación del usuario
   Future<void> _goToUserLocation() async {
+    // ✅ Primero verificar el estado del GPS
     await _checkLocationServices();
     
+    // Si GPS está deshabilitado o sin permisos, mostrar diálogo de habilitación
     if (!_isLocationServiceEnabled || !_hasLocationPermission) {
-      if (mounted) {
-        showDialog(
-          context: context,
-          builder: (context) => AlertDialog(
-            title: const Text('Ubicación no disponible'),
-            content: const Text('Por favor, activa la ubicación en la configuración.'),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('OK'),
-              ),
-            ],
-          ),
-        );
-      }
+      _showEnableLocationDialog();
       return;
     }
     
     if (_hasUserLocation && _userLocation != null) {
+      // Ya tenemos la ubicación, solo centrar el mapa
       if (_mapService.isMapReady(_mapController)) {
-        _mapController.move(_userLocation!, 15.0);
+        _mapController.move(_userLocation!, 16.0);
+      }
+      
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('📍 Centrado en tu ubicación'),
+            duration: Duration(seconds: 1),
+            backgroundColor: Colors.green,
+          ),
+        );
       }
     } else {
+      // No tenemos ubicación, intentar obtenerla
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('📍 Obteniendo tu ubicación...'),
+            duration: Duration(seconds: 2),
+            backgroundColor: Color(0xFF2D8A8A),
+          ),
+        );
+      }
+      
       await _loadUserLocation();
+      
+      if (_hasUserLocation && _userLocation != null && mounted) {
+        if (_mapService.isMapReady(_mapController)) {
+          _mapController.move(_userLocation!, 16.0);
+        }
+        
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('✅ Ubicación encontrada'),
+            duration: Duration(seconds: 1),
+            backgroundColor: Colors.green,
+          ),
+        );
+      } else if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('❌ No se pudo obtener la ubicación'),
+            duration: Duration(seconds: 2),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     }
   }
 
+  /// ✅ Mostrar diálogo para activar ubicación
+  void _showEnableLocationDialog() {
+    if (!mounted || ModalRoute.of(context)?.isCurrent != true) {
+      return;
+    }
+    
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          title: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF2D8A8A).withOpacity(0.2),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.location_on,
+                  color: Color(0xFF2D8A8A),
+                  size: 28,
+                ),
+              ),
+              const SizedBox(width: 12),
+              const Expanded(
+                child: Text(
+                  'Habilitar ubicación',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                ),
+              ),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Para una mejor experiencia, tu dispositivo necesita usar la ubicación.',
+                style: TextStyle(fontSize: 15, height: 1.4),
+              ),
+              const SizedBox(height: 16),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade100,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(Icons.check_circle, color: Colors.green.shade600, size: 20),
+                        const SizedBox(width: 8),
+                        const Expanded(
+                          child: Text(
+                            'Ver tu ubicación en el mapa',
+                            style: TextStyle(fontSize: 13),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Icon(Icons.check_circle, color: Colors.green.shade600, size: 20),
+                        const SizedBox(width: 8),
+                        const Expanded(
+                          child: Text(
+                            'Asignar tareas a empleados cercanos',
+                            style: TextStyle(fontSize: 13),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              if (!_isLocationServiceEnabled) ...[
+                const SizedBox(height: 12),
+                Text(
+                  '⚠️ GPS está desactivado',
+                  style: TextStyle(
+                    color: Colors.orange.shade700,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+              if (!_hasLocationPermission) ...[
+                const SizedBox(height: 12),
+                Text(
+                  '⚠️ Permisos de ubicación no otorgados',
+                  style: TextStyle(
+                    color: Colors.orange.shade700,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.of(context).pop();
+                print('❌ Usuario rechazó activar ubicación');
+              },
+              child: Text(
+                'No, gracias',
+                style: TextStyle(color: Colors.grey.shade600),
+              ),
+            ),
+            ElevatedButton(
+              onPressed: () async {
+                Navigator.of(context).pop();
+                print('✅ Usuario quiere activar ubicación');
+                
+                // ✅ Solicitar servicio de GPS primero
+                if (!_isLocationServiceEnabled) {
+                  final serviceEnabled = await _locationService.requestLocationService();
+                  if (!serviceEnabled) {
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('⚠️ GPS no activado. Por favor, activa el GPS manualmente'),
+                          duration: Duration(seconds: 3),
+                          backgroundColor: Colors.orange,
+                        ),
+                      );
+                    }
+                    return;
+                  }
+                }
+                
+                // ✅ Solicitar permisos de ubicación
+                if (!_hasLocationPermission) {
+                  final permissionGranted = await _locationService.requestLocationPermission();
+                  if (!permissionGranted) {
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('⚠️ Permisos denegados. Por favor, otorga permisos de ubicación'),
+                          duration: Duration(seconds: 3),
+                          backgroundColor: Colors.orange,
+                        ),
+                      );
+                    }
+                    return;
+                  }
+                }
+                
+                // Verificar estado actualizado
+                await _checkLocationServices();
+                
+                // Intentar cargar ubicación
+                if (_isLocationServiceEnabled && _hasLocationPermission) {
+                  await _loadUserLocation();
+                  
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('✅ Ubicación activada correctamente'),
+                        duration: Duration(seconds: 2),
+                        backgroundColor: Colors.green,
+                      ),
+                    );
+                  }
+                }
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF2D8A8A),
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ),
+              child: const Text('Activar'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   Widget _buildTopBar() {
+    // Count only published articles (excluding completed tasks)
+    final publishedCount = _filteredItems.where((item) {
+      final status = _getItemStatus(item);
+      return status != 'recogidos'; // Exclude completed/recogidos
+    }).length;
+
     return Positioned(
       top: 0,
       left: 0,
       right: 0,
       child: Container(
-        padding: const EdgeInsets.fromLTRB(16, 50, 16, 16),
         decoration: BoxDecoration(
           gradient: LinearGradient(
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
             colors: [
-              Colors.black.withOpacity(0.7),
+              Colors.black.withOpacity(0.4),
+              Colors.black.withOpacity(0.2),
               Colors.transparent,
             ],
           ),
         ),
-        child: Row(
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'Mapa de Artículos',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 24,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  Text(
-                    '${_filteredItems.length} artículos',
-                    style: const TextStyle(color: Colors.white70, fontSize: 14),
-                  ),
-                ],
-              ),
-            ),
-            // ✅ Notification bell with badge
-            Stack(
-              clipBehavior: Clip.none,
+        child: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                IconButton(
-                  icon: const Icon(Icons.notifications_outlined, color: Colors.white),
-                  onPressed: _navigateToNotifications,
-                  tooltip: 'Notificaciones',
+                const SizedBox(height: 8),
+                // Status indicators below
+                StatusIndicators(
+                  isDeviceConnected: _isConnected,
+                  isLocationServiceEnabled: _isLocationServiceEnabled,
+                  hasLocationPermission: _hasLocationPermission,
+                  hasCheckedLocation: _hasCheckedLocation,
+                  onGpsTap: _checkLocationServices,
+                  onRefreshTap: _refreshData,
+                  notificationCount: _approvedRequestCount,
+                  onNotificationTap: _navigateToNotifications,
                 ),
-                if (_approvedRequestCount > 0)
-                  Positioned(
-                    right: 8,
-                    top: 8,
-                    child: Container(
-                      padding: const EdgeInsets.all(4),
-                      decoration: const BoxDecoration(
-                        color: Colors.red,
-                        shape: BoxShape.circle,
+                const SizedBox(height: 8),
+                // Article count at the top
+                Text(
+                  'Total $publishedCount artículos',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    shadows: [
+                      Shadow(
+                        color: Colors.black87,
+                        blurRadius: 4,
                       ),
-                      constraints: const BoxConstraints(
-                        minWidth: 18,
-                        minHeight: 18,
-                      ),
-                      child: Text(
-                        _approvedRequestCount > 99 ? '99+' : '$_approvedRequestCount',
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 10,
-                          fontWeight: FontWeight.bold,
-                        ),
-                        textAlign: TextAlign.center,
-                      ),
-                    ),
+                    ],
                   ),
+                ),
               ],
             ),
-            IconButton(
-              icon: const Icon(Icons.refresh, color: Colors.white),
-              onPressed: _refreshData,
-            ),
-          ],
+          ),
         ),
       ),
     );
@@ -1273,7 +1698,10 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
           children: [
             CircularProgressIndicator(color: Color(0xFF2D8A8A)),
             SizedBox(height: 16),
-            Text('Cargando artículos...'),
+            Text(
+              'Cargando mapa...',
+              style: TextStyle(color: Color(0xFF2D8A8A), fontSize: 16),
+            ),
           ],
         ),
       ),
@@ -1619,12 +2047,14 @@ class _CompanyArticleModalState extends State<_CompanyArticleModal> {
   Request? _existingRequest; // ✅ Track request status
   bool _isLoadingRequest = false; // ✅ Loading request status
   int? _companyId;
+  Map<String, dynamic>? _existingTask; // ✅ Track task status
+  bool _isLoadingTask = false; // ✅ Loading task status
 
   @override
   void initState() {
     super.initState();
     _loadPhoto();
-    _loadRequestStatus(); // ✅ Load request status
+    _loadRequestStatus(); // ✅ Load request status (this will also load task status)
   }
 
   Future<void> _loadPhoto() async {
@@ -1702,6 +2132,9 @@ class _CompanyArticleModalState extends State<_CompanyArticleModal> {
                 _existingRequest = Request.fromMap(existingRequest);
               });
             }
+            
+            // ✅ Load task status after we have companyId
+            await _loadTaskStatus();
           }
         }
       }
@@ -1710,6 +2143,40 @@ class _CompanyArticleModalState extends State<_CompanyArticleModal> {
     } finally {
       if (mounted) {
         setState(() => _isLoadingRequest = false);
+      }
+    }
+  }
+
+  /// ✅ Load task status for this article
+  Future<void> _loadTaskStatus() async {
+    if (_isLoadingTask) return; // Prevent duplicate calls
+    setState(() => _isLoadingTask = true);
+
+    try {
+      if (_companyId != null) {
+        final existingTask = await Supabase.instance.client
+            .from('tasks')
+            .select()
+            .eq('articleID', widget.item.id)
+            .eq('companyID', _companyId!)
+            .order('assignedDate', ascending: false)
+            .limit(1)
+            .maybeSingle();
+
+        if (existingTask != null && mounted) {
+          setState(() {
+            _existingTask = existingTask;
+          });
+          print('✅ Found task for article ${widget.item.id}: ${existingTask['workflowStatus']}');
+        } else {
+          print('ℹ️ No task found for article ${widget.item.id}');
+        }
+      }
+    } catch (e) {
+      print('❌ Error loading task status: $e');
+    } finally {
+      if (mounted) {
+        setState(() => _isLoadingTask = false);
       }
     }
   }
@@ -1811,6 +2278,75 @@ class _CompanyArticleModalState extends State<_CompanyArticleModal> {
                   ),
                 if (widget.item.description != null) const SizedBox(height: 12),
                 
+                // ✅ Task status badge (similar to employee view in detail_recycle_screen)
+                if (_existingTask != null && _existingTask!['workflowStatus'] != null) ...[
+                  Container(
+                    margin: const EdgeInsets.only(bottom: 16),
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                    decoration: BoxDecoration(
+                      color: _existingTask!['workflowStatus'] == 'completado' 
+                          ? Colors.green.shade50 
+                          : Colors.amber.shade50,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: _existingTask!['workflowStatus'] == 'completado' 
+                            ? Colors.green.shade200 
+                            : Colors.amber.shade200
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: _existingTask!['workflowStatus'] == 'completado' 
+                                ? Colors.green 
+                                : Colors.amber,
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Icon(
+                            _existingTask!['workflowStatus'] == 'completado'
+                                ? Icons.check_circle_outline
+                                : Icons.work_outline,
+                            color: Colors.white,
+                            size: 20,
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                _existingTask!['workflowStatus'] == 'completado'
+                                    ? 'Completado'
+                                    : 'En Proceso',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.bold,
+                                  color: _existingTask!['workflowStatus'] == 'completado' 
+                                      ? Colors.green 
+                                      : Colors.amber,
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                _existingTask!['workflowStatus'] == 'completado'
+                                    ? 'Esta tarea ha sido completada'
+                                    : 'Esta tarea está en progreso',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  color: Colors.grey[700],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+                
                 // Divider
                 Divider(color: Colors.grey[300]),
                 const SizedBox(height: 12),
@@ -1902,8 +2438,64 @@ class _CompanyArticleModalState extends State<_CompanyArticleModal> {
     );
   }
 
-  /// ✅ Build action button based on request status
+  /// ✅ Build action button based on request status and task status
   Widget _buildActionButton() {
+    // ✅ Check if task exists and is assigned
+    if (_existingTask != null) {
+      final workflowStatus = _existingTask!['workflowStatus'] as String?;
+      
+      if (workflowStatus == 'completado') {
+        // Task completed - show completed status (disabled)
+        return Container(
+          padding: const EdgeInsets.symmetric(vertical: 16),
+          decoration: BoxDecoration(
+            color: Colors.green.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: Colors.green.withOpacity(0.3)),
+          ),
+          child: const Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.check_circle, color: Colors.green, size: 20),
+              SizedBox(width: 8),
+              Text(
+                'Completado',
+                style: TextStyle(
+                  color: Colors.green,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+        );
+      } else {
+        // Task in progress - show en proceso status (disabled)
+        return Container(
+          padding: const EdgeInsets.symmetric(vertical: 16),
+          decoration: BoxDecoration(
+            color: Colors.amber.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: Colors.amber.withOpacity(0.3)),
+          ),
+          child: const Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.work_outline, color: Colors.amber, size: 20),
+              SizedBox(width: 8),
+              Text(
+                'En Proceso',
+                style: TextStyle(
+                  color: Colors.amber,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+        );
+      }
+    }
+    
+    // No task assigned yet - check request status
     if (_existingRequest == null) {
       // No request exists - show "Solicitar" button
       return ElevatedButton.icon(
@@ -2015,5 +2607,576 @@ class _CompanyArticleModalState extends State<_CompanyArticleModal> {
     );
   }
 }
+
+// ============================================================================
+// Company Article Navigation Modal Widget (with Anterior/Siguiente buttons)
+// ============================================================================
+
+class _CompanyArticleNavigationModal extends StatefulWidget {
+  final List<RecyclingItem> articles;
+  final int initialIndex;
+  final MediaDatabase mediaDatabase;
+  final Function(RecyclingItem) onAssignEmployee;
+  final Function(RecyclingItem, Request) onAssignEmployeeApproved;
+  final Function(RecyclingItem) onNavigateToDetails;
+  final Function(RecyclingItem) onArticleChange;
+
+  const _CompanyArticleNavigationModal({
+    required this.articles,
+    required this.initialIndex,
+    required this.mediaDatabase,
+    required this.onAssignEmployee,
+    required this.onAssignEmployeeApproved,
+    required this.onNavigateToDetails,
+    required this.onArticleChange,
+  });
+
+  @override
+  State<_CompanyArticleNavigationModal> createState() => _CompanyArticleNavigationModalState();
+}
+
+class _CompanyArticleNavigationModalState extends State<_CompanyArticleNavigationModal> {
+  late int currentIndex;
+  late RecyclingItem currentItem;
+  Multimedia? currentPhoto;
+  bool isLoadingPhoto = false;
+  Request? _existingRequest;
+  bool _isLoadingRequest = false;
+  int? _companyId;
+  Map<String, dynamic>? _existingTask;
+  bool _isLoadingTask = false;
+
+  @override
+  void initState() {
+    super.initState();
+    currentIndex = widget.initialIndex;
+    currentItem = widget.articles[currentIndex];
+    _loadPhoto();
+    _loadRequestStatus();
+  }
+
+  Future<void> _loadPhoto() async {
+    setState(() => isLoadingPhoto = true);
+    
+    try {
+      final urlPattern = 'articles/${currentItem.id}';
+      final photo = await widget.mediaDatabase.getMainPhotoByPattern(urlPattern);
+      
+      if (mounted) {
+        setState(() {
+          currentPhoto = photo;
+          isLoadingPhoto = false;
+        });
+      }
+    } catch (e) {
+      print('Error loading photo: $e');
+      if (mounted) {
+        setState(() => isLoadingPhoto = false);
+      }
+    }
+  }
+
+  Future<void> _loadRequestStatus() async {
+    setState(() => _isLoadingRequest = true);
+
+    try {
+      final email = AuthService().getCurrentUserEmail();
+      if (email != null) {
+        final userData = await UsersDatabase().getUserByEmail(email);
+        if (userData != null) {
+          final companyData = await Supabase.instance.client
+              .from('company')
+              .select('idCompany')
+              .eq('adminUserID', userData.id!)
+              .maybeSingle();
+
+          if (companyData != null) {
+            _companyId = companyData['idCompany'] as int;
+
+            final requestData = await Supabase.instance.client
+                .from('request')
+                .select('*')
+                .eq('articleID', currentItem.id)
+                .eq('companyID', _companyId!)
+                .maybeSingle();
+
+            if (requestData != null && mounted) {
+              _existingRequest = Request.fromMap(requestData);
+              
+              if (_existingRequest!.status == 'aprobado') {
+                await _loadTaskStatus();
+              }
+            }
+          }
+        }
+      }
+    } catch (e) {
+      print('❌ Error loading request status: $e');
+    } finally {
+      if (mounted) {
+        setState(() => _isLoadingRequest = false);
+      }
+    }
+  }
+
+  Future<void> _loadTaskStatus() async {
+    if (_isLoadingTask) return;
+    setState(() => _isLoadingTask = true);
+
+    try {
+      final taskData = await Supabase.instance.client
+          .from('tasks')
+          .select('*')
+          .eq('articleID', currentItem.id)
+          .eq('companyID', _companyId!)
+          .maybeSingle();
+
+      if (mounted && taskData != null) {
+        setState(() {
+          _existingTask = taskData;
+        });
+      }
+    } catch (e) {
+      print('❌ Error loading task status: $e');
+    } finally {
+      if (mounted) {
+        setState(() => _isLoadingTask = false);
+      }
+    }
+  }
+
+  void _goToPrevious() {
+    if (currentIndex > 0) {
+      setState(() {
+        currentIndex--;
+        currentItem = widget.articles[currentIndex];
+        currentPhoto = null;
+        _existingRequest = null;
+        _existingTask = null;
+      });
+      _loadPhoto();
+      _loadRequestStatus();
+      widget.onArticleChange(currentItem);
+    }
+  }
+
+  void _goToNext() {
+    if (currentIndex < widget.articles.length - 1) {
+      setState(() {
+        currentIndex++;
+        currentItem = widget.articles[currentIndex];
+        currentPhoto = null;
+        _existingRequest = null;
+        _existingTask = null;
+      });
+      _loadPhoto();
+      _loadRequestStatus();
+      widget.onArticleChange(currentItem);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.of(context).size.height * 0.85,
+      ),
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Drag handle
+          Container(
+            margin: const EdgeInsets.symmetric(vertical: 10),
+            width: 40,
+            height: 4,
+            decoration: BoxDecoration(
+              color: Colors.grey[300],
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          
+          // Navigation header
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                IconButton(
+                  onPressed: currentIndex > 0 ? _goToPrevious : null,
+                  icon: const Icon(Icons.arrow_back),
+                  color: currentIndex > 0 ? const Color(0xFF2D8A8A) : Colors.grey,
+                ),
+                Text(
+                  '${currentIndex + 1} de ${widget.articles.length}',
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: Color(0xFF2D8A8A),
+                  ),
+                ),
+                IconButton(
+                  onPressed: currentIndex < widget.articles.length - 1 ? _goToNext : null,
+                  icon: const Icon(Icons.arrow_forward),
+                  color: currentIndex < widget.articles.length - 1 ? const Color(0xFF2D8A8A) : Colors.grey,
+                ),
+              ],
+            ),
+          ),
+          
+          const Divider(height: 1),
+          
+          // Article content
+          Flexible(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Photo
+                  if (isLoadingPhoto)
+                    _buildPlaceholder()
+                  else if (currentPhoto != null)
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(12),
+                      child: CachedNetworkImage(
+                        imageUrl: currentPhoto!.url ?? '',
+                        height: 200,
+                        width: double.infinity,
+                        fit: BoxFit.cover,
+                        placeholder: (context, url) => _buildPlaceholder(),
+                        errorWidget: (context, url, error) => _buildPlaceholder(),
+                      ),
+                    )
+                  else
+                    _buildPlaceholder(),
+                  
+                  const SizedBox(height: 16),
+                  
+                  // Title
+                  Text(
+                    currentItem.title,
+                    style: const TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  
+                  const SizedBox(height: 8),
+                  
+                  // Category
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF2D8A8A).withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          CategoryUtils.getCategoryIcon(currentItem.categoryName),
+                          size: 16,
+                          color: const Color(0xFF2D8A8A),
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          currentItem.categoryName,
+                          style: const TextStyle(
+                            color: Color(0xFF2D8A8A),
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  
+                  const SizedBox(height: 16),
+                  
+                  // Description
+                  if (currentItem.description != null && currentItem.description!.isNotEmpty) ...[
+                    const Text(
+                      'Descripción:',
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(currentItem.description!),
+                    const SizedBox(height: 16),
+                  ],
+                  
+                  // Info rows
+                  _buildInfoRow(Icons.location_on, 'Ubicación', currentItem.address),
+                  const SizedBox(height: 8),
+                  _buildInfoRow(Icons.calendar_today, 'Publicado', 
+                    '${currentItem.createdAt.day}/${currentItem.createdAt.month}/${currentItem.createdAt.year}'),
+                  
+                  const SizedBox(height: 20),
+                  
+                  // Action buttons
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: () => widget.onNavigateToDetails(currentItem),
+                          icon: const Icon(Icons.info_outline),
+                          label: const Text('Ver Detalles'),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: const Color(0xFF2D8A8A),
+                            side: const BorderSide(color: Color(0xFF2D8A8A)),
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  
+                  const SizedBox(height: 12),
+                  
+                  // Request/Assign button
+                  SizedBox(
+                    width: double.infinity,
+                    child: _buildActionButton(),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildInfoRow(IconData icon, String label, String value) {
+    return Row(
+      children: [
+        Icon(icon, size: 20, color: Colors.grey[600]),
+        const SizedBox(width: 8),
+        Text(
+          '$label: ',
+          style: TextStyle(
+            color: Colors.grey[600],
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+        Expanded(
+          child: Text(
+            value,
+            style: const TextStyle(fontWeight: FontWeight.bold),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildActionButton() {
+    if (_isLoadingRequest || _isLoadingTask) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    // ✅ Check if article itself has completed workflow status
+    if (currentItem.workflowStatus?.toLowerCase() == 'completado') {
+      return Container(
+        padding: const EdgeInsets.symmetric(vertical: 16),
+        decoration: BoxDecoration(
+          color: Colors.green.withOpacity(0.1),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: Colors.green.withOpacity(0.3)),
+        ),
+        child: const Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.check_circle, color: Colors.green, size: 20),
+            SizedBox(width: 8),
+            Text(
+              'Artículo Completado',
+              style: TextStyle(
+                color: Colors.green,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    // Check if task exists and is assigned
+    if (_existingTask != null) {
+      final workflowStatus = _existingTask!['workflowStatus'] as String?;
+      
+      if (workflowStatus == 'asignado' || workflowStatus == 'en_proceso') {
+        return Container(
+          padding: const EdgeInsets.symmetric(vertical: 16),
+          decoration: BoxDecoration(
+            color: Colors.blue.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: Colors.blue.withOpacity(0.3)),
+          ),
+          child: const Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.assignment_turned_in, color: Colors.blue, size: 20),
+              SizedBox(width: 8),
+              Text(
+                'Artículo Asignado',
+                style: TextStyle(
+                  color: Colors.blue,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+        );
+      } else if (workflowStatus == 'completado') {
+        return Container(
+          padding: const EdgeInsets.symmetric(vertical: 16),
+          decoration: BoxDecoration(
+            color: Colors.teal.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: Colors.teal.withOpacity(0.3)),
+          ),
+          child: const Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.task_alt, color: Colors.teal, size: 20),
+              SizedBox(width: 8),
+              Text(
+                'Completado',
+                style: TextStyle(
+                  color: Colors.teal,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+        );
+      }
+    }
+    
+    // No task assigned yet - check request status
+    if (_existingRequest == null) {
+      return ElevatedButton.icon(
+        onPressed: () => widget.onAssignEmployee(currentItem),
+        icon: const Icon(Icons.send, color: Colors.white),
+        label: const Text(
+          'Solicitar Artículo',
+          style: TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.bold,
+            color: Colors.white,
+          ),
+        ),
+        style: ElevatedButton.styleFrom(
+          backgroundColor: const Color(0xFF2D8A8A),
+          padding: const EdgeInsets.symmetric(vertical: 16),
+        ),
+      );
+    } else if (_existingRequest!.status == 'pendiente') {
+      return Container(
+        padding: const EdgeInsets.symmetric(vertical: 16),
+        decoration: BoxDecoration(
+          color: Colors.orange.withOpacity(0.1),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: Colors.orange.withOpacity(0.3)),
+        ),
+        child: const Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.pending, color: Colors.orange, size: 20),
+            SizedBox(width: 8),
+            Text(
+              'Solicitud Pendiente',
+              style: TextStyle(
+                color: Colors.orange,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ],
+        ),
+      );
+    } else if (_existingRequest!.status == 'aprobado') {
+      return ElevatedButton.icon(
+        onPressed: () => widget.onAssignEmployeeApproved(currentItem, _existingRequest!),
+        icon: const Icon(Icons.assignment_ind, color: Colors.white),
+        label: const Text(
+          'Asignar Empleado',
+          style: TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.bold,
+            color: Colors.white,
+          ),
+        ),
+        style: ElevatedButton.styleFrom(
+          backgroundColor: const Color(0xFF2D8A8A),
+          padding: const EdgeInsets.symmetric(vertical: 16),
+        ),
+      );
+    } else if (_existingRequest!.status == 'rechazado') {
+      return Container(
+        padding: const EdgeInsets.symmetric(vertical: 16),
+        decoration: BoxDecoration(
+          color: Colors.red.withOpacity(0.1),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: Colors.red.withOpacity(0.3)),
+        ),
+        child: const Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.cancel, color: Colors.red, size: 20),
+            SizedBox(width: 8),
+            Text(
+              'Solicitud Rechazada',
+              style: TextStyle(
+                color: Colors.red,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+    
+    // Fallback
+    return ElevatedButton.icon(
+      onPressed: () => widget.onAssignEmployee(currentItem),
+      icon: const Icon(Icons.send, color: Colors.white),
+      label: const Text(
+        'Solicitar Artículo',
+        style: TextStyle(
+          fontSize: 16,
+          fontWeight: FontWeight.bold,
+          color: Colors.white,
+        ),
+      ),
+      style: ElevatedButton.styleFrom(
+        backgroundColor: const Color(0xFF2D8A8A),
+        padding: const EdgeInsets.symmetric(vertical: 16),
+      ),
+    );
+  }
+
+  Widget _buildPlaceholder() {
+    return Container(
+      height: 200,
+      decoration: BoxDecoration(
+        color: Colors.grey[300],
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Center(
+        child: Icon(
+          CategoryUtils.getCategoryIcon(currentItem.categoryName),
+          size: 60,
+          color: Colors.grey[600],
+        ),
+      ),
+    );
+  }
+}
+
 
 

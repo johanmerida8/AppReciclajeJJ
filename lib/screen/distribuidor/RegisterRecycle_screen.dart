@@ -522,11 +522,8 @@ class _RegisterRecycleScreenState extends State<RegisterRecycleScreen> {
           actions: [
             ElevatedButton(
               onPressed: () {
-                // ✅ Cerrar el diálogo
+                // ✅ Solo cerrar el diálogo y quedarse en la misma pantalla
                 Navigator.of(dialogContext).pop();
-                
-                // ✅ Volver a la pantalla anterior (HomeScreen) con resultado
-                Navigator.of(context).pop(true);
               },
               style: ElevatedButton.styleFrom(
                 backgroundColor: const Color(0xFF2D8A8A),

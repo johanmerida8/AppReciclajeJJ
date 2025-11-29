@@ -15,31 +15,50 @@ class NavigationScreens extends StatefulWidget {
 class _NavigationScreensState extends State<NavigationScreens> {
   int _currentIndex = 0;
   
-  // ✅ Create screens lazily to prevent memory leaks
-  // Only the current screen is kept in memory
-  late final List<Widget Function()> _screenBuilders;
+  // ✅ Track which screens have been built
+  final Map<int, Widget> _builtScreens = {};
   
+  // ✅ Build screen only when first accessed
+  Widget _buildScreen(int index) {
+    if (_builtScreens.containsKey(index)) {
+      return _builtScreens[index]!;
+    }
+
+    Widget screen;
+    switch (index) {
+      case 0:
+        screen = const HomeScreen();
+        break;
+      case 1:
+        screen = const RegisterRecycleScreen();
+        break;
+      case 2:
+        screen = const RankingScreen();
+        break;
+      case 3:
+        screen = const ProfileScreen();
+        break;
+      default:
+        screen = const Center(child: Text('Error'));
+    }
+
+    _builtScreens[index] = screen;
+    return screen;
+  }
+
   @override
-  void initState() {
-    super.initState();
-    // Initialize screen builders
-    _screenBuilders = [
-      () => const HomeScreen(),
-      () => const RegisterRecycleScreen(),
-      () => const RankingScreen(),
-      () => const ProfileScreen(),
-    ];
+  void dispose() {
+    // ✅ Clear cached screens
+    _builtScreens.clear();
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.white,
-      // ✅ Build only the current screen to prevent keeping all screens in memory
-      body: IndexedStack(
-        index: _currentIndex,
-        children: _screenBuilders.map((builder) => builder()).toList(),
-      ),
+      // ✅ Build only the active screen
+      body: _buildScreen(_currentIndex),
       bottomNavigationBar: CurvedNavigationBar(
         backgroundColor: Colors.transparent,
         color: const Color(0xFF2D8A8A), // Your app's teal color
