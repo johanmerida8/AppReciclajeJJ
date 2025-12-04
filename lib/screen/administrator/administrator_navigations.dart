@@ -2,6 +2,11 @@ import 'package:curved_navigation_bar/curved_navigation_bar.dart';
 import 'package:flutter/material.dart';
 import 'package:reciclaje_app/screen/administrator/companyList.dart';
 import 'package:reciclaje_app/screen/administrator/userList.dart';
+import 'package:reciclaje_app/screen/distribuidor/profile_screen.dart';
+import 'package:reciclaje_app/screen/administrator/ranking.dart';
+import 'package:reciclaje_app/screen/administrator/cycleList.dart';
+import 'package:reciclaje_app/theme/app_colors.dart';
+import 'package:reciclaje_app/screen/administrator/profileAdmin.dart';
 
 class   adminNavigationScreens extends StatefulWidget {
   const adminNavigationScreens({super.key});
@@ -18,13 +23,18 @@ class _adminNavigationScreensState extends State<adminNavigationScreens> {
 
     const UserList(),
     const CompanyList(),
-    
+    const Ranking(),
+    const CycleList(),
+    const ProfileAdmin(),
   ];
 
   final List<Widget> _navigationItems = [
 
     const Icon(Icons.people, size: 30, color: Colors.white),
-    const Icon(Icons.business, size: 30, color: Colors.white),
+    const Icon(Icons.business_rounded, size: 30, color: Colors.white),
+    const Icon(Icons.leaderboard, size: 30, color: Colors.white),
+    const Icon(Icons.settings, size: 30, color: Colors.white),
+    const Icon(Icons.person, size: 30, color: Colors.white),
   ];
 
   @override
@@ -34,9 +44,9 @@ class _adminNavigationScreensState extends State<adminNavigationScreens> {
       body: _screens[_currentIndex],
       bottomNavigationBar: CurvedNavigationBar(
         backgroundColor: Colors.transparent,
-        color: const Color(0xFF2D8A8A), // Your app's teal color
+        color: AppColors.verdeOscuro, // Your app's teal color
         // buttonBackgroundColor: const Color(0xFF2D8A8A), // Green accent
-        buttonBackgroundColor: const Color.fromARGB(255, 45, 138, 138),
+        buttonBackgroundColor: AppColors.verdeOscuro,
         height: 55,
         items: _navigationItems,
         index: _currentIndex,

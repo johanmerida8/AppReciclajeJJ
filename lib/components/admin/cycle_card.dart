@@ -3,24 +3,28 @@ import '/theme/app_colors.dart';
 import '/theme/app_spacing.dart';
 import '/theme/app_text_styles.dart';
 
-class CompanyCard extends StatelessWidget {
+class CycleCard extends StatelessWidget {
   final String name;
-  final String adminName;
   final int state;
-  final String date;
-  final String imageUrl;
+  final String startDate;
+  final String endDate;
+  final String createdAt;
+  final int topQuantity;
   final VoidCallback? onPressed;
   final VoidCallback? onArchive;
+  final VoidCallback? onShowRanking;
 
-  const CompanyCard({
+  const CycleCard({
     super.key,
     required this.name,
-    required this.adminName,
     required this.state,
-    required this.date,
-    required this.imageUrl,
+    required this.startDate,
+    required this.endDate,
+    required this.createdAt,
+    required this.topQuantity,
     this.onPressed,
     this.onArchive,
+    this.onShowRanking,
   });
 
   @override
@@ -48,30 +52,6 @@ class CompanyCard extends StatelessWidget {
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Foto
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(AppSpacing.radiusMedium),
-                  child: Image.network(
-                    imageUrl,
-                    width: 60,
-                    height: 60,
-                    fit: BoxFit.cover,
-                    errorBuilder:
-                        (_, __, ___) => Container(
-                          width: 60,
-                          height: 60,
-                          color: AppColors.fondoGrisClaro,
-                          child: const Icon(
-                            Icons.person,
-                            color: AppColors.fondoGrisOscuro,
-                            size: 30,
-                          ),
-                        ),
-                  ),
-                ),
-
-                const SizedBox(width: AppSpacing.spacingMedium),
-
                 // Info principal
                 Expanded(
                   child: Column(
@@ -93,7 +73,7 @@ class CompanyCard extends StatelessWidget {
                         children: [
                           Flexible(
                             child: Text(
-                              adminName,
+                              'Ganador del ciclo',
                               style: AppTextStyles.textSmall.copyWith(
                                 color: AppColors.grisLetra,
                               ),
@@ -120,21 +100,19 @@ class CompanyCard extends StatelessWidget {
                         ],
                       ),
                       const SizedBox(height: 2),
-                      // Calificación/* estrellas */
-                      /*
+                      // Calificación
                       Row(
                         children: [
                           const Icon(Icons.star, color: Colors.amber, size: 16),
                           const SizedBox(width: 4),
                           Text(
-                            '5',
+                            topQuantity.toString(),
                             style: AppTextStyles.textSmall.copyWith(
                               color: AppColors.grisLetra,
                             ),
                           ),
                         ],
                       ),
-                      */
                     ],
                   ),
                 ),
@@ -156,15 +134,15 @@ class CompanyCard extends StatelessWidget {
 
             const SizedBox(height: 4),
 
-            // Fila inferior: Empleados | Recolecciones | Fecha
+            // Fila inferior: Inicio | fin | Creación
             Row(
               mainAxisAlignment: MainAxisAlignment.start,
               children: [
-                // Empleados
+                // Fecha Inicio
                 Row(
                   children: [
                     const Icon(
-                      Icons.people,
+                      Icons.calendar_today,
                       size: 16,
                       color: AppColors.grisLetra,
                     ),
@@ -173,13 +151,13 @@ class CompanyCard extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          '15', // número de empleados
+                          startDate, // fecha inicio
                           style: AppTextStyles.textSmall.copyWith(
                             color: AppColors.grisLetra,
                           ),
                         ),
                         Text(
-                          'Empleados',
+                          'Inicio',
                           style: AppTextStyles.textSmall.copyWith(
                             color: AppColors.grisLetra,
                           ),
@@ -191,11 +169,11 @@ class CompanyCard extends StatelessWidget {
 
                 const SizedBox(width: 24),
 
-                // Recolecciones
+                // Fecha fin
                 Row(
                   children: [
                     const Icon(
-                      Icons.local_shipping,
+                      Icons.calendar_today,
                       size: 16,
                       color: AppColors.grisLetra,
                     ),
@@ -204,13 +182,13 @@ class CompanyCard extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          '250', // número de recolecciones
+                          endDate, // fecha fin
                           style: AppTextStyles.textSmall.copyWith(
                             color: AppColors.grisLetra,
                           ),
                         ),
                         Text(
-                          'Recolecciones',
+                          'fin',
                           style: AppTextStyles.textSmall.copyWith(
                             color: AppColors.grisLetra,
                           ),
@@ -235,7 +213,7 @@ class CompanyCard extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          date, // variable date
+                          createdAt, // variable createdAt
                           style: AppTextStyles.textSmall.copyWith(
                             color: AppColors.grisLetra,
                           ),
@@ -287,52 +265,51 @@ class CompanyCard extends StatelessWidget {
               // Ver perfil
               ListTile(
                 leading: const Icon(
-                  Icons.person_outline,
+                  Icons.list_rounded,
                   color: AppColors.fondoGrisOscuro,
                 ),
                 title: const Text(
-                  'Ver perfil Empresa',
+                  'Mas Detalles',
                   style: AppTextStyles.textLarge,
                 ),
                 onTap: () {
                   Navigator.pop(context);
                   onPressed?.call();
-                },
-              ),
-              // Ver perfil
-              ListTile(
-                leading: const Icon(
-                  Icons.person_outline,
-                  color: AppColors.fondoGrisOscuro,
-                ),
-                title: const Text(
-                  'Ver perfil Administrador',
-                  style: AppTextStyles.textLarge,
-                ),
-                onTap: () {
-                  Navigator.pop(context);
-                  onPressed?.call();
-                },
-              ),
-              // Archivar usuario
-              ListTile(
-                leading: Icon(
-                  state == 1
-                      ? Icons.archive_outlined
-                      : Icons.unarchive_outlined,
-                  color: AppColors.fondoGrisOscuro,
-                ),
-
-                title: Text(
-                  state == 1 ? 'Archivar empresa' : 'Activar empresa',
-                  style: AppTextStyles.textLarge,
-                ),
-                onTap: () {
-                  Navigator.pop(context);
-                  onArchive?.call();
                 },
               ),
               const SizedBox(height: AppSpacing.spacingMedium),
+              // Ver ranking del ciclo
+              ListTile(
+                leading: const Icon(
+                  Icons.leaderboard,
+                  color: AppColors.fondoGrisOscuro,
+                ),
+                title: const Text(
+                  'Mostrar Ranking',
+                  style: AppTextStyles.textLarge,
+                ),
+                onTap: () {
+                  Navigator.pop(context);
+                  onShowRanking?.call(); // 👈 ejecuta el callback
+                },
+              ),
+              const SizedBox(height: AppSpacing.spacingMedium),
+              // Archivar ciclo
+              ListTile(
+                leading: const Icon(Icons.archive, color: AppColors.rojo),
+                title: const Text(
+                  'Archivar ciclo',
+                  style: TextStyle(
+                    fontSize: 16,
+                    color: AppColors.rojo,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                onTap: () {
+                  Navigator.pop(context);
+                  onArchive?.call(); // 👈 ejecuta el callback
+                },
+              ),
             ],
           ),
         );

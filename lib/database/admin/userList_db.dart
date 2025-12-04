@@ -18,15 +18,17 @@ class UserListDB {
       // 2️⃣ Recorremos los usuarios para traer su imagen principal (avatar)
       for (var user in usersData) {
         // Avatar del usuario desde la tabla multimedia
-        final avatarResponse = await client
-            .from('multimedia')
-            .select('url')
-            .eq('entityType', 'distribuidor')
-            .eq('entityID', user['idUser'])
-            .eq('isMain', true)
-            .maybeSingle();
+        final avatarResponse =
+            await client
+                .from('multimedia')
+                .select('url')
+                .eq('entityType', 'distribuidor')
+                .eq('entityID', user['idUser'])
+                .eq('isMain', true)
+                .maybeSingle();
 
-        user['avatarUrl'] = avatarResponse != null ? avatarResponse['url'] : null;
+        user['avatarUrl'] =
+            avatarResponse != null ? avatarResponse['url'] : null;
 
         // 3️⃣ Contar artículos relacionados (ajusta el nombre del campo según tu BD)
         final articlesResponse = await client
@@ -39,10 +41,24 @@ class UserListDB {
 
       // 4️⃣ Convertimos a lista de modelos
       return usersData.map((json) => UserModel.fromJson(json)).toList();
-
     } catch (e) {
       print('❌ Error al obtener usuarios: $e');
       return [];
+    }
+  }
+
+  // Cambiar estado de usuario (0 = archivado, 1 = activo)
+  Future<bool> setUserState(int userId, int newState) async {
+    try {
+      await client
+          .from('users')
+          .update({'state': newState})
+          .eq('idUser', userId);
+
+      return true;
+    } catch (e) {
+      print("❌ Error cambiando estado del usuario: $e");
+      return false;
     }
   }
 }

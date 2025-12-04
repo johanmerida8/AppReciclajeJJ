@@ -8,14 +8,14 @@ import '/theme/app_spacing.dart';
 import '/theme/app_text_styles.dart';
 import 'package:flutter/material.dart';
 
-class UserList extends StatefulWidget {
-  const UserList({super.key});
+class EmployeesList extends StatefulWidget {
+  const EmployeesList({super.key});
 
   @override
-  State<UserList> createState() => _UserListState();
+  State<EmployeesList> createState() => _EmployeesListState();
 }
 
-class _UserListState extends State<UserList> {
+class _EmployeesListState extends State<EmployeesList> {
   final UserListDB _db = UserListDB();
   final TextEditingController _searchController = TextEditingController();
 
