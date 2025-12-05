@@ -235,7 +235,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
 
           print('🔔 Found ${myTasks.length} tasks with assigned employees');
 
-          // Load company logos for each request
+          // Load company logos and ratings for each request
           for (var request in myRequests) {
             final company = request['company'] as Map<String, dynamic>?;
             if (company != null) {
@@ -246,6 +246,10 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                 logoPattern,
               );
               request['companyLogo'] = logo;
+
+              // ✅ Load company rating
+              final rating = await _loadCompanyRating(companyId);
+              request['companyRating'] = rating;
             }
           }
 
@@ -265,6 +269,42 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
       if (mounted) {
         setState(() => _isLoading = false);
       }
+    }
+  }
+
+  /// ✅ Load company rating (average rating of all employees)
+  Future<double> _loadCompanyRating(int companyId) async {
+    try {
+      // Get all employees for this company (no state column on employees table)
+      final employees = await Supabase.instance.client
+          .from('employees')
+          .select('userID')
+          .eq('companyID', companyId);
+
+      if (employees.isEmpty) return 0.0;
+
+      // Get all employee user IDs
+      final employeeUserIds = employees.map((e) => e['userID'] as int).toList();
+
+      // Get all reviews for these employees
+      final reviews = await Supabase.instance.client
+          .from('reviews')
+          .select('starID')
+          .inFilter('receiverID', employeeUserIds)
+          .eq('state', 1);
+
+      if (reviews.isEmpty) return 0.0;
+
+      // Calculate average rating
+      int totalStars = 0;
+      for (var review in reviews) {
+        totalStars += (review['starID'] as int? ?? 0);
+      }
+
+      return totalStars / reviews.length;
+    } catch (e) {
+      print('❌ Error loading company rating: $e');
+      return 0.0;
     }
   }
 
@@ -583,29 +623,68 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
             // Header: Company logo + Name + Time
             Row(
               children: [
-                // Company logo
-                Container(
-                  width: 48,
-                  height: 48,
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF2D8A8A).withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(12),
-                    image:
-                        companyLogo?.url != null
-                            ? DecorationImage(
-                              image: NetworkImage(companyLogo!.url!),
-                              fit: BoxFit.cover,
-                            )
-                            : null,
-                  ),
-                  child:
-                      companyLogo?.url == null
-                          ? const Icon(
-                            Icons.business,
-                            color: Color(0xFF2D8A8A),
-                            size: 24,
-                          )
-                          : null,
+                // Company logo with rating
+                Column(
+                  children: [
+                    // ✅ Company rating above logo
+                    if (request['companyRating'] != null &&
+                        request['companyRating'] > 0)
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 2,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.amber.shade50,
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(
+                              Icons.star,
+                              size: 14,
+                              color: Colors.amber,
+                            ),
+                            const SizedBox(width: 2),
+                            Text(
+                              (request['companyRating'] as double)
+                                  .toStringAsFixed(1),
+                              style: const TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.amber,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    const SizedBox(height: 4),
+                    // Company logo
+                    Container(
+                      width: 48,
+                      height: 48,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF2D8A8A).withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(12),
+                        image:
+                            companyLogo?.url != null
+                                ? DecorationImage(
+                                  image: NetworkImage(companyLogo!.url!),
+                                  fit: BoxFit.cover,
+                                )
+                                : null,
+                      ),
+                      child:
+                          companyLogo?.url == null
+                              ? const Icon(
+                                Icons.business,
+                                color: Color(0xFF2D8A8A),
+                                size: 24,
+                              )
+                              : null,
+                    ),
+                  ],
                 ),
                 const SizedBox(width: 12),
                 // Company name and time

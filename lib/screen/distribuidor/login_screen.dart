@@ -66,26 +66,76 @@ class _LoginScreenState extends State<LoginScreen> {
       // First check if this is an employee trying to login with temporary password
       final employeeData = await employeeDb.getEmployeeByEmail(email);
 
-      if (employeeData != null &&
-          employeeData['temporaryPassword'] == password) {
-        // Employee logging in with temporary password - force password change
-        if (mounted) {
-          ScaffoldMessenger.of(context).hideCurrentSnackBar();
-          Navigator.of(context).pushReplacement(
-            MaterialPageRoute(
-              builder:
-                  (_) =>
-                      EmployeeChangePasswordScreen(employeeData: employeeData),
-            ),
-          );
+      if (employeeData != null) {
+        final tempPassword = employeeData['temporaryPassword'] as String?;
+        final userState = employeeData['user']['state'] as int?;
+
+        // ✅ Employee logging in with temporary password - force password change
+        if (tempPassword != null && tempPassword == password) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).hideCurrentSnackBar();
+            Navigator.of(context).pushReplacement(
+              MaterialPageRoute(
+                builder:
+                    (_) => EmployeeChangePasswordScreen(
+                      employeeData: employeeData,
+                    ),
+              ),
+            );
+          }
+          return;
         }
-        return;
+
+        // ✅ Check if employee account is deactivated (state=0 and no temp password)
+        if (userState == 0 && tempPassword == null) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).hideCurrentSnackBar();
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text(
+                  'Tu cuenta ha sido desactivada por el administrador. Contacta a tu empresa para más información.',
+                ),
+                backgroundColor: Colors.red,
+                duration: Duration(seconds: 5),
+              ),
+            );
+          }
+          return;
+        }
       }
 
       // Regular Supabase authentication
       await authService.signInWithEmailPassword(email, password);
 
       print("Login successful for user: $email");
+
+      // ✅ Check if user account is active (state=1) before proceeding
+      final userResponse =
+          await Supabase.instance.client
+              .from('users')
+              .select('state')
+              .eq('email', email)
+              .single();
+
+      final userState = userResponse['state'] as int?;
+      if (userState != 1) {
+        // Sign them out immediately
+        await authService.signOut();
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).hideCurrentSnackBar();
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                "Tu cuenta está inactiva. Contacta al administrador.",
+              ),
+              backgroundColor: Colors.red,
+              duration: Duration(seconds: 5),
+            ),
+          );
+        }
+        return;
+      }
 
       // Check if user is approved before proceeding
       final isApproved = await authService.isUserApproved(email);

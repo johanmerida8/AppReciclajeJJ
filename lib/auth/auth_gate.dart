@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:reciclaje_app/auth/auth_service.dart';
-import 'package:reciclaje_app/screen/administrator/administrator_dashboard_screen.dart';
 import 'package:reciclaje_app/screen/administrator/administrator_navigations.dart';
 import 'package:reciclaje_app/screen/empresa/company_navigation_screens.dart';
 import 'package:reciclaje_app/screen/employee/employee_navigation_screens.dart';

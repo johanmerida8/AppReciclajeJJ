@@ -51,6 +51,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   int? _currentUserId;
   int _pendingRequestCount = 0; // Notification count
 
+  // ✅ Maps to store request and task status for each article
+  Map<int, String?> _articleRequestStatus = {}; // articleId -> request.status
+  Map<int, String?> _articleTaskStatus =
+      {}; // articleId -> tasks.workflowStatus
+
   // ✅ NUEVO: Estado para navegación de artículos
   int _currentArticleIndex = 0;
   bool _showArticleNavigation = false;
@@ -332,6 +337,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       await _cacheService.saveCache(items, categories, _currentUserId);
       print('✅ Loaded ${items.length} items fresh');
 
+      // ✅ Load request and task statuses for marker colors
+      await _loadArticleStatuses();
+
       // ✅ Ajustar mapa después de cargar artículos (con delay corto para asegurar que el mapa esté renderizado)
       if (_myItems.isNotEmpty) {
         Future.delayed(const Duration(milliseconds: 300), () {
@@ -359,6 +367,59 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       await _loadFreshData(showLoading: false);
     } catch (e) {
       print('Error updating in background: $e');
+    }
+  }
+
+  /// ✅ Load request and task statuses for all articles to determine marker colors
+  Future<void> _loadArticleStatuses() async {
+    if (_currentUserId == null || _myItems.isEmpty) return;
+
+    try {
+      final articleIds = _myItems.map((item) => item.id).toList();
+
+      // Load all requests for user's articles
+      final requests = await Supabase.instance.client
+          .from('request')
+          .select('articleID, status')
+          .inFilter('articleID', articleIds)
+          .eq('state', 1);
+
+      // Load all tasks for user's articles
+      final tasks = await Supabase.instance.client
+          .from('tasks')
+          .select('articleID, workflowStatus')
+          .inFilter('articleID', articleIds)
+          .eq('state', 1);
+
+      if (!mounted) return;
+
+      setState(() {
+        // Map request status by article ID (use latest request per article)
+        _articleRequestStatus = {};
+        for (var request in requests) {
+          final articleId = request['articleID'] as int?;
+          final status = request['status'] as String?;
+          if (articleId != null) {
+            _articleRequestStatus[articleId] = status;
+          }
+        }
+
+        // Map task status by article ID (use latest task per article)
+        _articleTaskStatus = {};
+        for (var task in tasks) {
+          final articleId = task['articleID'] as int?;
+          final workflowStatus = task['workflowStatus'] as String?;
+          if (articleId != null) {
+            _articleTaskStatus[articleId] = workflowStatus;
+          }
+        }
+      });
+
+      print(
+        '✅ Loaded statuses: ${_articleRequestStatus.length} requests, ${_articleTaskStatus.length} tasks',
+      );
+    } catch (e) {
+      print('❌ Error loading article statuses: $e');
     }
   }
 
@@ -1360,21 +1421,31 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final isSelected =
         _showArticleNavigation && _myItems[_currentArticleIndex].id == item.id;
 
-    // ✅ Determine marker color based on workflow status
+    // ✅ Determine marker color based on request.status and tasks.workflowStatus
     Color markerColor;
-    if (item.workflowStatus == 'completado') {
+    final requestStatus = _articleRequestStatus[item.id];
+    final taskStatus = _articleTaskStatus[item.id];
+
+    // Priority 1: Check task status (if task exists)
+    if (taskStatus == 'completado') {
       markerColor = Colors.green; // ✅ Completed - Green
-    } else if (item.workflowStatus == 'vencido') {
+    } else if (taskStatus == 'en_proceso' || taskStatus == 'asignado') {
+      markerColor = Colors.amber; // ✅ Employee working - Amber
+    } else if (taskStatus == 'sin_asignar') {
+      markerColor = Colors.orange; // ✅ Approved, waiting for employee - Orange
+    }
+    // Priority 2: Check request status (if no task, but request exists)
+    else if (requestStatus == 'pendiente') {
+      markerColor = Colors.purple; // ✅ Request pending approval - Purple
+    } else if (requestStatus == 'aprobado') {
+      markerColor =
+          Colors.orange; // ✅ Approved, waiting for task/employee - Orange
+    }
+    // Priority 3: Check article's own workflow status (fallback)
+    else if (item.workflowStatus == 'vencido') {
       markerColor = Colors.red; // ✅ Overdue - Red
-    } else if (item.workflowStatus == 'en_proceso' ||
-        item.workflowStatus == 'asignado') {
-      markerColor = Colors.amber; // ✅ In progress/Assigned - Amber
-    } else if (item.workflowStatus == 'sin_asignar') {
-      markerColor = const Color(
-        0xFFFDD835,
-      ); // ✅ Unassigned (company requested) - Yellow
     } else {
-      // Default: Blue for all published articles (not requested yet)
+      // Default: Blue for published articles (no requests yet)
       markerColor = Colors.blue;
     }
 

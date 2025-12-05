@@ -634,6 +634,39 @@ Descarga la app e inicia sesión con estas credenciales.
     final userName = user['names'] as String? ?? 'Sin nombre';
     final userId = user['idUser'] as int;
     final currentState = user['state'] as int? ?? 1;
+    final tempPassword = employeeData['temporaryPassword'] as String?;
+
+    // ✅ Cannot toggle if employee hasn't set permanent password yet
+    if (tempPassword != null) {
+      showDialog(
+        context: context,
+        builder:
+            (context) => AlertDialog(
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
+              title: const Row(
+                children: [
+                  Icon(Icons.info_outline, color: Colors.orange),
+                  SizedBox(width: 10),
+                  Text('Acción No Disponible', style: TextStyle(fontSize: 18)),
+                ],
+              ),
+              content: Text(
+                '$userName aún no ha configurado su contraseña permanente.\n\n'
+                'El empleado debe iniciar sesión con la contraseña temporal y crear su contraseña antes de que puedas gestionar su estado.',
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Entendido'),
+                ),
+              ],
+            ),
+      );
+      return;
+    }
+
     final newState = currentState == 1 ? 0 : 1;
     final actionText = newState == 0 ? 'desactivar' : 'activar';
 
@@ -1456,17 +1489,8 @@ Descarga la app e inicia sesión con estas credenciales.
                   ),
                 ),
 
-                // Activate/Deactivate toggle button
-                IconButton(
-                  icon: Icon(
-                    isActive
-                        ? Icons.person_off_outlined
-                        : Icons.person_add_outlined,
-                    color: isActive ? Colors.orange : Colors.green,
-                  ),
-                  tooltip: isActive ? 'Desactivar' : 'Activar',
-                  onPressed: () => _toggleEmployeeState(employeeData),
-                ),
+                // Activate/Deactivate toggle button OR pending indicator
+                _buildEmployeeActionButton(employeeData),
               ],
             ),
           ),
@@ -1627,23 +1651,61 @@ Descarga la app e inicia sesión con estas credenciales.
                     ),
                   ),
 
-                  // Activate/Deactivate toggle button
-                  IconButton(
-                    icon: Icon(
-                      isActive
-                          ? Icons.person_off_outlined
-                          : Icons.person_add_outlined,
-                      color: isActive ? Colors.orange : Colors.green,
-                    ),
-                    tooltip: isActive ? 'Desactivar' : 'Activar',
-                    onPressed: () => _toggleEmployeeState(employeeData),
-                  ),
+                  // Activate/Deactivate toggle button OR pending indicator
+                  _buildEmployeeActionButton(employeeData),
                 ],
               ),
             ),
           ),
         );
       },
+    );
+  }
+
+  /// Build action button based on employee state
+  Widget _buildEmployeeActionButton(Map<String, dynamic> employeeData) {
+    final user = employeeData['user'];
+    final userState = user['state'] as int? ?? 1;
+    final tempPassword = employeeData['temporaryPassword'] as String?;
+    final isActive = userState == 1;
+
+    // ✅ PENDING PASSWORD SETUP - Show clock icon (not clickable)
+    if (tempPassword != null) {
+      return Tooltip(
+        message: 'Pendiente de configurar contraseña',
+        child: Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: Colors.grey.shade200,
+            shape: BoxShape.circle,
+          ),
+          child: const Icon(Icons.schedule, color: Colors.grey, size: 24),
+        ),
+      );
+    }
+
+    // ✅ ACTIVE - Can deactivate
+    if (isActive) {
+      return IconButton(
+        icon: const Icon(
+          Icons.person_off_outlined,
+          color: Colors.orange,
+          size: 28,
+        ),
+        tooltip: 'Desactivar empleado',
+        onPressed: () => _toggleEmployeeState(employeeData),
+      );
+    }
+
+    // ✅ INACTIVE - Can reactivate
+    return IconButton(
+      icon: const Icon(
+        Icons.person_add_outlined,
+        color: Colors.green,
+        size: 28,
+      ),
+      tooltip: 'Activar empleado',
+      onPressed: () => _toggleEmployeeState(employeeData),
     );
   }
 }

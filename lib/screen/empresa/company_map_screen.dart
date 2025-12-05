@@ -67,10 +67,8 @@ class _CompanyMapScreenState extends State<CompanyMapScreen>
     'en_espera',
     'sin_asignar',
     'en_proceso',
-    'recogidos',
-    'vencidos',
+    // ✅ recogidos and vencidos moved to profile screen
   };
-  String _sortBy = 'recent'; // 'recent', 'oldest', 'status'
 
   int _currentArticleIndex = 0;
   bool _showArticleNavigation = false;
@@ -478,7 +476,6 @@ class _CompanyMapScreenState extends State<CompanyMapScreen>
   void _applyFilters() {
     print('🔍 Applying filters...');
     print('   Selected statuses: $_selectedStatuses');
-    print('   Sort by: $_sortBy');
     print('   Total items: ${_allItems.length}');
 
     List<RecyclingItem> filtered = List.from(_allItems);
@@ -490,23 +487,15 @@ class _CompanyMapScreenState extends State<CompanyMapScreen>
     filtered =
         filtered.where((item) {
           final status = _getItemStatus(item);
+          // ✅ Exclude recogidos and vencidos from map (they show in profile)
+          if (status == 'recogidos' || status == 'vencidos') return false;
           return _selectedStatuses.contains(status);
         }).toList();
 
     print('   After status filter: ${filtered.length} items');
 
-    // Sort
-    switch (_sortBy) {
-      case 'recent':
-        filtered.sort((a, b) => b.createdAt.compareTo(a.createdAt));
-        break;
-      case 'oldest':
-        filtered.sort((a, b) => a.createdAt.compareTo(b.createdAt));
-        break;
-      case 'status':
-        filtered.sort((a, b) => _getItemStatus(a).compareTo(_getItemStatus(b)));
-        break;
-    }
+    // Sort by most recent (default)
+    filtered.sort((a, b) => b.createdAt.compareTo(a.createdAt));
 
     setState(() {
       _filteredItems = filtered;
@@ -634,17 +623,13 @@ class _CompanyMapScreenState extends State<CompanyMapScreen>
       builder:
           (context) => _FilterDialog(
             selectedStatuses: _selectedStatuses,
-            sortBy: _sortBy,
-            onApply: (statuses, sort) {
+            onApply: (statuses) {
               if (mounted) {
                 setState(() {
                   _selectedStatuses = statuses;
-                  _sortBy = sort;
                   _applyFilters();
                 });
-                print(
-                  '✅ Filters applied: ${statuses.length} statuses, sort: $sort',
-                );
+                print('✅ Filters applied: ${statuses.length} statuses');
                 print(
                   '   Filtered items: ${_filteredItems.length} of ${_allItems.length}',
                 );
@@ -1427,7 +1412,7 @@ class _CompanyMapScreenState extends State<CompanyMapScreen>
       ),
       builder:
           (context) => Container(
-            padding: const EdgeInsets.all(20),
+            padding: const EdgeInsets.all(16),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -1883,14 +1868,9 @@ class _CompanyMapScreenState extends State<CompanyMapScreen>
 // Filter Dialog Widget
 class _FilterDialog extends StatefulWidget {
   final Set<String> selectedStatuses;
-  final String sortBy;
-  final Function(Set<String>, String) onApply;
+  final Function(Set<String>) onApply;
 
-  const _FilterDialog({
-    required this.selectedStatuses,
-    required this.sortBy,
-    required this.onApply,
-  });
+  const _FilterDialog({required this.selectedStatuses, required this.onApply});
 
   @override
   State<_FilterDialog> createState() => _FilterDialogState();
@@ -1898,13 +1878,11 @@ class _FilterDialog extends StatefulWidget {
 
 class _FilterDialogState extends State<_FilterDialog> {
   late Set<String> _tempStatuses;
-  late String _tempSort;
 
   @override
   void initState() {
     super.initState();
     _tempStatuses = Set.from(widget.selectedStatuses);
-    _tempSort = widget.sortBy;
   }
 
   @override
@@ -1933,29 +1911,27 @@ class _FilterDialogState extends State<_FilterDialog> {
               _buildStatusChip('En Espera', 'en_espera', Colors.purple),
               _buildStatusChip('Sin Asignar', 'sin_asignar', Colors.amber),
               _buildStatusChip('En Proceso', 'en_proceso', Colors.orange),
-              _buildStatusChip('Recogidos', 'recogidos', Colors.green),
-              _buildStatusChip('Vencidos', 'vencidos', Colors.red),
+              // ✅ Recogidos and Vencidos removed - they show in profile
             ],
           ),
-          const SizedBox(height: 20),
-          const Text(
-            'Ordenar por:',
-            style: TextStyle(fontWeight: FontWeight.bold),
-          ),
-          const SizedBox(height: 10),
-          DropdownButton<String>(
-            value: _tempSort,
-            isExpanded: true,
-            items: const [
-              DropdownMenuItem(value: 'recent', child: Text('Más recientes')),
-              DropdownMenuItem(value: 'oldest', child: Text('Más antiguos')),
-              DropdownMenuItem(value: 'status', child: Text('Por estado')),
-            ],
-            onChanged: (value) {
-              setState(() {
-                _tempSort = value!;
-              });
-            },
+          const SizedBox(height: 15),
+          // ✅ Clear filters button
+          Center(
+            child: TextButton.icon(
+              onPressed: () {
+                setState(() {
+                  _tempStatuses = {
+                    'publicados',
+                    'en_espera',
+                    'sin_asignar',
+                    'en_proceso',
+                  };
+                });
+              },
+              icon: const Icon(Icons.clear_all),
+              label: const Text('Limpiar filtros'),
+              style: TextButton.styleFrom(foregroundColor: Colors.orange),
+            ),
           ),
           const SizedBox(height: 20),
           Row(
@@ -1970,7 +1946,7 @@ class _FilterDialogState extends State<_FilterDialog> {
               Expanded(
                 child: ElevatedButton(
                   onPressed: () {
-                    widget.onApply(_tempStatuses, _tempSort);
+                    widget.onApply(_tempStatuses);
                     Navigator.pop(context);
                   },
                   style: ElevatedButton.styleFrom(

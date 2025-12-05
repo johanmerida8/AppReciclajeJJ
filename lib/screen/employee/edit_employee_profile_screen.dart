@@ -47,7 +47,10 @@ class _EditEmployeeProfileScreenState extends State<EditEmployeeProfileScreen> {
     if (widget.user.id == null) return;
     
     try {
-      final urlPattern = 'users/${widget.user.id}/avatars/';
+      final userId = widget.user.id!;
+      final userRole = widget.user.role?.toLowerCase() ?? 'user';
+      print('📥 Loading avatar for user: $userId');
+      final urlPattern = 'users/$userRole/$userId/avatars/';
       final avatar = await mediaDatabase.getMainPhotoByPattern(urlPattern);
       
       if (mounted) {

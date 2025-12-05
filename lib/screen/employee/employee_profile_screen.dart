@@ -650,7 +650,7 @@ class _EmployeeProfileScreenState extends State<EmployeeProfileScreen> {
                   slivers: [
                     // Profile header as collapsible app bar
                     SliverAppBar(
-                      expandedHeight: 155,
+                      expandedHeight: 180,
                       floating: false,
                       pinned: false,
                       backgroundColor: const Color(0xFF2D8A8A),
