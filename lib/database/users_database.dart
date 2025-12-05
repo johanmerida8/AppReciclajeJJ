@@ -20,8 +20,9 @@ class UsersDatabase {
 
   // read all
   Stream<List<Users>> getAllUsers() {
-    return database.stream(primaryKey: ['idUser']).map((maps) =>
-        maps.map((map) => Users.fromMap(map)).toList());
+    return database
+        .stream(primaryKey: ['idUser'])
+        .map((maps) => maps.map((map) => Users.fromMap(map)).toList());
   }
 
   // get user Id
@@ -29,11 +30,8 @@ class UsersDatabase {
     if (userID == null) return null;
 
     try {
-      final res = await database
-          .select()
-          .eq('idUser', userID)
-          .maybeSingle();
-      
+      final res = await database.select().eq('idUser', userID).maybeSingle();
+
       if (res == null) {
         print('No user found with ID: $userID');
         return null;
@@ -48,11 +46,8 @@ class UsersDatabase {
 
   Future<Users?> getUserByEmail(String email) async {
     try {
-      final res = await database
-          .select()
-          .eq('email', email)
-          .maybeSingle();
-      
+      final res = await database.select().eq('email', email).maybeSingle();
+
       if (res == null) {
         print('No user found with email: $email');
         return null;

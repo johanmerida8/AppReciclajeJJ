@@ -26,9 +26,11 @@ class _EmployeesScreenState extends State<EmployeesScreen> {
   final _formKey = GlobalKey<FormState>();
   final ScrollController _scrollController = ScrollController();
   String _searchQuery = '';
-  String _selectedFilter = 'todos'; // 'todos', 'calificación', 'estado'
-  String _selectedSort = 'nombre'; // 'nombre', 'objetos', 'rating'
-  
+  String _selectedFilter = 'todos'; // 'todos', 'activos', 'inactivos'
+  String _selectedRatingFilter = 'todos'; // 'todos', '5', '4', '3', '2', '1'
+  bool _isAscending =
+      false; // false = descending (newest first), true = ascending (oldest first)
+
   // Pagination state
   int _currentPage = 1;
   final int _itemsPerPage = 10;
@@ -48,7 +50,8 @@ class _EmployeesScreenState extends State<EmployeesScreen> {
   }
 
   void _onScroll() {
-    if (_scrollController.position.pixels >= _scrollController.position.maxScrollExtent - 200) {
+    if (_scrollController.position.pixels >=
+        _scrollController.position.maxScrollExtent - 200) {
       if (!_isLoadingMore && _hasMoreData) {
         _loadMoreEmployees();
       }
@@ -57,14 +60,14 @@ class _EmployeesScreenState extends State<EmployeesScreen> {
 
   Future<void> _loadMoreEmployees() async {
     if (_isLoadingMore || !_hasMoreData) return;
-    
+
     setState(() {
       _isLoadingMore = true;
     });
-    
+
     // Simulate loading delay
     await Future.delayed(const Duration(milliseconds: 500));
-    
+
     setState(() {
       _currentPage++;
       _isLoadingMore = false;
@@ -79,7 +82,10 @@ class _EmployeesScreenState extends State<EmployeesScreen> {
   }
 
   /// Load employee statistics (completed tasks and rating)
-  Future<Map<String, dynamic>> _loadEmployeeStats(int employeeId, int userId) async {
+  Future<Map<String, dynamic>> _loadEmployeeStats(
+    int employeeId,
+    int userId,
+  ) async {
     try {
       // Get completed tasks count
       final tasks = await Supabase.instance.client
@@ -88,19 +94,19 @@ class _EmployeesScreenState extends State<EmployeesScreen> {
           .eq('employeeID', employeeId)
           .eq('workflowStatus', 'completado')
           .eq('state', 1);
-      
+
       final completedCount = tasks.length;
-      
+
       // Get employee rating from reviews
       final reviews = await Supabase.instance.client
           .from('reviews')
           .select('starID')
           .eq('receiverID', userId)
           .eq('state', 1);
-      
+
       double rating = 0.0;
       int reviewCount = reviews.length;
-      
+
       if (reviewCount > 0) {
         int totalStars = 0;
         for (var review in reviews) {
@@ -108,7 +114,7 @@ class _EmployeesScreenState extends State<EmployeesScreen> {
         }
         rating = totalStars / reviewCount;
       }
-      
+
       return {
         'completedTasks': completedCount,
         'rating': rating,
@@ -116,11 +122,7 @@ class _EmployeesScreenState extends State<EmployeesScreen> {
       };
     } catch (e) {
       print('❌ Error loading employee stats: $e');
-      return {
-        'completedTasks': 0,
-        'rating': 0.0,
-        'reviewCount': 0,
-      };
+      return {'completedTasks': 0, 'rating': 0.0, 'reviewCount': 0};
     }
   }
 
@@ -130,13 +132,13 @@ class _EmployeesScreenState extends State<EmployeesScreen> {
       // ✅ Try new path first (with role)
       String avatarPattern = 'users/$userRole/$userId/avatars/';
       Multimedia? avatar = await _mediaDb.getMainPhotoByPattern(avatarPattern);
-      
+
       // ✅ If not found, try old path (without role) for backward compatibility
       if (avatar == null) {
         avatarPattern = 'users/$userId/avatars/';
         avatar = await _mediaDb.getMainPhotoByPattern(avatarPattern);
       }
-      
+
       return avatar;
     } catch (e) {
       print('❌ Error loading employee avatar: $e');
@@ -145,9 +147,13 @@ class _EmployeesScreenState extends State<EmployeesScreen> {
   }
 
   String _generateTemporaryPassword() {
-    const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#\$%';
+    const chars =
+        'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#\$%';
     final random = Random.secure();
-    return List.generate(8, (index) => chars[random.nextInt(chars.length)]).join();
+    return List.generate(
+      8,
+      (index) => chars[random.nextInt(chars.length)],
+    ).join();
   }
 
   /// Determine email provider based on domain
@@ -161,7 +167,11 @@ class _EmployeesScreenState extends State<EmployeesScreen> {
     return 'unknown';
   }
 
-  Future<void> _createEmployee(String name, String email, BuildContext dialogContext) async {
+  Future<void> _createEmployee(
+    String name,
+    String email,
+    BuildContext dialogContext,
+  ) async {
     if (name.isEmpty || email.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Por favor completa todos los campos')),
@@ -172,9 +182,9 @@ class _EmployeesScreenState extends State<EmployeesScreen> {
     // Validate email
     final emailRegex = RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$');
     if (!emailRegex.hasMatch(email)) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Ingrese un correo válido')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Ingrese un correo válido')));
       return;
     }
 
@@ -204,12 +214,12 @@ class _EmployeesScreenState extends State<EmployeesScreen> {
 
       // Send email with temporary password
       print('🔄 Starting email send process for: $email');
-      
+
       // Detect email provider
       final provider = _getEmailProvider(email);
       print('📧 Detected email provider: $provider');
       print('📤 Sending via Gmail SMTP (can send to any provider)');
-      
+
       // Use Gmail SMTP to send to all email providers
       // Gmail can send to Gmail, Outlook, Hotmail, and any other email
       final emailSent = await sendMailFromGmail(
@@ -222,7 +232,7 @@ class _EmployeesScreenState extends State<EmployeesScreen> {
           temporaryPassword: tempPassword,
         ),
       );
-      
+
       print('📬 Email send result: ${emailSent ? "SUCCESS" : "FAILED"}');
 
       if (mounted) {
@@ -230,152 +240,173 @@ class _EmployeesScreenState extends State<EmployeesScreen> {
         showDialog(
           context: context,
           barrierDismissible: false,
-          builder: (context) => AlertDialog(
-            title: const Row(
-              children: [
-                Icon(Icons.check_circle, color: Colors.green),
-                SizedBox(width: 10),
-                Text('Empleado Creado'),
-              ],
-            ),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text('Empleado creado exitosamente.'),
-                const SizedBox(height: 8),
-                if (emailSent)
-                  Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: Colors.green.shade50,
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: Colors.green.shade300),
-                    ),
-                    child: Row(
-                      children: [
-                        Icon(Icons.email, color: Colors.green.shade700, size: 20),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            '✓ Credenciales enviadas a $email',
-                            style: TextStyle(
-                              color: Colors.green.shade900,
-                              fontSize: 13,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  )
-                else
-                  Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: Colors.orange.shade50,
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: Colors.orange.shade300),
-                    ),
-                    child: Row(
-                      children: [
-                        Icon(Icons.warning, color: Colors.orange.shade700, size: 20),
-                        const SizedBox(width: 8),
-                        const Expanded(
-                          child: Text(
-                            'No se pudo enviar el email. Comparte las credenciales manualmente.',
-                            style: TextStyle(
-                              color: Colors.orange,
-                              fontSize: 13,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                const SizedBox(height: 16),
-                const Text(
-                  'Credenciales de Acceso:',
-                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+          builder:
+              (context) => AlertDialog(
+                title: const Row(
+                  children: [
+                    Icon(Icons.check_circle, color: Colors.green),
+                    SizedBox(width: 10),
+                    Text('Empleado Creado'),
+                  ],
                 ),
-                const SizedBox(height: 8),
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.grey[100],
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: Color(0xFF2D8A8A)),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
+                content: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('Empleado creado exitosamente.'),
+                    const SizedBox(height: 8),
+                    if (emailSent)
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.green.shade50,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.green.shade300),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(
+                              Icons.email,
+                              color: Colors.green.shade700,
+                              size: 20,
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                '✓ Credenciales enviadas a $email',
+                                style: TextStyle(
+                                  color: Colors.green.shade900,
+                                  fontSize: 13,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      )
+                    else
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.orange.shade50,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.orange.shade300),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(
+                              Icons.warning,
+                              color: Colors.orange.shade700,
+                              size: 20,
+                            ),
+                            const SizedBox(width: 8),
+                            const Expanded(
+                              child: Text(
+                                'No se pudo enviar el email. Comparte las credenciales manualmente.',
+                                style: TextStyle(
+                                  color: Colors.orange,
+                                  fontSize: 13,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    const SizedBox(height: 16),
+                    const Text(
+                      'Credenciales de Acceso:',
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 14,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.grey[100],
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Color(0xFF2D8A8A)),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          const Icon(Icons.email, size: 16),
-                          const SizedBox(width: 8),
-                          Expanded(child: Text(email, style: TextStyle(fontSize: 13))),
+                          Row(
+                            children: [
+                              const Icon(Icons.email, size: 16),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  email,
+                                  style: TextStyle(fontSize: 13),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const Divider(height: 16),
+                          Row(
+                            children: [
+                              const Icon(Icons.lock, size: 16),
+                              const SizedBox(width: 8),
+                              const Text(
+                                'Contraseña:',
+                                style: TextStyle(fontSize: 13),
+                              ),
+                            ],
+                          ),
                         ],
                       ),
-                      const Divider(height: 16),
-                      Row(
+                    ),
+                    const SizedBox(height: 8),
+                    const Text(
+                      'Contraseña Temporal:',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 8),
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.grey[200],
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Row(
                         children: [
-                          const Icon(Icons.lock, size: 16),
-                          const SizedBox(width: 8),
-                          const Text('Contraseña:', style: TextStyle(fontSize: 13)),
+                          Expanded(
+                            child: Text(
+                              tempPassword,
+                              style: const TextStyle(
+                                fontFamily: 'monospace',
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.copy),
+                            onPressed: () {
+                              Clipboard.setData(
+                                ClipboardData(text: tempPassword),
+                              );
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text('Contraseña copiada'),
+                                ),
+                              );
+                            },
+                          ),
                         ],
                       ),
-                    ],
-                  ),
+                    ),
+                    const SizedBox(height: 16),
+                    const Text(
+                      'IMPORTANTE: Comparte estas credenciales con el empleado. Debe cambiar la contraseña en su primer inicio de sesión.',
+                      style: TextStyle(color: Colors.orange, fontSize: 12),
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 8),
-                const Text(
-                  'Contraseña Temporal:',
-                  style: TextStyle(fontWeight: FontWeight.bold),
-                ),
-                const SizedBox(height: 8),
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.grey[200],
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          tempPassword,
-                          style: const TextStyle(
-                            fontFamily: 'monospace',
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.copy),
-                        onPressed: () {
-                          Clipboard.setData(ClipboardData(text: tempPassword));
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('Contraseña copiada')),
-                          );
-                        },
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 16),
-                const Text(
-                  'IMPORTANTE: Comparte estas credenciales con el empleado. Debe cambiar la contraseña en su primer inicio de sesión.',
-                  style: TextStyle(
-                    color: Colors.orange,
-                    fontSize: 12,
-                  ),
-                ),
-              ],
-            ),
-            actions: [
-              TextButton(
-                onPressed: () {
-                  final message = '''
+                actions: [
+                  TextButton(
+                    onPressed: () {
+                      final message = '''
 🌿 Reciclaje App - Credenciales de Acceso
 
 Hola! Tu cuenta de empleado ha sido creada.
@@ -387,23 +418,23 @@ Hola! Tu cuenta de empleado ha sido creada.
 
 Descarga la app e inicia sesión con estas credenciales.
 ''';
-                  Share.share(message);
-                },
-                child: const Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(Icons.share),
-                    SizedBox(width: 8),
-                    Text('Compartir'),
-                  ],
-                ),
+                      Share.share(message);
+                    },
+                    child: const Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.share),
+                        SizedBox(width: 8),
+                        Text('Compartir'),
+                      ],
+                    ),
+                  ),
+                  ElevatedButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text('Entendido'),
+                  ),
+                ],
               ),
-              ElevatedButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('Entendido'),
-              ),
-            ],
-          ),
         );
       }
     } catch (e) {
@@ -426,185 +457,323 @@ Descarga la app e inicia sesión con estas credenciales.
 
     showDialog(
       context: context,
-      builder: (dialogContext) => StatefulBuilder(
-        builder: (context, setState) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Row(
-          children: [
-            Icon(Icons.person_add, color: Color(0xFF2D8A8A)),
-            SizedBox(width: 10),
-            Text('Nuevo Empleado'),
-          ],
-        ),
-        content: Form(
-          key: dialogFormKey,
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextFormField(
-                  controller: nameController,
-                  decoration: InputDecoration(
-                    hintText: 'Nombre completo',
-                    filled: true,
-                    fillColor: Colors.grey[100],
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(8),
-                      borderSide: BorderSide.none,
-                    ),
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      builder:
+          (dialogContext) => StatefulBuilder(
+            builder:
+                (context, setState) => AlertDialog(
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16),
                   ),
-                  validator: (value) {
-                    if (value == null || value.trim().isEmpty) {
-                      return 'Por favor ingresa el nombre completo';
-                    }
-                    if (value.trim().length < 3) {
-                      return 'El nombre debe tener al menos 3 caracteres';
-                    }
-                    return null;
-                  },
-                ),
-                const SizedBox(height: 16),
-                TextFormField(
-                  controller: emailController,
-                  decoration: InputDecoration(
-                    hintText: 'Correo electrónico',
-                    filled: true,
-                    fillColor: Colors.grey[100],
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(8),
-                      borderSide: BorderSide.none,
-                    ),
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                  ),
-                  keyboardType: TextInputType.emailAddress,
-                  validator: (value) {
-                    if (value == null || value.trim().isEmpty) {
-                      return 'Por favor ingresa el correo electrónico';
-                    }
-                    final emailRegex = RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$');
-                    if (!emailRegex.hasMatch(value)) {
-                      return 'Ingresa un correo válido';
-                    }
-                    final domain = value.toLowerCase().split('@').last;
-                    if (domain != 'gmail.com' && domain != 'outlook.com' && domain != 'hotmail.com') {
-                      return 'Solo se permiten correos de Gmail, Outlook o Hotmail';
-                    }
-                    return null;
-                  },
-                ),
-                const SizedBox(height: 16),
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.blue.shade50,
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Row(
+                  title: const Row(
                     children: [
-                      Icon(Icons.info_outline, color: Colors.blue.shade700),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          'Se generará una contraseña temporal automáticamente y se enviará al correo',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: Colors.blue.shade700,
-                          ),
-                        ),
-                      ),
+                      Icon(Icons.person_add, color: Color(0xFF2D8A8A)),
+                      SizedBox(width: 10),
+                      Text('Nuevo Empleado'),
                     ],
                   ),
+                  content: Form(
+                    key: dialogFormKey,
+                    child: SingleChildScrollView(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          TextFormField(
+                            controller: nameController,
+                            decoration: InputDecoration(
+                              hintText: 'Nombre completo',
+                              filled: true,
+                              fillColor: Colors.grey[100],
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(8),
+                                borderSide: BorderSide.none,
+                              ),
+                              contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 16,
+                                vertical: 12,
+                              ),
+                            ),
+                            validator: (value) {
+                              if (value == null || value.trim().isEmpty) {
+                                return 'Por favor ingresa el nombre completo';
+                              }
+                              if (value.trim().length < 3) {
+                                return 'El nombre debe tener al menos 3 caracteres';
+                              }
+                              return null;
+                            },
+                          ),
+                          const SizedBox(height: 16),
+                          TextFormField(
+                            controller: emailController,
+                            decoration: InputDecoration(
+                              hintText: 'Correo electrónico',
+                              filled: true,
+                              fillColor: Colors.grey[100],
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(8),
+                                borderSide: BorderSide.none,
+                              ),
+                              contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 16,
+                                vertical: 12,
+                              ),
+                            ),
+                            keyboardType: TextInputType.emailAddress,
+                            validator: (value) {
+                              if (value == null || value.trim().isEmpty) {
+                                return 'Por favor ingresa el correo electrónico';
+                              }
+                              final emailRegex = RegExp(
+                                r'^[^@\s]+@[^@\s]+\.[^@\s]+$',
+                              );
+                              if (!emailRegex.hasMatch(value)) {
+                                return 'Ingresa un correo válido';
+                              }
+                              final domain =
+                                  value.toLowerCase().split('@').last;
+                              if (domain != 'gmail.com' &&
+                                  domain != 'outlook.com' &&
+                                  domain != 'hotmail.com') {
+                                return 'Solo se permiten correos de Gmail, Outlook o Hotmail';
+                              }
+                              return null;
+                            },
+                          ),
+                          const SizedBox(height: 16),
+                          Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: Colors.blue.shade50,
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Row(
+                              children: [
+                                Icon(
+                                  Icons.info_outline,
+                                  color: Colors.blue.shade700,
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    'Se generará una contraseña temporal automáticamente y se enviará al correo',
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: Colors.blue.shade700,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed:
+                          isCreating
+                              ? null
+                              : () {
+                                Navigator.pop(dialogContext);
+                                nameController.dispose();
+                                emailController.dispose();
+                              },
+                      child: const Text('Cancelar'),
+                    ),
+                    ElevatedButton(
+                      onPressed:
+                          isCreating
+                              ? null
+                              : () async {
+                                if (isCreating) return;
+
+                                // Validate form
+                                if (!dialogFormKey.currentState!.validate()) {
+                                  return;
+                                }
+
+                                setState(() => isCreating = true);
+
+                                final name = nameController.text.trim();
+                                final email = emailController.text.trim();
+
+                                await _createEmployee(
+                                  name,
+                                  email,
+                                  dialogContext,
+                                );
+
+                                // Dispose controllers after navigation completes
+                                nameController.dispose();
+                                emailController.dispose();
+                              },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF2D8A8A),
+                      ),
+                      child:
+                          isCreating
+                              ? const SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Colors.white,
+                                ),
+                              )
+                              : const Text('Crear'),
+                    ),
+                  ],
                 ),
-              ],
-            ),
           ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: isCreating ? null : () {
-              Navigator.pop(dialogContext);
-              nameController.dispose();
-              emailController.dispose();
-            },
-            child: const Text('Cancelar'),
-          ),
-          ElevatedButton(
-            onPressed: isCreating ? null : () async {
-              if (isCreating) return;
-              
-              // Validate form
-              if (!dialogFormKey.currentState!.validate()) {
-                return;
-              }
-              
-              setState(() => isCreating = true);
-              
-              final name = nameController.text.trim();
-              final email = emailController.text.trim();
-              
-              await _createEmployee(name, email, dialogContext);
-              
-              // Dispose controllers after navigation completes
-              nameController.dispose();
-              emailController.dispose();
-            },
-            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF2D8A8A)),
-            child: isCreating 
-              ? const SizedBox(
-                  width: 16,
-                  height: 16,
-                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                )
-              : const Text('Crear'),
-          ),
-        ],
-      )
-        ),
     );
   }
 
-  Future<void> _deleteEmployee(Map<String, dynamic> employeeData) async {
-    final userName = employeeData['user']['names'] as String?;
+  Future<void> _toggleEmployeeState(Map<String, dynamic> employeeData) async {
+    final user = employeeData['user'];
+    final userName = user['names'] as String? ?? 'Sin nombre';
+    final userId = user['idUser'] as int;
+    final currentState = user['state'] as int? ?? 1;
+    final newState = currentState == 1 ? 0 : 1;
+    final actionText = newState == 0 ? 'desactivar' : 'activar';
+
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Confirmar eliminación'),
-        content: Text('¿Estás seguro de desactivar al empleado "$userName"?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancelar'),
+      builder:
+          (context) => AlertDialog(
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+            ),
+            title: Row(
+              children: [
+                Icon(
+                  newState == 0 ? Icons.person_off : Icons.person,
+                  color: newState == 0 ? Colors.orange : Colors.green,
+                ),
+                const SizedBox(width: 10),
+                Text(
+                  newState == 0 ? 'Desactivar Empleado' : 'Activar Empleado',
+                  style: const TextStyle(fontSize: 18),
+                ),
+              ],
+            ),
+            content: Text(
+              '¿Estás seguro de $actionText a $userName?\n\n'
+              '${newState == 0 ? "El empleado no podrá iniciar sesión hasta que sea reactivado." : "El empleado podrá iniciar sesión nuevamente."}',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('Cancelar'),
+              ),
+              ElevatedButton(
+                onPressed: () => Navigator.pop(context, true),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: newState == 0 ? Colors.orange : Colors.green,
+                ),
+                child: Text(newState == 0 ? 'Desactivar' : 'Activar'),
+              ),
+            ],
           ),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(context, true),
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-            child: const Text('Eliminar'),
-          ),
-        ],
-      ),
     );
 
     if (confirmed == true) {
       try {
-        final userId = employeeData['user']['idUser'] as int;
-        await _employeeDb.deleteEmployee(userId);
+        // Update user state in database
+        await Supabase.instance.client
+            .from('users')
+            .update({'state': newState})
+            .eq('idUser', userId);
+
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Empleado desactivado')),
+            SnackBar(
+              content: Text(
+                newState == 0
+                    ? 'Empleado desactivado exitosamente'
+                    : 'Empleado activado exitosamente',
+              ),
+              backgroundColor: newState == 0 ? Colors.orange : Colors.green,
+            ),
           );
         }
       } catch (e) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text('Error al eliminar: $e'),
+              content: Text('Error al cambiar estado: $e'),
               backgroundColor: Colors.red,
             ),
           );
         }
       }
     }
+  }
+
+  /// Filter and sort employees based on selected filters
+  Future<List<Map<String, dynamic>>> _filterAndSortEmployees(
+    List<Map<String, dynamic>> employees,
+  ) async {
+    // First, filter by search query
+    List<Map<String, dynamic>> filtered =
+        employees.where((emp) {
+          if (_searchQuery.isEmpty) return true;
+          final userName =
+              (emp['user']['names'] as String?)?.toLowerCase() ?? '';
+          final userEmail =
+              (emp['user']['email'] as String?)?.toLowerCase() ?? '';
+          return userName.contains(_searchQuery) ||
+              userEmail.contains(_searchQuery);
+        }).toList();
+
+    // Filter by state (active/inactive)
+    if (_selectedFilter == 'activos') {
+      filtered =
+          filtered.where((emp) {
+            final state = emp['user']['state'] as int? ?? 1;
+            return state == 1;
+          }).toList();
+    } else if (_selectedFilter == 'inactivos') {
+      filtered =
+          filtered.where((emp) {
+            final state = emp['user']['state'] as int? ?? 1;
+            return state == 0;
+          }).toList();
+    }
+
+    // Load stats for each employee and filter by rating
+    List<Map<String, dynamic>> employeesWithStats = [];
+    for (var emp in filtered) {
+      final userId = emp['user']['idUser'] as int;
+      final employeeId = emp['idEmployee'] as int;
+      final stats = await _loadEmployeeStats(employeeId, userId);
+      final rating = stats['rating'] as double;
+
+      // Apply rating filter
+      bool passesRatingFilter = true;
+      if (_selectedRatingFilter != 'todos') {
+        final minRating = int.parse(_selectedRatingFilter);
+        passesRatingFilter = rating >= minRating;
+      }
+
+      if (passesRatingFilter) {
+        employeesWithStats.add({...emp, '_stats': stats, '_rating': rating});
+      }
+    }
+
+    // Sort by created_at date
+    employeesWithStats.sort((a, b) {
+      final aDate = a['user']['created_at'] as String? ?? '';
+      final bDate = b['user']['created_at'] as String? ?? '';
+
+      if (_isAscending) {
+        return aDate.compareTo(bDate); // Oldest first
+      } else {
+        return bDate.compareTo(aDate); // Newest first
+      }
+    });
+
+    return employeesWithStats;
   }
 
   @override
@@ -637,7 +806,7 @@ Descarga la app e inicia sesión con estas credenciales.
                 ],
               ),
             ),
-            
+
             // Search bar
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 20),
@@ -660,24 +829,295 @@ Descarga la app e inicia sesión con estas credenciales.
                 ),
               ),
             ),
-            
+
             // Filter chips
-            // Padding(
-            //   padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-            //   child: SingleChildScrollView(
-            //     scrollDirection: Axis.horizontal,
-            //     child: Row(
-            //       children: [
-            //         _buildFilterChip(Icons.star, 'calificación', _selectedFilter == 'calificación'),
-            //         const SizedBox(width: 8),
-            //         _buildFilterChip(Icons.check_circle, 'Estado', _selectedFilter == 'estado'),
-            //         const SizedBox(width: 8),
-            //         _buildFilterChip(Icons.sort, 'Archivados', _selectedFilter == 'archivados'),
-            //       ],
-            //     ),
-            //   ),
-            // ),
-            
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: [
+                    // Rating Filter
+                    PopupMenuButton<String>(
+                      offset: const Offset(0, 40),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 8,
+                        ),
+                        decoration: BoxDecoration(
+                          color:
+                              _selectedRatingFilter != 'todos'
+                                  ? const Color(0xFF2D8A8A).withOpacity(0.2)
+                                  : const Color(0xFFF5F7F8),
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(
+                            color:
+                                _selectedRatingFilter != 'todos'
+                                    ? const Color(0xFF2D8A8A)
+                                    : Colors.transparent,
+                          ),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.star,
+                              size: 18,
+                              color:
+                                  _selectedRatingFilter != 'todos'
+                                      ? const Color(0xFF2D8A8A)
+                                      : Colors.grey,
+                            ),
+                            const SizedBox(width: 6),
+                            Text(
+                              _selectedRatingFilter == 'todos'
+                                  ? 'Calificación'
+                                  : '★ $_selectedRatingFilter',
+                              style: TextStyle(
+                                color:
+                                    _selectedRatingFilter != 'todos'
+                                        ? const Color(0xFF2D8A8A)
+                                        : Colors.black87,
+                              ),
+                            ),
+                            const SizedBox(width: 4),
+                            Icon(
+                              Icons.arrow_drop_down,
+                              size: 18,
+                              color:
+                                  _selectedRatingFilter != 'todos'
+                                      ? const Color(0xFF2D8A8A)
+                                      : Colors.grey,
+                            ),
+                          ],
+                        ),
+                      ),
+                      onSelected: (value) {
+                        setState(() {
+                          _selectedRatingFilter = value;
+                          _currentPage = 1;
+                        });
+                      },
+                      itemBuilder:
+                          (context) => [
+                            const PopupMenuItem(
+                              value: 'todos',
+                              child: Text('Todas las calificaciones'),
+                            ),
+                            const PopupMenuDivider(),
+                            const PopupMenuItem(
+                              value: '5',
+                              child: Row(
+                                children: [
+                                  Icon(
+                                    Icons.star,
+                                    size: 16,
+                                    color: Colors.amber,
+                                  ),
+                                  SizedBox(width: 8),
+                                  Text('5 estrellas'),
+                                ],
+                              ),
+                            ),
+                            const PopupMenuItem(
+                              value: '4',
+                              child: Row(
+                                children: [
+                                  Icon(
+                                    Icons.star,
+                                    size: 16,
+                                    color: Colors.amber,
+                                  ),
+                                  SizedBox(width: 8),
+                                  Text('4+ estrellas'),
+                                ],
+                              ),
+                            ),
+                            const PopupMenuItem(
+                              value: '3',
+                              child: Row(
+                                children: [
+                                  Icon(
+                                    Icons.star,
+                                    size: 16,
+                                    color: Colors.amber,
+                                  ),
+                                  SizedBox(width: 8),
+                                  Text('3+ estrellas'),
+                                ],
+                              ),
+                            ),
+                            const PopupMenuItem(
+                              value: '2',
+                              child: Row(
+                                children: [
+                                  Icon(
+                                    Icons.star,
+                                    size: 16,
+                                    color: Colors.amber,
+                                  ),
+                                  SizedBox(width: 8),
+                                  Text('2+ estrellas'),
+                                ],
+                              ),
+                            ),
+                            const PopupMenuItem(
+                              value: '1',
+                              child: Row(
+                                children: [
+                                  Icon(
+                                    Icons.star,
+                                    size: 16,
+                                    color: Colors.amber,
+                                  ),
+                                  SizedBox(width: 8),
+                                  Text('1+ estrellas'),
+                                ],
+                              ),
+                            ),
+                          ],
+                    ),
+                    const SizedBox(width: 8),
+
+                    // State Filter (Active/Inactive) - Dropdown
+                    PopupMenuButton<String>(
+                      offset: const Offset(0, 40),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 8,
+                        ),
+                        decoration: BoxDecoration(
+                          color:
+                              _selectedFilter != 'todos'
+                                  ? const Color(0xFF2D8A8A).withOpacity(0.2)
+                                  : const Color(0xFFF5F7F8),
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(
+                            color:
+                                _selectedFilter != 'todos'
+                                    ? const Color(0xFF2D8A8A)
+                                    : Colors.transparent,
+                          ),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.check_circle,
+                              size: 18,
+                              color:
+                                  _selectedFilter != 'todos'
+                                      ? const Color(0xFF2D8A8A)
+                                      : Colors.grey,
+                            ),
+                            const SizedBox(width: 6),
+                            Text(
+                              _selectedFilter == 'activos'
+                                  ? 'Activos'
+                                  : _selectedFilter == 'inactivos'
+                                  ? 'Inactivos'
+                                  : 'Estado',
+                              style: TextStyle(
+                                color:
+                                    _selectedFilter != 'todos'
+                                        ? const Color(0xFF2D8A8A)
+                                        : Colors.black87,
+                              ),
+                            ),
+                            const SizedBox(width: 4),
+                            Icon(
+                              Icons.arrow_drop_down,
+                              size: 18,
+                              color:
+                                  _selectedFilter != 'todos'
+                                      ? const Color(0xFF2D8A8A)
+                                      : Colors.grey,
+                            ),
+                          ],
+                        ),
+                      ),
+                      onSelected: (value) {
+                        setState(() {
+                          _selectedFilter = value;
+                          _currentPage = 1;
+                        });
+                      },
+                      itemBuilder:
+                          (context) => [
+                            const PopupMenuItem(
+                              value: 'todos',
+                              child: Text('Todos los empleados'),
+                            ),
+                            const PopupMenuDivider(),
+                            const PopupMenuItem(
+                              value: 'activos',
+                              child: Row(
+                                children: [
+                                  Icon(
+                                    Icons.check_circle,
+                                    size: 16,
+                                    color: Colors.green,
+                                  ),
+                                  SizedBox(width: 8),
+                                  Text('Activos'),
+                                ],
+                              ),
+                            ),
+                            const PopupMenuItem(
+                              value: 'inactivos',
+                              child: Row(
+                                children: [
+                                  Icon(
+                                    Icons.cancel,
+                                    size: 16,
+                                    color: Colors.grey,
+                                  ),
+                                  SizedBox(width: 8),
+                                  Text('Inactivos'),
+                                ],
+                              ),
+                            ),
+                          ],
+                    ),
+                    const SizedBox(width: 8),
+
+                    // Sort Order (Icon only - Ascending/Descending by date)
+                    IconButton(
+                      icon: Icon(
+                        _isAscending
+                            ? Icons.arrow_upward
+                            : Icons.arrow_downward,
+                        color: const Color(0xFF2D8A8A),
+                      ),
+                      tooltip: _isAscending ? 'Más antiguos' : 'Más recientes',
+                      onPressed: () {
+                        setState(() {
+                          _isAscending = !_isAscending;
+                          _currentPage = 1;
+                        });
+                      },
+                      style: IconButton.styleFrom(
+                        backgroundColor: const Color(
+                          0xFF2D8A8A,
+                        ).withOpacity(0.1),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
             // Employee list
             Expanded(
               child: StreamBuilder<List<Map<String, dynamic>>>(
@@ -692,126 +1132,164 @@ Descarga la app e inicia sesión con estas credenciales.
                   }
 
                   final employees = snapshot.data ?? [];
-                  
-                  // Filter employees by search query
-                  final filteredEmployees = employees.where((emp) {
-                    if (_searchQuery.isEmpty) return true;
-                    final userName = (emp['user']['names'] as String?)?.toLowerCase() ?? '';
-                    final userEmail = (emp['user']['email'] as String?)?.toLowerCase() ?? '';
-                    return userName.contains(_searchQuery) || userEmail.contains(_searchQuery);
-                  }).toList();
 
-                  if (filteredEmployees.isEmpty && _searchQuery.isNotEmpty) {
-                    return Center(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(Icons.search_off, size: 80, color: Colors.grey[400]),
-                          const SizedBox(height: 16),
-                          Text(
-                            'No se encontraron empleados',
-                            style: TextStyle(fontSize: 16, color: Colors.grey[600]),
-                          ),
-                        ],
-                      ),
-                    );
-                  }
+                  // Filter and sort employees
+                  return FutureBuilder<List<Map<String, dynamic>>>(
+                    future: _filterAndSortEmployees(employees),
+                    builder: (context, filteredSnapshot) {
+                      if (filteredSnapshot.connectionState ==
+                          ConnectionState.waiting) {
+                        return const Center(child: CircularProgressIndicator());
+                      }
 
-                  if (employees.isEmpty) {
-                    return Center(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(Icons.people_outline, size: 80, color: Colors.grey[400]),
-                          const SizedBox(height: 16),
-                          Text(
-                            'No hay empleados registrados',
-                            style: TextStyle(fontSize: 16, color: Colors.grey[600]),
+                      final filteredEmployees = filteredSnapshot.data ?? [];
+
+                      if (filteredEmployees.isEmpty &&
+                          _searchQuery.isNotEmpty) {
+                        return Center(
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(
+                                Icons.search_off,
+                                size: 80,
+                                color: Colors.grey[400],
+                              ),
+                              const SizedBox(height: 16),
+                              Text(
+                                'No se encontraron empleados',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  color: Colors.grey[600],
+                                ),
+                              ),
+                            ],
                           ),
-                          const SizedBox(height: 24),
-                          ElevatedButton.icon(
-                            onPressed: _showCreateEmployeeDialog,
-                            icon: const Icon(Icons.add),
-                            label: const Text('Agregar Empleado'),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: const Color(0xFF2D8A8A),
-                              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                        );
+                      }
+
+                      if (employees.isEmpty) {
+                        return Center(
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(
+                                Icons.people_outline,
+                                size: 80,
+                                color: Colors.grey[400],
+                              ),
+                              const SizedBox(height: 16),
+                              Text(
+                                'No hay empleados registrados',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  color: Colors.grey[600],
+                                ),
+                              ),
+                              const SizedBox(height: 24),
+                              ElevatedButton.icon(
+                                onPressed: _showCreateEmployeeDialog,
+                                icon: const Icon(Icons.add),
+                                label: const Text('Agregar Empleado'),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: const Color(0xFF2D8A8A),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 24,
+                                    vertical: 12,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      }
+
+                      // ✅ Apply pagination
+                      final totalToShow = _currentPage * _itemsPerPage;
+                      final paginatedEmployees =
+                          filteredEmployees.take(totalToShow).toList();
+                      final hasMore =
+                          filteredEmployees.length > paginatedEmployees.length;
+
+                      // Update hasMoreData flag
+                      WidgetsBinding.instance.addPostFrameCallback((_) {
+                        if (mounted && _hasMoreData != hasMore) {
+                          setState(() {
+                            _hasMoreData = hasMore;
+                          });
+                        }
+                      });
+
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          // Total count
+                          Padding(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 20,
+                              vertical: 8,
+                            ),
+                            child: Text(
+                              'Total ${filteredEmployees.length}',
+                              style: const TextStyle(
+                                fontSize: 14,
+                                color: Colors.grey,
+                              ),
+                            ),
+                          ),
+
+                          // Employee cards with RefreshIndicator
+                          Expanded(
+                            child: RefreshIndicator(
+                              color: const Color(0xFF2D8A8A),
+                              onRefresh: _refreshEmployees,
+                              child: ListView.builder(
+                                controller: _scrollController,
+                                padding: const EdgeInsets.fromLTRB(
+                                  20,
+                                  0,
+                                  20,
+                                  80,
+                                ), // ✅ Bottom padding to prevent FAB overlap
+                                itemCount:
+                                    paginatedEmployees.length +
+                                    (hasMore ? 1 : 0),
+                                itemBuilder: (context, index) {
+                                  if (index == paginatedEmployees.length) {
+                                    // Loading indicator at bottom
+                                    return Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        vertical: 20,
+                                      ),
+                                      alignment: Alignment.center,
+                                      child: const Column(
+                                        children: [
+                                          CircularProgressIndicator(
+                                            color: Color(0xFF2D8A8A),
+                                          ),
+                                          SizedBox(height: 8),
+                                          Text(
+                                            'Cargando empleados...',
+                                            style: TextStyle(
+                                              fontSize: 14,
+                                              color: Colors.grey,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    );
+                                  }
+
+                                  final employeeData =
+                                      paginatedEmployees[index];
+                                  return _buildEmployeeCard(employeeData);
+                                },
+                              ),
                             ),
                           ),
                         ],
-                      ),
-                    );
-                  }
-
-                  // ✅ Apply pagination
-                  final totalToShow = _currentPage * _itemsPerPage;
-                  final paginatedEmployees = filteredEmployees.take(totalToShow).toList();
-                  final hasMore = filteredEmployees.length > paginatedEmployees.length;
-                  
-                  // Update hasMoreData flag
-                  WidgetsBinding.instance.addPostFrameCallback((_) {
-                    if (mounted && _hasMoreData != hasMore) {
-                      setState(() {
-                        _hasMoreData = hasMore;
-                      });
-                    }
-                  });
-
-                  return Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      // Total count
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-                        child: Text(
-                          'Total ${filteredEmployees.length}',
-                          style: const TextStyle(
-                            fontSize: 14,
-                            color: Colors.grey,
-                          ),
-                        ),
-                      ),
-                      
-                      // Employee cards with RefreshIndicator
-                      Expanded(
-                        child: RefreshIndicator(
-                          color: const Color(0xFF2D8A8A),
-                          onRefresh: _refreshEmployees,
-                          child: ListView.builder(
-                            controller: _scrollController,
-                            padding: const EdgeInsets.symmetric(horizontal: 20),
-                            itemCount: paginatedEmployees.length + (hasMore ? 1 : 0),
-                            itemBuilder: (context, index) {
-                              if (index == paginatedEmployees.length) {
-                                // Loading indicator at bottom
-                                return Container(
-                                  padding: const EdgeInsets.symmetric(vertical: 20),
-                                  alignment: Alignment.center,
-                                  child: const Column(
-                                    children: [
-                                      CircularProgressIndicator(
-                                        color: Color(0xFF2D8A8A),
-                                      ),
-                                      SizedBox(height: 8),
-                                      Text(
-                                        'Cargando empleados...',
-                                        style: TextStyle(
-                                          fontSize: 14,
-                                          color: Colors.grey,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                );
-                              }
-                              
-                              final employeeData = paginatedEmployees[index];
-                              return _buildEmployeeCard(employeeData);
-                            },
-                          ),
-                        ),
-                      ),
-                    ],
+                      );
+                    },
                   );
                 },
               ),
@@ -827,47 +1305,186 @@ Descarga la app e inicia sesión con estas credenciales.
     );
   }
 
-  Widget _buildFilterChip(IconData icon, String label, bool isSelected) {
-    return FilterChip(
-      avatar: Icon(icon, size: 18, color: isSelected ? const Color(0xFF2D8A8A) : Colors.grey),
-      label: Text(label),
-      selected: isSelected,
-      onSelected: (selected) {
-        setState(() {
-          _selectedFilter = selected ? label.toLowerCase() : 'todos';
-        });
-      },
-      selectedColor: const Color(0xFF2D8A8A).withOpacity(0.2),
-      checkmarkColor: const Color(0xFF2D8A8A),
-      backgroundColor: const Color(0xFFF5F7F8),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(20),
-        side: BorderSide(
-          color: isSelected ? const Color(0xFF2D8A8A) : Colors.transparent,
-        ),
-      ),
-    );
-  }
-
   Widget _buildEmployeeCard(Map<String, dynamic> employeeData) {
     final user = employeeData['user'];
     final userName = user['names'] as String? ?? 'Sin nombre';
     final userId = user['idUser'] as int;
     final employeeId = employeeData['idEmployee'] as int;
     final userRole = (user['role'] as String?)?.toLowerCase() ?? 'empleado';
-    
+    final userState = user['state'] as int? ?? 1;
+    final isActive = userState == 1;
+
+    // Use cached stats if available (from filter method)
+    final cachedStats = employeeData['_stats'] as Map<String, dynamic>?;
+    final cachedRating = employeeData['_rating'] as double?;
+
+    // If we have cached stats, use them directly
+    if (cachedStats != null && cachedRating != null) {
+      final completedTasks = cachedStats['completedTasks'] as int;
+      final rating = cachedRating;
+
+      return Card(
+        margin: const EdgeInsets.only(bottom: 12),
+        elevation: 2,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        child: InkWell(
+          onTap: () {
+            // TODO: Navigate to employee detail
+          },
+          borderRadius: BorderRadius.circular(16),
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Row(
+              children: [
+                // Profile picture
+                FutureBuilder<Multimedia?>(
+                  future: _loadEmployeeAvatar(userId, userRole),
+                  builder: (context, avatarSnapshot) {
+                    final avatar = avatarSnapshot.data;
+
+                    if (avatar?.url != null) {
+                      return ClipOval(
+                        child: CachedNetworkImage(
+                          imageUrl: avatar!.url!,
+                          width: 60,
+                          height: 60,
+                          fit: BoxFit.cover,
+                          placeholder:
+                              (context, url) => CircleAvatar(
+                                radius: 30,
+                                backgroundColor: const Color(0xFF2D8A8A),
+                                child: const CircularProgressIndicator(
+                                  color: Colors.white,
+                                  strokeWidth: 2,
+                                ),
+                              ),
+                          errorWidget:
+                              (context, url, error) => CircleAvatar(
+                                radius: 30,
+                                backgroundColor: const Color(0xFF2D8A8A),
+                                child: Text(
+                                  userName.substring(0, 1).toUpperCase(),
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 24,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ),
+                        ),
+                      );
+                    }
+
+                    return CircleAvatar(
+                      radius: 30,
+                      backgroundColor: const Color(0xFF2D8A8A),
+                      child: Text(
+                        userName.substring(0, 1).toUpperCase(),
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 24,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    );
+                  },
+                ),
+                const SizedBox(width: 16),
+
+                // Employee info
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Flexible(
+                            child: Text(
+                              userName,
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                                color: isActive ? Colors.black : Colors.grey,
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 2,
+                            ),
+                            decoration: BoxDecoration(
+                              color:
+                                  isActive
+                                      ? Colors.green.withOpacity(0.2)
+                                      : Colors.grey.withOpacity(0.2),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Text(
+                              isActive ? 'Activo' : 'Inactivo',
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.bold,
+                                color: isActive ? Colors.green : Colors.grey,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        '$completedTasks objetos asignados',
+                        style: TextStyle(fontSize: 14, color: Colors.grey[600]),
+                      ),
+                      const SizedBox(height: 4),
+                      Row(
+                        children: [
+                          const Icon(Icons.star, size: 16, color: Colors.amber),
+                          const SizedBox(width: 4),
+                          Text(
+                            rating > 0 ? rating.toStringAsFixed(1) : '0',
+                            style: const TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+
+                // Activate/Deactivate toggle button
+                IconButton(
+                  icon: Icon(
+                    isActive
+                        ? Icons.person_off_outlined
+                        : Icons.person_add_outlined,
+                    color: isActive ? Colors.orange : Colors.green,
+                  ),
+                  tooltip: isActive ? 'Desactivar' : 'Activar',
+                  onPressed: () => _toggleEmployeeState(employeeData),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    // Otherwise, load stats async
     return FutureBuilder<Map<String, dynamic>>(
       future: _loadEmployeeStats(employeeId, userId),
       builder: (context, statsSnapshot) {
-        final stats = statsSnapshot.data ?? {
-          'completedTasks': 0,
-          'rating': 0.0,
-          'reviewCount': 0,
-        };
-        
+        final stats =
+            statsSnapshot.data ??
+            {'completedTasks': 0, 'rating': 0.0, 'reviewCount': 0};
+
         final completedTasks = stats['completedTasks'] as int;
         final rating = stats['rating'] as double;
-        
+
         return Card(
           margin: const EdgeInsets.only(bottom: 12),
           elevation: 2,
@@ -888,7 +1505,7 @@ Descarga la app e inicia sesión con estas credenciales.
                     future: _loadEmployeeAvatar(userId, userRole),
                     builder: (context, avatarSnapshot) {
                       final avatar = avatarSnapshot.data;
-                      
+
                       if (avatar?.url != null) {
                         return ClipOval(
                           child: CachedNetworkImage(
@@ -896,30 +1513,32 @@ Descarga la app e inicia sesión con estas credenciales.
                             width: 60,
                             height: 60,
                             fit: BoxFit.cover,
-                            placeholder: (context, url) => CircleAvatar(
-                              radius: 30,
-                              backgroundColor: const Color(0xFF2D8A8A),
-                              child: const CircularProgressIndicator(
-                                color: Colors.white,
-                                strokeWidth: 2,
-                              ),
-                            ),
-                            errorWidget: (context, url, error) => CircleAvatar(
-                              radius: 30,
-                              backgroundColor: const Color(0xFF2D8A8A),
-                              child: Text(
-                                userName.substring(0, 1).toUpperCase(),
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 24,
-                                  fontWeight: FontWeight.bold,
+                            placeholder:
+                                (context, url) => CircleAvatar(
+                                  radius: 30,
+                                  backgroundColor: const Color(0xFF2D8A8A),
+                                  child: const CircularProgressIndicator(
+                                    color: Colors.white,
+                                    strokeWidth: 2,
+                                  ),
                                 ),
-                              ),
-                            ),
+                            errorWidget:
+                                (context, url, error) => CircleAvatar(
+                                  radius: 30,
+                                  backgroundColor: const Color(0xFF2D8A8A),
+                                  child: Text(
+                                    userName.substring(0, 1).toUpperCase(),
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 24,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                ),
                           ),
                         );
                       }
-                      
+
                       return CircleAvatar(
                         radius: 30,
                         backgroundColor: const Color(0xFF2D8A8A),
@@ -935,19 +1554,48 @@ Descarga la app e inicia sesión con estas credenciales.
                     },
                   ),
                   const SizedBox(width: 16),
-                  
+
                   // Employee info
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
-                          userName,
-                          style: const TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold,
-                          ),
-                          overflow: TextOverflow.ellipsis,
+                        Row(
+                          children: [
+                            Flexible(
+                              child: Text(
+                                userName,
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.bold,
+                                  color: isActive ? Colors.black : Colors.grey,
+                                ),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 2,
+                              ),
+                              decoration: BoxDecoration(
+                                color:
+                                    isActive
+                                        ? Colors.green.withOpacity(0.2)
+                                        : Colors.grey.withOpacity(0.2),
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: Text(
+                                isActive ? 'Activo' : 'Inactivo',
+                                style: TextStyle(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.bold,
+                                  color: isActive ? Colors.green : Colors.grey,
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
                         const SizedBox(height: 4),
                         Text(
@@ -960,7 +1608,11 @@ Descarga la app e inicia sesión con estas credenciales.
                         const SizedBox(height: 4),
                         Row(
                           children: [
-                            const Icon(Icons.star, size: 16, color: Colors.amber),
+                            const Icon(
+                              Icons.star,
+                              size: 16,
+                              color: Colors.amber,
+                            ),
                             const SizedBox(width: 4),
                             Text(
                               rating > 0 ? rating.toStringAsFixed(1) : '0',
@@ -974,11 +1626,17 @@ Descarga la app e inicia sesión con estas credenciales.
                       ],
                     ),
                   ),
-                  
-                  // Delete button
+
+                  // Activate/Deactivate toggle button
                   IconButton(
-                    icon: const Icon(Icons.delete_outline, color: Colors.red),
-                    onPressed: () => _deleteEmployee(employeeData),
+                    icon: Icon(
+                      isActive
+                          ? Icons.person_off_outlined
+                          : Icons.person_add_outlined,
+                      color: isActive ? Colors.orange : Colors.green,
+                    ),
+                    tooltip: isActive ? 'Desactivar' : 'Activar',
+                    onPressed: () => _toggleEmployeeState(employeeData),
                   ),
                 ],
               ),

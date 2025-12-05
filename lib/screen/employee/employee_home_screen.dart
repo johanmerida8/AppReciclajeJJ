@@ -330,11 +330,45 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
     final scheduledDay = request?['scheduledDay'] ?? 'No especificado';
     final scheduledTime = request?['scheduledStartTime'] ?? 'No especificado';
     
+    // ✅ Check if task is vencido (overdue)
     Color statusColor = Colors.orange;
     String statusText = 'Asignado';
     IconData statusIcon = Icons.pending;
     
-    if (status == 'en_proceso') {
+    // Check for vencido status
+    bool isVencido = false;
+    if (status == 'asignado' || status == 'en_proceso') {
+      if (request != null) {
+        final scheduledDay = request['scheduledDay'] as String?;
+        final scheduledEndTime = request['scheduledEndTime'] as String?;
+        
+        if (scheduledDay != null && scheduledEndTime != null) {
+          try {
+            final scheduledDate = DateTime.parse(scheduledDay);
+            final endTimeParts = scheduledEndTime.split(':');
+            final scheduledDateTime = DateTime(
+              scheduledDate.year,
+              scheduledDate.month,
+              scheduledDate.day,
+              int.parse(endTimeParts[0]),
+              int.parse(endTimeParts[1]),
+            );
+            
+            if (DateTime.now().isAfter(scheduledDateTime)) {
+              isVencido = true;
+            }
+          } catch (e) {
+            print('Error checking vencido: $e');
+          }
+        }
+      }
+    }
+    
+    if (isVencido) {
+      statusColor = Colors.red;
+      statusText = 'Vencido';
+      statusIcon = Icons.warning;
+    } else if (status == 'en_proceso') {
       statusColor = Colors.blue;
       statusText = 'En Proceso';
       statusIcon = Icons.play_circle;

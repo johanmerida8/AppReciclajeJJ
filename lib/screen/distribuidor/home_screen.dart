@@ -50,11 +50,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   List<RecyclingItem> _items = [];
   int? _currentUserId;
   int _pendingRequestCount = 0; // Notification count
-  
+
   // ✅ NUEVO: Estado para navegación de artículos
   int _currentArticleIndex = 0;
   bool _showArticleNavigation = false;
-  
+
   // ✅ Estado del zoom para clustering dinámico
   double _currentZoom = 13.0;
 
@@ -66,7 +66,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   String? _quickRegisterAddress;
   bool _hasUserLocation = false;
   bool _showTemporaryMarker = false;
-  bool _showUserMarker = true; // ✅ NUEVO: Toggle para mostrar/ocultar marcador de usuario
+  bool _showUserMarker =
+      true; // ✅ NUEVO: Toggle para mostrar/ocultar marcador de usuario
 
   // Loading & error state
   bool _isLoading = true;
@@ -81,16 +82,23 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   // Track if user dismissed the enable-location dialog to prevent showing it again in same session
   bool _userDismissedLocationDialog = false;
 
+  // ✅ Real-time listeners
+  RealtimeChannel? _requestChannel;
+  RealtimeChannel? _taskChannel;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _setupRealtimeListeners(); // ✅ Setup real-time updates
     _initialize();
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _requestChannel?.unsubscribe(); // ✅ Unsubscribe from real-time
+    _taskChannel?.unsubscribe();
     super.dispose();
   }
 
@@ -98,7 +106,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
-    
+
     if (state == AppLifecycleState.resumed) {
       print('🔄 App resumed - Verificando estado de ubicación...');
       // Verificar si GPS fue habilitado mientras estábamos en segundo plano
@@ -108,22 +116,55 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
   }
 
+  /// ✅ Setup real-time listeners for notifications
+  void _setupRealtimeListeners() {
+    // Listen to request table for company requests
+    _requestChannel =
+        Supabase.instance.client
+            .channel('distributor-home-requests')
+            .onPostgresChanges(
+              event: PostgresChangeEvent.all,
+              schema: 'public',
+              table: 'request',
+              callback: (payload) {
+                print('🔔 Distributor: Real-time request update');
+                _loadPendingRequestCount();
+              },
+            )
+            .subscribe();
+
+    // Listen to tasks table for employee assignments
+    _taskChannel =
+        Supabase.instance.client
+            .channel('distributor-home-tasks')
+            .onPostgresChanges(
+              event: PostgresChangeEvent.all,
+              schema: 'public',
+              table: 'tasks',
+              callback: (payload) {
+                print('🔔 Distributor: Real-time task update');
+                _loadPendingRequestCount();
+              },
+            )
+            .subscribe();
+  }
+
   /// ✅ NUEVO: Re-verificar ubicación después de que la app vuelve del background
   Future<void> _recheckLocationAfterResume() async {
     final previousServiceEnabled = _isLocationServiceEnabled;
     final previousPermission = _hasLocationPermission;
-    
+
     // Verificar estado actual
     await _checkLocationServices();
-    
+
     // Si GPS fue habilitado mientras estábamos en background, recargar ubicación
     final gpsJustEnabled = !previousServiceEnabled && _isLocationServiceEnabled;
     final permissionJustGranted = !previousPermission && _hasLocationPermission;
-    
+
     if (gpsJustEnabled || permissionJustGranted) {
       print('✅ GPS/Permisos habilitados - Recargando ubicación...');
       await _loadUserLocation();
-      
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -141,12 +182,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     await _loadUserData();
     await _loadPendingRequestCount(); // Load notification count
     await _loadData();
-    
+
     // ✅ Verificar GPS primero antes de intentar cargar ubicación
     await _checkLocationServices();
-    
+
     // ✅ Mostrar diálogo si GPS está deshabilitado (solo si usuario no lo rechazó previamente)
-    if ((!_isLocationServiceEnabled || !_hasLocationPermission) && !_userDismissedLocationDialog) {
+    if ((!_isLocationServiceEnabled || !_hasLocationPermission) &&
+        !_userDismissedLocationDialog) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         // ✅ Verificar que el widget esté montado y sea la ruta activa
         if (mounted && ModalRoute.of(context)?.isCurrent == true) {
@@ -164,9 +206,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final email = _authService.getCurrentUserEmail();
     if (email != null) {
       final userData = await _dataService.userDatabase.getUserByEmail(email);
-      
+
       if (!mounted) return;
-      
+
       setState(() {
         _currentUserId = userData?.id;
       });
@@ -176,29 +218,50 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   /// Load pending request count for notifications
   Future<void> _loadPendingRequestCount() async {
     if (_currentUserId == null) return;
-    
+
     try {
       final prefs = await SharedPreferences.getInstance();
-      final readNotifications = prefs.getStringList('read_distributor_notifications') ?? [];
-      
+      final readNotifications =
+          prefs.getStringList('read_distributor_notifications') ?? [];
+      final readAssignedTasks =
+          prefs.getStringList('read_distributor_assigned_tasks') ?? [];
+
+      // Get pending requests
       final response = await Supabase.instance.client
-        .from('request')
-        .select('*, article!inner(userID)')
-        .eq('status', 'pendiente')
-        .eq('article.userID', _currentUserId!);
-      
+          .from('request')
+          .select('*, article!inner(userID)')
+          .eq('status', 'pendiente')
+          .eq('article.userID', _currentUserId!);
+
       // Filter out read notifications
-      final unreadRequests = (response as List).where((req) {
-        final requestId = req['idRequest'].toString();
-        return !readNotifications.contains(requestId);
-      }).toList();
-      
+      final unreadRequests =
+          (response as List).where((req) {
+            final requestId = req['idRequest'].toString();
+            return !readNotifications.contains(requestId);
+          }).toList();
+
+      // ✅ Get tasks with assigned employees
+      final tasksResponse = await Supabase.instance.client
+          .from('tasks')
+          .select('idTask, article!inner(userID)')
+          .eq('workflowStatus', 'en_proceso')
+          .eq('article.userID', _currentUserId!);
+
+      // Filter out read assigned tasks
+      final unreadTasks =
+          (tasksResponse as List).where((task) {
+            final taskId = task['idTask'].toString();
+            return !readAssignedTasks.contains(taskId);
+          }).toList();
+
       if (mounted) {
         setState(() {
-          _pendingRequestCount = unreadRequests.length;
+          _pendingRequestCount = unreadRequests.length + unreadTasks.length;
         });
       }
-      print('📊 Unread notifications: ${unreadRequests.length} out of ${response.length} total');
+      print(
+        '📊 Unread notifications: ${unreadRequests.length} requests + ${unreadTasks.length} assigned tasks = ${unreadRequests.length + unreadTasks.length} total',
+      );
     } catch (e) {
       print('Error loading pending request count: $e');
     }
@@ -208,9 +271,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Future<void> _navigateToNotifications() async {
     await Navigator.push(
       context,
-      MaterialPageRoute(
-        builder: (context) => const NotificationsScreen(),
-      ),
+      MaterialPageRoute(builder: (context) => const NotificationsScreen()),
     );
     // Refresh count after returning from notifications
     await _loadPendingRequestCount();
@@ -239,7 +300,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       final cachedData = await _cacheService.loadCache(_currentUserId);
       if (cachedData != null && cachedData['items'] != null) {
         if (!mounted) return false;
-        
+
         setState(() {
           _items = List<RecyclingItem>.from(cachedData['items']);
           _isLoading = false;
@@ -282,7 +343,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       }
     } catch (e) {
       if (!mounted) return;
-      
+
       setState(() {
         _hasError = true;
         _errorMessage = 'Error al cargar datos: $e';
@@ -305,10 +366,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Future<void> _loadUserLocation() async {
     try {
       print('📍 Cargando ubicación del usuario...');
-      
+
       // ✅ Verificar primero si GPS está habilitado
       await _checkLocationServices();
-      
+
       if (!_isLocationServiceEnabled) {
         print('⚠️ GPS desactivado - no se puede obtener ubicación');
         setState(() {
@@ -317,7 +378,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         });
         return;
       }
-      
+
       if (!_hasLocationPermission) {
         print('⚠️ Permisos de ubicación no otorgados');
         setState(() {
@@ -326,17 +387,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         });
         return;
       }
-      
+
       final location = await _locationService.getCurrentLocation();
-      
+
       if (location != null) {
         if (!mounted) return;
-        
+
         setState(() {
           _userLocation = location;
           _hasUserLocation = true;
         });
-        print('✅ Ubicación del usuario obtenida: ${location.latitude}, ${location.longitude}');
+        print(
+          '✅ Ubicación del usuario obtenida: ${location.latitude}, ${location.longitude}',
+        );
         print('✅ Estado _hasUserLocation: $_hasUserLocation');
         print('✅ _userLocation: $_userLocation');
 
@@ -347,14 +410,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               _mapController.move(_userLocation!, MapService.closeZoomLevel);
               print('✅ Mapa centrado en ubicación del usuario');
             } else {
-              print('✅ Marcador de ubicación visible, mapa ajustado a artículos');
+              print(
+                '✅ Marcador de ubicación visible, mapa ajustado a artículos',
+              );
             }
           }
         });
       } else {
         print('⚠️ No se pudo obtener la ubicación del usuario');
         if (!mounted) return;
-        
+
         setState(() {
           _hasUserLocation = false;
           _userLocation = null;
@@ -363,17 +428,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     } catch (e) {
       print('❌ Error obteniendo ubicación del usuario: $e');
       if (!mounted) return;
-      
+
       setState(() {
         _hasUserLocation = false;
         _userLocation = null;
       });
-      
+
       // ✅ Mostrar mensaje de error al usuario solo si fue un timeout
       if (mounted && e.toString().contains('Timeout')) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('⏱️ GPS tardando mucho. Verifica que estés al aire libre'),
+            content: Text(
+              '⏱️ GPS tardando mucho. Verifica que estés al aire libre',
+            ),
             duration: Duration(seconds: 3),
             backgroundColor: Colors.orange,
           ),
@@ -387,24 +454,28 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final status = await _locationService.checkLocationStatus();
     final wasEnabled = _isLocationServiceEnabled;
     final hadPermission = _hasLocationPermission;
-    
+
     if (!mounted) return;
-    
+
     setState(() {
       _isLocationServiceEnabled = status['serviceEnabled'] ?? false;
       _hasLocationPermission = status['hasPermission'] ?? false;
       _hasCheckedLocation = true;
     });
 
-    print('📊 Estado GPS - Servicio: $_isLocationServiceEnabled, Permisos: $_hasLocationPermission');
-    print('📊 Estado anterior - Servicio: $wasEnabled, Permisos: $hadPermission');
+    print(
+      '📊 Estado GPS - Servicio: $_isLocationServiceEnabled, Permisos: $_hasLocationPermission',
+    );
+    print(
+      '📊 Estado anterior - Servicio: $wasEnabled, Permisos: $hadPermission',
+    );
 
     // ✅ Si GPS se habilitó después del inicio, recargar ubicación
     if (_isLocationServiceEnabled && _hasLocationPermission) {
       if (!wasEnabled || !hadPermission) {
         print('🔄 GPS habilitado, recargando ubicación del usuario...');
         await _loadUserLocation();
-        
+
         // ✅ Forzar rebuild del widget para mostrar el marcador
         if (mounted) {
           setState(() {});
@@ -415,7 +486,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       if (wasEnabled || hadPermission) {
         print('⚠️ GPS deshabilitado, limpiando ubicación');
         if (!mounted) return;
-        
+
         setState(() {
           _hasUserLocation = false;
           _userLocation = null;
@@ -430,13 +501,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (!mounted || ModalRoute.of(context)?.isCurrent != true) {
       return;
     }
-    
+
     showDialog(
       context: context,
       barrierDismissible: false,
       builder: (BuildContext context) {
         return AlertDialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+          ),
           title: Row(
             children: [
               Container(
@@ -480,7 +553,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   children: [
                     Row(
                       children: [
-                        Icon(Icons.check_circle, color: Colors.green.shade600, size: 20),
+                        Icon(
+                          Icons.check_circle,
+                          color: Colors.green.shade600,
+                          size: 20,
+                        ),
                         const SizedBox(width: 8),
                         const Expanded(
                           child: Text(
@@ -493,7 +570,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     const SizedBox(height: 8),
                     Row(
                       children: [
-                        Icon(Icons.check_circle, color: Colors.green.shade600, size: 20),
+                        Icon(
+                          Icons.check_circle,
+                          color: Colors.green.shade600,
+                          size: 20,
+                        ),
                         const SizedBox(width: 8),
                         const Expanded(
                           child: Text(
@@ -547,15 +628,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               onPressed: () async {
                 Navigator.of(context).pop();
                 print('✅ Usuario quiere activar ubicación');
-                
+
                 // ✅ Solicitar servicio de GPS primero
                 if (!_isLocationServiceEnabled) {
-                  final serviceEnabled = await _locationService.requestLocationService();
+                  final serviceEnabled =
+                      await _locationService.requestLocationService();
                   if (!serviceEnabled) {
                     if (mounted) {
                       ScaffoldMessenger.of(context).showSnackBar(
                         const SnackBar(
-                          content: Text('⚠️ GPS no activado. Por favor, activa el GPS manualmente'),
+                          content: Text(
+                            '⚠️ GPS no activado. Por favor, activa el GPS manualmente',
+                          ),
                           duration: Duration(seconds: 3),
                           backgroundColor: Colors.orange,
                         ),
@@ -564,15 +648,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     return;
                   }
                 }
-                
+
                 // ✅ Solicitar permisos de ubicación
                 if (!_hasLocationPermission) {
-                  final permissionGranted = await _locationService.requestLocationPermission();
+                  final permissionGranted =
+                      await _locationService.requestLocationPermission();
                   if (!permissionGranted) {
                     if (mounted) {
                       ScaffoldMessenger.of(context).showSnackBar(
                         const SnackBar(
-                          content: Text('⚠️ Permisos denegados. Por favor, otorga permisos de ubicación'),
+                          content: Text(
+                            '⚠️ Permisos denegados. Por favor, otorga permisos de ubicación',
+                          ),
                           duration: Duration(seconds: 3),
                           backgroundColor: Colors.orange,
                         ),
@@ -581,14 +668,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     return;
                   }
                 }
-                
+
                 // Verificar estado actualizado
                 await _checkLocationServices();
-                
+
                 // Intentar cargar ubicación
                 if (_isLocationServiceEnabled && _hasLocationPermission) {
                   await _loadUserLocation();
-                  
+
                   if (mounted) {
                     ScaffoldMessenger.of(context).showSnackBar(
                       const SnackBar(
@@ -603,7 +690,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               style: ElevatedButton.styleFrom(
                 backgroundColor: const Color(0xFF2D8A8A),
                 foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 24,
+                  vertical: 12,
+                ),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(8),
                 ),
@@ -615,8 +705,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       },
     );
   }
-
-  
 
   /// Refresh all data
   Future<void> _refreshData() async {
@@ -635,15 +723,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
   }
 
-
   /// Get only current user's items (excluding completed tasks)
   List<RecyclingItem> get _myItems {
     if (_currentUserId == null) return [];
     // ✅ Filter out articles with completed workflow status (they're in history)
-    return _items.where((item) => 
-      item.ownerUserId == _currentUserId && 
-      item.workflowStatus != 'completado'
-    ).toList();
+    return _items
+        .where(
+          (item) =>
+              item.ownerUserId == _currentUserId &&
+              item.workflowStatus != 'completado',
+        )
+        .toList();
   }
 
   /// Handle map tap for quick register
@@ -654,9 +744,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
 
     String address = await _getAddressFromCoordinates(point);
-    
+
     if (!mounted) return;
-    
+
     setState(() {
       _quickRegisterLocation = point;
       _quickRegisterAddress = address;
@@ -676,21 +766,22 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         point.latitude,
         point.longitude,
       );
-      
+
       if (placemarks.isNotEmpty) {
         final place = placemarks[0];
         List<String> parts = [];
-        
+
         if (place.street?.isNotEmpty == true) parts.add(place.street!);
-        if (place.subThoroughfare?.isNotEmpty == true) parts.add(place.subThoroughfare!);
+        if (place.subThoroughfare?.isNotEmpty == true)
+          parts.add(place.subThoroughfare!);
         if (place.locality?.isNotEmpty == true) parts.add(place.locality!);
-        
+
         return parts.isNotEmpty ? parts.join(', ') : place.country ?? 'Bolivia';
       }
     } catch (e) {
       print('Error getting address: $e');
     }
-    
+
     return 'Lat: ${point.latitude.toStringAsFixed(4)}, Lng: ${point.longitude.toStringAsFixed(4)}';
   }
 
@@ -699,11 +790,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
-      builder: (context) => QuickRegisterDialog(
-        address: _quickRegisterAddress,
-        onCancel: _cancelQuickRegister,
-        onConfirm: _confirmQuickRegister,
-      ),
+      builder:
+          (context) => QuickRegisterDialog(
+            address: _quickRegisterAddress,
+            onCancel: _cancelQuickRegister,
+            onConfirm: _confirmQuickRegister,
+          ),
     );
   }
 
@@ -725,10 +817,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       await Navigator.push(
         context,
         MaterialPageRoute(
-          builder: (context) => RegisterRecycleScreen(
-            preselectedLocation: _quickRegisterLocation!,
-            preselectedAddress: _quickRegisterAddress!,
-          ),
+          builder:
+              (context) => RegisterRecycleScreen(
+                preselectedLocation: _quickRegisterLocation!,
+                preselectedAddress: _quickRegisterAddress!,
+              ),
         ),
       );
 
@@ -752,7 +845,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       context: context,
       builder: (BuildContext context) {
         return AlertDialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
           title: Row(
             children: [
               Container(
@@ -761,7 +856,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   color: Colors.orange.shade100,
                   shape: BoxShape.circle,
                 ),
-                child: const Icon(Icons.warning, color: Colors.orange, size: 24),
+                child: const Icon(
+                  Icons.warning,
+                  color: Colors.orange,
+                  size: 24,
+                ),
               ),
               const SizedBox(width: 12),
               const Expanded(
@@ -813,7 +912,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               style: ElevatedButton.styleFrom(
                 backgroundColor: const Color(0xFF2D8A8A),
                 foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 24,
+                  vertical: 12,
+                ),
               ),
               child: const Text('Entendido'),
             ),
@@ -837,9 +939,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   void _showItemDetails(RecyclingItem item) async {
     final result = await Navigator.push<bool>(
       context,
-      MaterialPageRoute(
-        builder: (context) => DetailRecycleScreen(item: item),
-      ),
+      MaterialPageRoute(builder: (context) => DetailRecycleScreen(item: item)),
     );
 
     // ✅ Reload data if article was updated or deleted
@@ -848,7 +948,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       await _refreshData();
     }
   }
-
 
   /// =====================
   /// UI Building Methods
@@ -863,7 +962,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         // ✅ Siempre iniciar en Cochabamba con zoom moderado
         initialCenter: MapService.cochabambaCenter,
         initialZoom: 13.0, // ✅ Zoom moderado para ver la ciudad completa
-        minZoom: 6.0,  // ✅ Prevent zooming out beyond Bolivia
+        minZoom: 6.0, // ✅ Prevent zooming out beyond Bolivia
         maxZoom: 18.0,
         // ✅ Disable map rotation
         interactionOptions: const InteractionOptions(
@@ -873,7 +972,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         cameraConstraint: CameraConstraint.contain(
           bounds: LatLngBounds(
             const LatLng(-22.9, -69.7), // Southwest corner of Bolivia
-            const LatLng(-9.6, -57.4),   // Northeast corner of Bolivia
+            const LatLng(-9.6, -57.4), // Northeast corner of Bolivia
           ),
         ),
         onTap: (_, point) => _onMapTap(point),
@@ -890,14 +989,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       ),
       children: [
         TileLayer(
-          urlTemplate: 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
+          urlTemplate:
+              'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
           subdomains: const ['a', 'b', 'c'],
         ),
         // ✅ Mostrar marcador de usuario solo si está habilitado el toggle
         if (_showUserMarker && _hasUserLocation && _userLocation != null)
-          MarkerLayer(
-            markers: [MapMarkers.userLocationMarker(_userLocation!)],
-          ),
+          MarkerLayer(markers: [MapMarkers.userLocationMarker(_userLocation!)]),
         if (_showTemporaryMarker && _quickRegisterLocation != null)
           MarkerLayer(
             markers: [MapMarkers.temporaryMarker(_quickRegisterLocation!)],
@@ -987,7 +1085,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 style: ElevatedButton.styleFrom(
                   backgroundColor: const Color(0xFF2D8A8A),
                   foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 24,
+                    vertical: 12,
+                  ),
                 ),
               ),
             ],
@@ -1015,7 +1116,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           //     right: 16,
           //     child: _buildArticleNavigationWidget(),
           //   ),
-
           if (_isLoading) _buildLoadingOverlay(),
           if (_hasError) _buildErrorOverlay(),
         ],
@@ -1040,117 +1140,127 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
-      builder: (context) => Container(
-        decoration: const BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.only(
-            topLeft: Radius.circular(20),
-            topRight: Radius.circular(20),
-          ),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // Handle bar
-            Container(
-              margin: const EdgeInsets.only(top: 12, bottom: 8),
-              width: 40,
-              height: 4,
-              decoration: BoxDecoration(
-                color: Colors.grey[300],
-                borderRadius: BorderRadius.circular(2),
+      builder:
+          (context) => Container(
+            decoration: const BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.only(
+                topLeft: Radius.circular(20),
+                topRight: Radius.circular(20),
               ),
             ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Handle bar
+                Container(
+                  margin: const EdgeInsets.only(top: 12, bottom: 8),
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: Colors.grey[300],
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
 
-            // Título
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              child: Row(
-                children: [
-                  const Icon(Icons.location_on, color: Color(0xFF2D8A8A)),
-                  const SizedBox(width: 8),
-                  const Text(
-                    'Opciones de Ubicación',
-                    style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                      color: Color(0xFF2D8A8A),
+                // Título
+                Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 8,
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.location_on, color: Color(0xFF2D8A8A)),
+                      const SizedBox(width: 8),
+                      const Text(
+                        'Opciones de Ubicación',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFF2D8A8A),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
+                const Divider(height: 1),
+
+                // Opción 1: Ir a mi ubicación
+                ListTile(
+                  leading: const CircleAvatar(
+                    backgroundColor: Color(0xFF2D8A8A),
+                    child: Icon(
+                      Icons.my_location,
+                      color: Colors.white,
+                      size: 20,
                     ),
                   ),
-                ],
-              ),
-            ),
-
-            const Divider(height: 1),
-
-            // Opción 1: Ir a mi ubicación
-            ListTile(
-              leading: const CircleAvatar(
-                backgroundColor: Color(0xFF2D8A8A),
-                child: Icon(Icons.my_location, color: Colors.white, size: 20),
-              ),
-              title: const Text(
-                'Ir a mi ubicación',
-                style: TextStyle(fontWeight: FontWeight.w600),
-              ),
-              subtitle: const Text('Centrar mapa en mi posición actual'),
-              onTap: () {
-                Navigator.pop(context);
-                _goToUserLocation();
-              },
-            ),
-
-            // Opción 2: Toggle marcador de usuario
-            ListTile(
-              leading: CircleAvatar(
-                backgroundColor: _showUserMarker 
-                    ? const Color(0xFF2D8A8A) 
-                    : Colors.grey[400],
-                child: Icon(
-                  _showUserMarker ? Icons.visibility : Icons.visibility_off,
-                  color: Colors.white,
-                  size: 20,
+                  title: const Text(
+                    'Ir a mi ubicación',
+                    style: TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  subtitle: const Text('Centrar mapa en mi posición actual'),
+                  onTap: () {
+                    Navigator.pop(context);
+                    _goToUserLocation();
+                  },
                 ),
-              ),
-              title: Text(
-                _showUserMarker 
-                    ? 'Ocultar mi marcador' 
-                    : 'Mostrar mi marcador',
-                style: const TextStyle(fontWeight: FontWeight.w600),
-              ),
-              subtitle: Text(
-                _showUserMarker 
-                    ? 'El marcador azul desaparecerá del mapa'
-                    : 'Mostrar marcador azul en el mapa',
-              ),
-              trailing: Switch(
-                value: _showUserMarker,
-                onChanged: (value) {
-                  Navigator.pop(context);
-                  setState(() {
-                    _showUserMarker = value;
-                  });
-                  
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text(
-                        _showUserMarker 
-                            ? '✅ Marcador visible' 
-                            : '❌ Marcador oculto'
-                      ),
-                      duration: const Duration(seconds: 1),
-                      backgroundColor: _showUserMarker ? Colors.green : Colors.grey,
-                    ),
-                  );
-                },
-                activeColor: const Color(0xFF2D8A8A),
-              ),
-            ),
 
-            const SizedBox(height: 16),
-          ],
-        ),
-      ),
+                // Opción 2: Toggle marcador de usuario
+                ListTile(
+                  leading: CircleAvatar(
+                    backgroundColor:
+                        _showUserMarker
+                            ? const Color(0xFF2D8A8A)
+                            : Colors.grey[400],
+                    child: Icon(
+                      _showUserMarker ? Icons.visibility : Icons.visibility_off,
+                      color: Colors.white,
+                      size: 20,
+                    ),
+                  ),
+                  title: Text(
+                    _showUserMarker
+                        ? 'Ocultar mi marcador'
+                        : 'Mostrar mi marcador',
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  subtitle: Text(
+                    _showUserMarker
+                        ? 'El marcador azul desaparecerá del mapa'
+                        : 'Mostrar marcador azul en el mapa',
+                  ),
+                  trailing: Switch(
+                    value: _showUserMarker,
+                    onChanged: (value) {
+                      Navigator.pop(context);
+                      setState(() {
+                        _showUserMarker = value;
+                      });
+
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            _showUserMarker
+                                ? '✅ Marcador visible'
+                                : '❌ Marcador oculto',
+                          ),
+                          duration: const Duration(seconds: 1),
+                          backgroundColor:
+                              _showUserMarker ? Colors.green : Colors.grey,
+                        ),
+                      );
+                    },
+                    activeColor: const Color(0xFF2D8A8A),
+                  ),
+                ),
+
+                const SizedBox(height: 16),
+              ],
+            ),
+          ),
     );
   }
 
@@ -1158,19 +1268,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Future<void> _goToUserLocation() async {
     // ✅ Primero verificar el estado del GPS
     await _checkLocationServices();
-    
+
     // Si GPS está deshabilitado o sin permisos, mostrar diálogo de habilitación
     if (!_isLocationServiceEnabled || !_hasLocationPermission) {
       _showEnableLocationDialog();
       return;
     }
-    
+
     if (_hasUserLocation && _userLocation != null) {
       // Ya tenemos la ubicación, solo centrar el mapa
       if (_mapService.isMapReady(_mapController)) {
         _mapController.move(_userLocation!, 16.0);
       }
-      
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -1191,14 +1301,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           ),
         );
       }
-      
+
       await _loadUserLocation();
-      
+
       if (_hasUserLocation && _userLocation != null && mounted) {
         if (_mapService.isMapReady(_mapController)) {
           _mapController.move(_userLocation!, 16.0);
         }
-        
+
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('✅ Ubicación encontrada'),
@@ -1247,9 +1357,27 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   // ✅ Marcador individual
   Marker _buildSingleMarker(RecyclingItem item) {
-    final isSelected = _showArticleNavigation && 
-                      _myItems[_currentArticleIndex].id == item.id;
-    
+    final isSelected =
+        _showArticleNavigation && _myItems[_currentArticleIndex].id == item.id;
+
+    // ✅ Determine marker color based on workflow status
+    Color markerColor;
+    if (item.workflowStatus == 'completado') {
+      markerColor = Colors.green; // ✅ Completed - Green
+    } else if (item.workflowStatus == 'vencido') {
+      markerColor = Colors.red; // ✅ Overdue - Red
+    } else if (item.workflowStatus == 'en_proceso' ||
+        item.workflowStatus == 'asignado') {
+      markerColor = Colors.amber; // ✅ In progress/Assigned - Amber
+    } else if (item.workflowStatus == 'sin_asignar') {
+      markerColor = const Color(
+        0xFFFDD835,
+      ); // ✅ Unassigned (company requested) - Yellow
+    } else {
+      // Default: Blue for all published articles (not requested yet)
+      markerColor = Colors.blue;
+    }
+
     return Marker(
       point: LatLng(item.latitude, item.longitude),
       width: isSelected ? 60 : 50, // ✅ Más grande cuando está seleccionado
@@ -1265,10 +1393,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               scale: scale,
               child: Container(
                 decoration: BoxDecoration(
-                  color: CategoryUtils.getCategoryColor(item.categoryName),
+                  color: markerColor,
                   shape: BoxShape.circle,
                   border: Border.all(
-                    color: isSelected ? Colors.white : Colors.white.withOpacity(0.3),
+                    color:
+                        isSelected
+                            ? Colors.white
+                            : Colors.white.withOpacity(0.3),
                     width: isSelected ? 5 : 2, // ✅ Borde más grueso
                   ),
                   boxShadow: [
@@ -1288,7 +1419,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   ],
                 ),
                 child: Icon(
-                  CategoryUtils.getCategoryIcon(item.categoryName),
+                  Icons.recycling, // ✅ Single icon for all articles
                   color: Colors.white,
                   size: isSelected ? 28 : 24, // ✅ Icono más grande
                 ),
@@ -1399,8 +1530,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       );
 
       final item = cluster.items[i];
-      final isSelected = _showArticleNavigation && 
-                        _myItems[_currentArticleIndex].id == item.id;
+      final isSelected =
+          _showArticleNavigation &&
+          _myItems[_currentArticleIndex].id == item.id;
 
       markers.add(
         Marker(
@@ -1421,12 +1553,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                       color: CategoryUtils.getCategoryColor(item.categoryName),
                       shape: BoxShape.circle,
                       border: Border.all(
-                        color: isSelected ? Colors.white : Colors.white.withOpacity(0.7),
+                        color:
+                            isSelected
+                                ? Colors.white
+                                : Colors.white.withOpacity(0.7),
                         width: isSelected ? 5 : 3,
                       ),
                       boxShadow: [
                         BoxShadow(
-                          color: Colors.black.withOpacity(isSelected ? 0.6 : 0.3),
+                          color: Colors.black.withOpacity(
+                            isSelected ? 0.6 : 0.3,
+                          ),
                           blurRadius: isSelected ? 12 : 6,
                           spreadRadius: isSelected ? 2 : 0,
                           offset: const Offset(0, 2),
@@ -1484,11 +1621,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               ),
             ],
           ),
-          child: const Icon(
-            Icons.close,
-            size: 20,
-            color: Color(0xFF2D8A8A),
-          ),
+          child: const Icon(Icons.close, size: 20, color: Color(0xFF2D8A8A)),
         ),
       ),
     );
@@ -1497,21 +1630,21 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   // ✅ Manejar tap en marcador individual
   void _onMarkerTap(RecyclingItem item) {
     final index = _myItems.indexWhere((i) => i.id == item.id);
-    
+
     // ✅ Buscar artículos cercanos (dentro de 300 metros)
     final nearbyItems = _findNearbyArticles(item, maxDistance: 300.0);
-    
+
     // ✅ Actualizar índice y ACTIVAR navegación para mostrar borde blanco
     setState(() {
       _currentArticleIndex = index;
       _showArticleNavigation = true;
     });
-    
+
     // ✅ Centrar mapa en el marcador con zoom consistente
     if (_mapService.isMapReady(_mapController)) {
       _mapController.move(LatLng(item.latitude, item.longitude), 15.0);
     }
-    
+
     // ✅ Si hay artículos cercanos, mostrar navegación. Si no, modal simple
     if (nearbyItems.length > 1) {
       // Crear cluster virtual para navegación
@@ -1520,7 +1653,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         items: nearbyItems,
       );
       _showClusterNavigationModal(virtualCluster);
-      print('📍 Mostrando navegación de ${nearbyItems.length} artículos cercanos');
+      print(
+        '📍 Mostrando navegación de ${nearbyItems.length} artículos cercanos',
+      );
     } else {
       // Artículo aislado, mostrar modal simple
       _showSingleArticleModal(item);
@@ -1529,40 +1664,51 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   // ✅ Encontrar artículos cercanos al artículo dado
-  List<RecyclingItem> _findNearbyArticles(RecyclingItem item, {required double maxDistance}) {
+  List<RecyclingItem> _findNearbyArticles(
+    RecyclingItem item, {
+    required double maxDistance,
+  }) {
     List<RecyclingItem> nearbyItems = [item]; // Incluir el artículo actual
-    
+
     for (var otherItem in _myItems) {
       if (otherItem.id == item.id) continue; // Saltar el mismo artículo
-      
+
       final distance = _calculateDistance(
         item.latitude,
         item.longitude,
         otherItem.latitude,
         otherItem.longitude,
       );
-      
+
       if (distance <= maxDistance) {
         nearbyItems.add(otherItem);
       }
     }
-    
+
     return nearbyItems;
   }
 
   // ✅ Calcular distancia entre dos puntos en metros (Haversine formula)
-  double _calculateDistance(double lat1, double lon1, double lat2, double lon2) {
+  double _calculateDistance(
+    double lat1,
+    double lon1,
+    double lat2,
+    double lon2,
+  ) {
     const double earthRadius = 6371000; // metros
-    
+
     double dLat = _toRadians(lat2 - lat1);
     double dLon = _toRadians(lon2 - lon1);
-    
-    double a = sin(dLat / 2) * sin(dLat / 2) +
-        cos(_toRadians(lat1)) * cos(_toRadians(lat2)) *
-        sin(dLon / 2) * sin(dLon / 2);
-    
+
+    double a =
+        sin(dLat / 2) * sin(dLat / 2) +
+        cos(_toRadians(lat1)) *
+            cos(_toRadians(lat2)) *
+            sin(dLon / 2) *
+            sin(dLon / 2);
+
     double c = 2 * atan2(sqrt(a), sqrt(1 - a));
-    
+
     return earthRadius * c;
   }
 
@@ -1580,11 +1726,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       isScrollControlled: true,
       isDismissible: true,
       enableDrag: true,
-      builder: (context) => _SingleArticleModalContent(
-        item: item,
-        mediaDatabase: _mediaDatabase,
-        onShowDetails: _showItemDetails,
-      ),
+      builder:
+          (context) => _SingleArticleModalContent(
+            item: item,
+            mediaDatabase: _mediaDatabase,
+            onShowDetails: _showItemDetails,
+          ),
     ).then((_) {
       // Desactivar navegación al cerrar modal
       if (mounted) {
@@ -1600,24 +1747,24 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     // Encontrar el índice del primer artículo del cluster
     final firstItem = cluster.items[0];
     final index = _myItems.indexWhere((i) => i.id == firstItem.id);
-    
+
     // Activar navegación y actualizar índice
     setState(() {
       _currentArticleIndex = index;
       _showArticleNavigation = true;
     });
-    
+
     // ✅ Centrar mapa en el cluster con zoom cercano (como la ubicación del usuario)
     if (_mapService.isMapReady(_mapController)) {
       _mapController.move(cluster.center, 15.0); // ✅ Zoom consistente y cercano
     }
-    
+
     // Mostrar modal con navegación entre los artículos del cluster
     _showClusterNavigationModal(cluster);
-    
+
     print('📦 Cluster tocado - ${cluster.count} artículos para navegar');
   }
-  
+
   // ✅ Modal de navegación para artículos en un cluster
   void _showClusterNavigationModal(MarkerCluster cluster) {
     if (!mounted) return;
@@ -1632,25 +1779,31 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       isScrollControlled: true,
       isDismissible: true,
       enableDrag: true,
-      builder: (context) => _ClusterModalContent(
-        clusterItems: clusterItems,
-        initialClusterIndex: clusterIndex,
-        allItems: _myItems,
-        mediaDatabase: _mediaDatabase,
-        onIndexChanged: (newClusterIndex) {
-          setState(() {
-            // Actualizar el índice global basado en el artículo del cluster
-            final item = clusterItems[newClusterIndex];
-            _currentArticleIndex = _myItems.indexWhere((i) => i.id == item.id);
-          });
-        },
-        onCenterMap: (lat, lng) {
-          if (_mapService.isMapReady(_mapController)) {
-            _mapController.move(LatLng(lat, lng), 15.0); // ✅ Zoom consistente al navegar entre artículos
-          }
-        },
-        onShowDetails: _showItemDetails,
-      ),
+      builder:
+          (context) => _ClusterModalContent(
+            clusterItems: clusterItems,
+            initialClusterIndex: clusterIndex,
+            allItems: _myItems,
+            mediaDatabase: _mediaDatabase,
+            onIndexChanged: (newClusterIndex) {
+              setState(() {
+                // Actualizar el índice global basado en el artículo del cluster
+                final item = clusterItems[newClusterIndex];
+                _currentArticleIndex = _myItems.indexWhere(
+                  (i) => i.id == item.id,
+                );
+              });
+            },
+            onCenterMap: (lat, lng) {
+              if (_mapService.isMapReady(_mapController)) {
+                _mapController.move(
+                  LatLng(lat, lng),
+                  15.0,
+                ); // ✅ Zoom consistente al navegar entre artículos
+              }
+            },
+            onShowDetails: _showItemDetails,
+          ),
     ).then((_) {
       // Desactivar navegación al cerrar modal
       if (mounted) {
@@ -1660,7 +1813,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       }
     });
   }
-  
+
   // Other _HomeScreenState methods continue below...
 } // Temporary close of _HomeScreenState - will be moved to end
 
@@ -1710,10 +1863,12 @@ class _ArticleModalContentState extends State<_ArticleModalContent> {
     setState(() {
       isLoadingPhoto = true;
     });
-    
+
     try {
       final urlPattern = 'articles/${currentItem.id}';
-      final photo = await widget.mediaDatabase.getMainPhotoByPattern(urlPattern);
+      final photo = await widget.mediaDatabase.getMainPhotoByPattern(
+        urlPattern,
+      );
       if (mounted) {
         setState(() {
           currentPhoto = photo;
@@ -1733,32 +1888,38 @@ class _ArticleModalContentState extends State<_ArticleModalContent> {
 
   void navigateToNext() {
     if (widget.myItems.length <= 1) return;
-    
+
     setState(() {
       currentModalIndex = (currentModalIndex + 1) % widget.myItems.length;
       currentItem = widget.myItems[currentModalIndex];
     });
-    
+
     widget.onIndexChanged(currentModalIndex);
     widget.onCenterMap(currentItem.latitude, currentItem.longitude);
     _loadPhoto();
-    
-    print('➡️ Navegando a artículo ${currentModalIndex + 1}: ${currentItem.title}');
+
+    print(
+      '➡️ Navegando a artículo ${currentModalIndex + 1}: ${currentItem.title}',
+    );
   }
 
   void navigateToPrevious() {
     if (widget.myItems.length <= 1) return;
-    
+
     setState(() {
-      currentModalIndex = (currentModalIndex - 1 + widget.myItems.length) % widget.myItems.length;
+      currentModalIndex =
+          (currentModalIndex - 1 + widget.myItems.length) %
+          widget.myItems.length;
       currentItem = widget.myItems[currentModalIndex];
     });
-    
+
     widget.onIndexChanged(currentModalIndex);
     widget.onCenterMap(currentItem.latitude, currentItem.longitude);
     _loadPhoto();
-    
-    print('⬅️ Navegando a artículo ${currentModalIndex + 1}: ${currentItem.title}');
+
+    print(
+      '⬅️ Navegando a artículo ${currentModalIndex + 1}: ${currentItem.title}',
+    );
   }
 
   @override
@@ -1807,26 +1968,30 @@ class _ArticleModalContentState extends State<_ArticleModalContent> {
                 // Image on left
                 ClipRRect(
                   borderRadius: BorderRadius.circular(12),
-                  child: currentPhoto?.url != null
-                      ? CachedNetworkImage(
-                          imageUrl: currentPhoto!.url!,
-                          width: 100,
-                          height: 100,
-                          fit: BoxFit.cover,
-                          placeholder: (context, url) => Container(
+                  child:
+                      currentPhoto?.url != null
+                          ? CachedNetworkImage(
+                            imageUrl: currentPhoto!.url!,
                             width: 100,
                             height: 100,
-                            color: Colors.grey[300],
-                            child: const Center(
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                color: Color(0xFF2D8A8A),
-                              ),
-                            ),
-                          ),
-                          errorWidget: (context, url, error) => _buildCompactPlaceholder(currentItem),
-                        )
-                      : _buildCompactPlaceholder(currentItem),
+                            fit: BoxFit.cover,
+                            placeholder:
+                                (context, url) => Container(
+                                  width: 100,
+                                  height: 100,
+                                  color: Colors.grey[300],
+                                  child: const Center(
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      color: Color(0xFF2D8A8A),
+                                    ),
+                                  ),
+                                ),
+                            errorWidget:
+                                (context, url, error) =>
+                                    _buildCompactPlaceholder(currentItem),
+                          )
+                          : _buildCompactPlaceholder(currentItem),
                 ),
 
                 const SizedBox(width: 12),
@@ -1847,7 +2012,7 @@ class _ArticleModalContentState extends State<_ArticleModalContent> {
                             fontWeight: FontWeight.w500,
                           ),
                         ),
-                      
+
                       if (widget.myItems.length > 1) const SizedBox(height: 4),
 
                       // Title
@@ -1945,7 +2110,9 @@ class _ArticleModalContentState extends State<_ArticleModalContent> {
       width: 100,
       height: 100,
       decoration: BoxDecoration(
-        color: CategoryUtils.getCategoryColor(item.categoryName).withOpacity(0.2),
+        color: CategoryUtils.getCategoryColor(
+          item.categoryName,
+        ).withOpacity(0.2),
         borderRadius: BorderRadius.circular(12),
       ),
       child: Center(
@@ -2005,10 +2172,12 @@ class _ClusterModalContentState extends State<_ClusterModalContent> {
     setState(() {
       isLoadingPhoto = true;
     });
-    
+
     try {
       final urlPattern = 'articles/${currentItem.id}';
-      final photo = await widget.mediaDatabase.getMainPhotoByPattern(urlPattern);
+      final photo = await widget.mediaDatabase.getMainPhotoByPattern(
+        urlPattern,
+      );
       if (mounted) {
         setState(() {
           currentPhoto = photo;
@@ -2028,32 +2197,39 @@ class _ClusterModalContentState extends State<_ClusterModalContent> {
 
   void navigateToNext() {
     if (widget.clusterItems.length <= 1) return;
-    
+
     setState(() {
-      currentClusterIndex = (currentClusterIndex + 1) % widget.clusterItems.length;
+      currentClusterIndex =
+          (currentClusterIndex + 1) % widget.clusterItems.length;
       currentItem = widget.clusterItems[currentClusterIndex];
     });
-    
+
     widget.onIndexChanged(currentClusterIndex);
     widget.onCenterMap(currentItem.latitude, currentItem.longitude);
     _loadPhoto();
-    
-    print('➡️ Navegando a artículo ${currentClusterIndex + 1}/${widget.clusterItems.length}: ${currentItem.title}');
+
+    print(
+      '➡️ Navegando a artículo ${currentClusterIndex + 1}/${widget.clusterItems.length}: ${currentItem.title}',
+    );
   }
 
   void navigateToPrevious() {
     if (widget.clusterItems.length <= 1) return;
-    
+
     setState(() {
-      currentClusterIndex = (currentClusterIndex - 1 + widget.clusterItems.length) % widget.clusterItems.length;
+      currentClusterIndex =
+          (currentClusterIndex - 1 + widget.clusterItems.length) %
+          widget.clusterItems.length;
       currentItem = widget.clusterItems[currentClusterIndex];
     });
-    
+
     widget.onIndexChanged(currentClusterIndex);
     widget.onCenterMap(currentItem.latitude, currentItem.longitude);
     _loadPhoto();
-    
-    print('⬅️ Navegando a artículo ${currentClusterIndex + 1}/${widget.clusterItems.length}: ${currentItem.title}');
+
+    print(
+      '⬅️ Navegando a artículo ${currentClusterIndex + 1}/${widget.clusterItems.length}: ${currentItem.title}',
+    );
   }
 
   @override
@@ -2082,12 +2258,18 @@ class _ClusterModalContentState extends State<_ClusterModalContent> {
 
           // Article counter
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+            padding: const EdgeInsets.symmetric(
+              horizontal: 16.0,
+              vertical: 8.0,
+            ),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 6,
+                  ),
                   decoration: BoxDecoration(
                     color: const Color(0xFF2D8A8A).withOpacity(0.1),
                     borderRadius: BorderRadius.circular(20),
@@ -2143,42 +2325,52 @@ class _ClusterModalContentState extends State<_ClusterModalContent> {
                           // Photo
                           ClipRRect(
                             borderRadius: BorderRadius.circular(8),
-                            child: isLoadingPhoto
-                                ? Container(
-                                    width: 80,
-                                    height: 80,
-                                    color: Colors.grey[300],
-                                    child: const Center(
-                                      child: SizedBox(
-                                        width: 20,
-                                        height: 20,
-                                        child: CircularProgressIndicator(strokeWidth: 2),
+                            child:
+                                isLoadingPhoto
+                                    ? Container(
+                                      width: 80,
+                                      height: 80,
+                                      color: Colors.grey[300],
+                                      child: const Center(
+                                        child: SizedBox(
+                                          width: 20,
+                                          height: 20,
+                                          child: CircularProgressIndicator(
+                                            strokeWidth: 2,
+                                          ),
+                                        ),
                                       ),
-                                    ),
-                                  )
-                                : currentPhoto != null && currentPhoto!.url != null
+                                    )
+                                    : currentPhoto != null &&
+                                        currentPhoto!.url != null
                                     ? CachedNetworkImage(
-                                        imageUrl: currentPhoto!.url!,
-                                        width: 80,
-                                        height: 80,
-                                        fit: BoxFit.cover,
-                                        placeholder: (context, url) => Container(
-                                          width: 80,
-                                          height: 80,
-                                          color: Colors.grey[300],
-                                          child: const Center(
-                                            child: SizedBox(
-                                              width: 20,
-                                              height: 20,
-                                              child: CircularProgressIndicator(
-                                                strokeWidth: 2,
-                                                color: Color(0xFF2D8A8A),
+                                      imageUrl: currentPhoto!.url!,
+                                      width: 80,
+                                      height: 80,
+                                      fit: BoxFit.cover,
+                                      placeholder:
+                                          (context, url) => Container(
+                                            width: 80,
+                                            height: 80,
+                                            color: Colors.grey[300],
+                                            child: const Center(
+                                              child: SizedBox(
+                                                width: 20,
+                                                height: 20,
+                                                child:
+                                                    CircularProgressIndicator(
+                                                      strokeWidth: 2,
+                                                      color: Color(0xFF2D8A8A),
+                                                    ),
                                               ),
                                             ),
                                           ),
-                                        ),
-                                        errorWidget: (context, url, error) => _buildCompactPlaceholder(currentItem),
-                                      )
+                                      errorWidget:
+                                          (context, url, error) =>
+                                              _buildCompactPlaceholder(
+                                                currentItem,
+                                              ),
+                                    )
                                     : _buildCompactPlaceholder(currentItem),
                           ),
                           const SizedBox(width: 12),
@@ -2210,9 +2402,11 @@ class _ClusterModalContentState extends State<_ClusterModalContent> {
                                 const SizedBox(height: 4),
                                 Row(
                                   children: [
-                                    Icon(Icons.location_on, 
-                                      size: 14, 
-                                      color: Colors.grey[600]),
+                                    Icon(
+                                      Icons.location_on,
+                                      size: 14,
+                                      color: Colors.grey[600],
+                                    ),
                                     const SizedBox(width: 4),
                                     Expanded(
                                       child: Text(
@@ -2232,9 +2426,11 @@ class _ClusterModalContentState extends State<_ClusterModalContent> {
                           ),
 
                           // Arrow indicator
-                          Icon(Icons.arrow_forward_ios, 
-                            size: 16, 
-                            color: Colors.grey[400]),
+                          Icon(
+                            Icons.arrow_forward_ios,
+                            size: 16,
+                            color: Colors.grey[400],
+                          ),
                         ],
                       ),
                     ),
@@ -2268,7 +2464,9 @@ class _ClusterModalContentState extends State<_ClusterModalContent> {
       width: 80,
       height: 80,
       decoration: BoxDecoration(
-        color: CategoryUtils.getCategoryColor(item.categoryName).withOpacity(0.2),
+        color: CategoryUtils.getCategoryColor(
+          item.categoryName,
+        ).withOpacity(0.2),
         borderRadius: BorderRadius.circular(8),
       ),
       child: Center(
@@ -2299,10 +2497,12 @@ class _SingleArticleModalContent extends StatefulWidget {
   });
 
   @override
-  State<_SingleArticleModalContent> createState() => _SingleArticleModalContentState();
+  State<_SingleArticleModalContent> createState() =>
+      _SingleArticleModalContentState();
 }
 
-class _SingleArticleModalContentState extends State<_SingleArticleModalContent> {
+class _SingleArticleModalContentState
+    extends State<_SingleArticleModalContent> {
   Multimedia? currentPhoto;
   bool isLoadingPhoto = false;
 
@@ -2316,10 +2516,12 @@ class _SingleArticleModalContentState extends State<_SingleArticleModalContent> 
     setState(() {
       isLoadingPhoto = true;
     });
-    
+
     try {
       final urlPattern = 'articles/${widget.item.id}';
-      final photo = await widget.mediaDatabase.getMainPhotoByPattern(urlPattern);
+      final photo = await widget.mediaDatabase.getMainPhotoByPattern(
+        urlPattern,
+      );
       if (mounted) {
         setState(() {
           currentPhoto = photo;
@@ -2381,42 +2583,49 @@ class _SingleArticleModalContentState extends State<_SingleArticleModalContent> 
                     // Photo
                     ClipRRect(
                       borderRadius: BorderRadius.circular(8),
-                      child: isLoadingPhoto
-                          ? Container(
-                              width: 80,
-                              height: 80,
-                              color: Colors.grey[300],
-                              child: const Center(
-                                child: SizedBox(
-                                  width: 20,
-                                  height: 20,
-                                  child: CircularProgressIndicator(strokeWidth: 2),
+                      child:
+                          isLoadingPhoto
+                              ? Container(
+                                width: 80,
+                                height: 80,
+                                color: Colors.grey[300],
+                                child: const Center(
+                                  child: SizedBox(
+                                    width: 20,
+                                    height: 20,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  ),
                                 ),
-                              ),
-                            )
-                          : currentPhoto != null && currentPhoto!.url != null
+                              )
+                              : currentPhoto != null &&
+                                  currentPhoto!.url != null
                               ? CachedNetworkImage(
-                                  imageUrl: currentPhoto!.url!,
-                                  width: 80,
-                                  height: 80,
-                                  fit: BoxFit.cover,
-                                  placeholder: (context, url) => Container(
-                                    width: 80,
-                                    height: 80,
-                                    color: Colors.grey[300],
-                                    child: const Center(
-                                      child: SizedBox(
-                                        width: 20,
-                                        height: 20,
-                                        child: CircularProgressIndicator(
-                                          strokeWidth: 2,
-                                          color: Color(0xFF2D8A8A),
+                                imageUrl: currentPhoto!.url!,
+                                width: 80,
+                                height: 80,
+                                fit: BoxFit.cover,
+                                placeholder:
+                                    (context, url) => Container(
+                                      width: 80,
+                                      height: 80,
+                                      color: Colors.grey[300],
+                                      child: const Center(
+                                        child: SizedBox(
+                                          width: 20,
+                                          height: 20,
+                                          child: CircularProgressIndicator(
+                                            strokeWidth: 2,
+                                            color: Color(0xFF2D8A8A),
+                                          ),
                                         ),
                                       ),
                                     ),
-                                  ),
-                                  errorWidget: (context, url, error) => _buildCompactPlaceholder(widget.item),
-                                )
+                                errorWidget:
+                                    (context, url, error) =>
+                                        _buildCompactPlaceholder(widget.item),
+                              )
                               : _buildCompactPlaceholder(widget.item),
                     ),
                     const SizedBox(width: 12),
@@ -2448,9 +2657,11 @@ class _SingleArticleModalContentState extends State<_SingleArticleModalContent> 
                           const SizedBox(height: 4),
                           Row(
                             children: [
-                              Icon(Icons.location_on, 
-                                size: 14, 
-                                color: Colors.grey[600]),
+                              Icon(
+                                Icons.location_on,
+                                size: 14,
+                                color: Colors.grey[600],
+                              ),
                               const SizedBox(width: 4),
                               Expanded(
                                 child: Text(
@@ -2470,9 +2681,11 @@ class _SingleArticleModalContentState extends State<_SingleArticleModalContent> 
                     ),
 
                     // Arrow indicator
-                    Icon(Icons.arrow_forward_ios, 
-                      size: 16, 
-                      color: Colors.grey[400]),
+                    Icon(
+                      Icons.arrow_forward_ios,
+                      size: 16,
+                      color: Colors.grey[400],
+                    ),
                   ],
                 ),
               ),
@@ -2490,7 +2703,9 @@ class _SingleArticleModalContentState extends State<_SingleArticleModalContent> 
       width: 80,
       height: 80,
       decoration: BoxDecoration(
-        color: CategoryUtils.getCategoryColor(item.categoryName).withOpacity(0.2),
+        color: CategoryUtils.getCategoryColor(
+          item.categoryName,
+        ).withOpacity(0.2),
         borderRadius: BorderRadius.circular(8),
       ),
       child: Center(

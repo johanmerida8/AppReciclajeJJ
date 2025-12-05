@@ -207,12 +207,15 @@ class _EmployeeProfileScreenState extends State<EmployeeProfileScreen> {
         print('✅ Showing ${tasks.length} tasks with basic info');
       }
 
-      // ✅ Second pass: Load photos and reviews in batches of 3
+      // ✅ Second pass: Load photos and reviews in batches of 3 (max 4 articles)
       const batchSize = 3;
-      for (var i = 0; i < tasks.length; i += batchSize) {
+      final maxArticles = 4;
+      final articlesToLoad = tasks.take(maxArticles).toList();
+      
+      for (var i = 0; i < articlesToLoad.length; i += batchSize) {
         if (!mounted) break;
         
-        final batch = tasks.skip(i).take(batchSize);
+        final batch = articlesToLoad.skip(i).take(batchSize);
         
         for (var task in batch) {
           if (!mounted) break;

@@ -27,7 +27,8 @@ class EmployeeMapScreen extends StatefulWidget {
   State<EmployeeMapScreen> createState() => _EmployeeMapScreenState();
 }
 
-class _EmployeeMapScreenState extends State<EmployeeMapScreen> with WidgetsBindingObserver {
+class _EmployeeMapScreenState extends State<EmployeeMapScreen>
+    with WidgetsBindingObserver {
   // Services
   final _authService = AuthService();
   final _usersDatabase = UsersDatabase();
@@ -42,7 +43,7 @@ class _EmployeeMapScreenState extends State<EmployeeMapScreen> with WidgetsBindi
   // State variables
   List<RecyclingItem> _assignedArticles = [];
   int? _employeeId;
-  
+
   int _currentArticleIndex = 0;
   bool _showArticleNavigation = false;
   double _currentZoom = 13.0;
@@ -67,17 +68,21 @@ class _EmployeeMapScreenState extends State<EmployeeMapScreen> with WidgetsBindi
   bool _userDismissedLocationDialog = false;
   int _pendingRequestCount = 0; // Notification count for new assigned tasks
 
+  RealtimeChannel? _taskChannel; // ✅ Real-time listener for task updates
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _initialize();
     _monitorConnection();
+    _setupRealtimeListener(); // ✅ Setup real-time updates
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _taskChannel?.unsubscribe(); // ✅ Unsubscribe from real-time
     // ✅ Clear cached data to prevent memory leaks
     _assignedArticles.clear();
     _expandedClusters.clear();
@@ -95,12 +100,12 @@ class _EmployeeMapScreenState extends State<EmployeeMapScreen> with WidgetsBindi
   Future<void> _recheckLocationAfterResume() async {
     final previousServiceEnabled = _isLocationServiceEnabled;
     final previousPermission = _hasLocationPermission;
-    
+
     await _checkLocationServices();
-    
+
     final gpsJustEnabled = !previousServiceEnabled && _isLocationServiceEnabled;
     final permissionJustGranted = !previousPermission && _hasLocationPermission;
-    
+
     if (gpsJustEnabled || permissionJustGranted) {
       await _loadUserLocation();
       if (mounted) {
@@ -114,7 +119,7 @@ class _EmployeeMapScreenState extends State<EmployeeMapScreen> with WidgetsBindi
     await _checkLocationServices();
     await _checkConnection();
     await _loadPendingTaskCount(); // Load notification count
-    
+
     if (_isLocationServiceEnabled && _hasLocationPermission) {
       await _loadUserLocation();
     }
@@ -131,33 +136,56 @@ class _EmployeeMapScreenState extends State<EmployeeMapScreen> with WidgetsBindi
     });
   }
 
+  /// ✅ Setup real-time listener for task updates
+  void _setupRealtimeListener() {
+    _taskChannel =
+        Supabase.instance.client
+            .channel('employee-task-updates')
+            .onPostgresChanges(
+              event: PostgresChangeEvent.all,
+              schema: 'public',
+              table: 'tasks',
+              callback: (payload) {
+                print('🔔 Employee: Real-time task update received');
+                _loadPendingTaskCount();
+                _loadAssignedArticles();
+              },
+            )
+            .subscribe();
+  }
+
   /// Load pending task count for notifications
   Future<void> _loadPendingTaskCount() async {
     if (_employeeId == null) return;
 
     try {
       final prefs = await SharedPreferences.getInstance();
-      final readNotifications = prefs.getStringList('read_employee_notifications') ?? [];
-      
+      final readNotifications =
+          prefs.getStringList('read_employee_notifications') ?? [];
+
+      // ✅ Check for 'en_proceso' tasks (when employee is assigned)
       final tasks = await Supabase.instance.client
           .from('tasks')
           .select('idTask')
           .eq('employeeID', _employeeId!)
-          .eq('workflowStatus', 'asignado')
-          .order('assignedDate', ascending: false);
+          .eq('workflowStatus', 'en_proceso')
+          .order('lastUpdate', ascending: false);
 
       // Filter out read notifications
-      final unreadTasks = (tasks as List).where((task) {
-        final taskId = task['idTask'].toString();
-        return !readNotifications.contains(taskId);
-      }).toList();
+      final unreadTasks =
+          (tasks as List).where((task) {
+            final taskId = task['idTask'].toString();
+            return !readNotifications.contains(taskId);
+          }).toList();
 
       if (mounted) {
         setState(() {
           _pendingRequestCount = unreadTasks.length;
         });
       }
-      print('📊 Unread tasks: ${unreadTasks.length} out of ${tasks.length} total');
+      print(
+        '📊 Unread tasks: ${unreadTasks.length} out of ${tasks.length} total',
+      );
     } catch (e) {
       print('❌ Error loading pending task count: $e');
     }
@@ -172,7 +200,7 @@ class _EmployeeMapScreenState extends State<EmployeeMapScreen> with WidgetsBindi
         builder: (context) => const EmployeeNotificationsScreen(),
       ),
     );
-    
+
     // Refresh count when returning
     await _loadPendingTaskCount();
   }
@@ -206,11 +234,12 @@ class _EmployeeMapScreenState extends State<EmployeeMapScreen> with WidgetsBindi
       if (user == null) throw Exception('User not found');
 
       // Get employee ID
-      final employeeData = await Supabase.instance.client
-          .from('employees')
-          .select('idEmployee')
-          .eq('userID', user.id!)
-          .maybeSingle();
+      final employeeData =
+          await Supabase.instance.client
+              .from('employees')
+              .select('idEmployee')
+              .eq('userID', user.id!)
+              .maybeSingle();
 
       if (employeeData == null) throw Exception('Employee not found');
 
@@ -222,7 +251,6 @@ class _EmployeeMapScreenState extends State<EmployeeMapScreen> with WidgetsBindi
           _loadAssignedArticles();
         }
       });
-
     } catch (e) {
       if (mounted) {
         setState(() {
@@ -271,52 +299,89 @@ class _EmployeeMapScreenState extends State<EmployeeMapScreen> with WidgetsBindi
           .order('assignedDate', ascending: false);
 
       if (!mounted) return;
-      
+
       print('📦 Found ${tasks.length} tasks to load progressively');
 
       // ✅ Load articles in batches of 5 for smooth progressive rendering
       const batchSize = 5;
       final allArticles = <RecyclingItem>[];
-      
+
       for (var i = 0; i < tasks.length; i += batchSize) {
         if (!mounted) break;
-        
+
         final batch = tasks.skip(i).take(batchSize);
         final batchArticles = <RecyclingItem>[];
-        
+
         for (var task in batch) {
           final article = task['article'] as Map<String, dynamic>?;
+          final request = task['request'] as Map<String, dynamic>?;
+
           if (article != null) {
             final category = article['category'] as Map<String, dynamic>?;
             final user = article['user'] as Map<String, dynamic>?;
-            
-            batchArticles.add(RecyclingItem(
-              id: article['idArticle'] as int,
-              title: article['name'] as String,
-              description: article['description'] as String?,
-              address: article['address'] as String,
-              latitude: (article['lat'] as num).toDouble(),
-              longitude: (article['lng'] as num).toDouble(),
-              categoryID: article['categoryID'] as int?,
-              categoryName: category?['name'] as String? ?? 'Sin categoría',
-              ownerUserId: article['userID'] as int?,
-              userName: user?['names'] as String? ?? 'Usuario',
-              userEmail: user?['email'] as String? ?? '',
-              condition: article['condition'] as String?,
-              createdAt: DateTime.now(), // Use current time as fallback
-            ));
+
+            // ✅ Check if task is vencido (overdue)
+            String? workflowStatus = task['workflowStatus'] as String?;
+            if (workflowStatus == 'asignado' ||
+                workflowStatus == 'en_proceso') {
+              if (request != null) {
+                final scheduledDay = request['scheduledDay'] as String?;
+                final scheduledEndTime = request['scheduledEndTime'] as String?;
+
+                if (scheduledDay != null && scheduledEndTime != null) {
+                  try {
+                    final scheduledDate = DateTime.parse(scheduledDay);
+                    final endTimeParts = scheduledEndTime.split(':');
+                    final scheduledDateTime = DateTime(
+                      scheduledDate.year,
+                      scheduledDate.month,
+                      scheduledDate.day,
+                      int.parse(endTimeParts[0]),
+                      int.parse(endTimeParts[1]),
+                    );
+
+                    if (DateTime.now().isAfter(scheduledDateTime)) {
+                      workflowStatus = 'vencido';
+                    }
+                  } catch (e) {
+                    print('Error checking vencido: $e');
+                  }
+                }
+              }
+            }
+
+            batchArticles.add(
+              RecyclingItem(
+                id: article['idArticle'] as int,
+                title: article['name'] as String,
+                description: article['description'] as String?,
+                address: article['address'] as String,
+                latitude: (article['lat'] as num).toDouble(),
+                longitude: (article['lng'] as num).toDouble(),
+                categoryID: article['categoryID'] as int?,
+                categoryName: category?['name'] as String? ?? 'Sin categoría',
+                ownerUserId: article['userID'] as int?,
+                userName: user?['names'] as String? ?? 'Usuario',
+                userEmail: user?['email'] as String? ?? '',
+                condition: article['condition'] as String?,
+                workflowStatus: workflowStatus,
+                createdAt: DateTime.now(), // Use current time as fallback
+              ),
+            );
           }
         }
-        
+
         // ✅ Update UI with each batch
         allArticles.addAll(batchArticles);
         if (mounted) {
           setState(() {
             _assignedArticles = List.from(allArticles);
           });
-          print('✅ Loaded batch: ${allArticles.length}/${tasks.length} articles');
+          print(
+            '✅ Loaded batch: ${allArticles.length}/${tasks.length} articles',
+          );
         }
-        
+
         // Small delay between batches for smooth rendering
         if (i + batchSize < tasks.length) {
           await Future.delayed(const Duration(milliseconds: 100));
@@ -343,11 +408,11 @@ class _EmployeeMapScreenState extends State<EmployeeMapScreen> with WidgetsBindi
   Future<void> _loadUserLocation() async {
     try {
       await _checkLocationServices();
-      
+
       if (!_isLocationServiceEnabled || !_hasLocationPermission) return;
-      
+
       final location = await _locationService.getCurrentLocation();
-      
+
       if (location != null) {
         setState(() {
           _userLocation = location;
@@ -368,24 +433,28 @@ class _EmployeeMapScreenState extends State<EmployeeMapScreen> with WidgetsBindi
     final status = await _locationService.checkLocationStatus();
     final wasEnabled = _isLocationServiceEnabled;
     final hadPermission = _hasLocationPermission;
-    
+
     if (!mounted) return;
-    
+
     setState(() {
       _isLocationServiceEnabled = status['serviceEnabled'] ?? false;
       _hasLocationPermission = status['hasPermission'] ?? false;
       _hasCheckedLocation = true;
     });
 
-    print('📊 Estado GPS - Servicio: $_isLocationServiceEnabled, Permisos: $_hasLocationPermission');
-    print('📊 Estado anterior - Servicio: $wasEnabled, Permisos: $hadPermission');
+    print(
+      '📊 Estado GPS - Servicio: $_isLocationServiceEnabled, Permisos: $_hasLocationPermission',
+    );
+    print(
+      '📊 Estado anterior - Servicio: $wasEnabled, Permisos: $hadPermission',
+    );
 
     // ✅ Si GPS se habilitó después del inicio, recargar ubicación
     if (_isLocationServiceEnabled && _hasLocationPermission) {
       if (!wasEnabled || !hadPermission) {
         print('🔄 GPS habilitado, recargando ubicación del usuario...');
         await _loadUserLocation();
-        
+
         // ✅ Forzar rebuild del widget para mostrar el marcador
         if (mounted) {
           setState(() {});
@@ -396,7 +465,7 @@ class _EmployeeMapScreenState extends State<EmployeeMapScreen> with WidgetsBindi
       if (wasEnabled || hadPermission) {
         print('⚠️ GPS deshabilitado, limpiando ubicación');
         if (!mounted) return;
-        
+
         setState(() {
           _hasUserLocation = false;
           _userLocation = null;
@@ -418,18 +487,20 @@ class _EmployeeMapScreenState extends State<EmployeeMapScreen> with WidgetsBindi
       }
       return;
     }
-    
+
     _mapService.fitMapToShowAllArticles(
       _mapController,
       _assignedArticles,
       _userLocation,
       _hasUserLocation,
     );
-    
+
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Mostrando ${_assignedArticles.length} tarea${_assignedArticles.length == 1 ? "" : "s"}'),
+          content: Text(
+            'Mostrando ${_assignedArticles.length} tarea${_assignedArticles.length == 1 ? "" : "s"}',
+          ),
           backgroundColor: Colors.green,
           duration: const Duration(seconds: 2),
         ),
@@ -442,13 +513,15 @@ class _EmployeeMapScreenState extends State<EmployeeMapScreen> with WidgetsBindi
     if (!mounted || ModalRoute.of(context)?.isCurrent != true) {
       return;
     }
-    
+
     showDialog(
       context: context,
       barrierDismissible: false,
       builder: (BuildContext context) {
         return AlertDialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+          ),
           title: Row(
             children: [
               Container(
@@ -492,7 +565,11 @@ class _EmployeeMapScreenState extends State<EmployeeMapScreen> with WidgetsBindi
                   children: [
                     Row(
                       children: [
-                        Icon(Icons.check_circle, color: Colors.green.shade600, size: 20),
+                        Icon(
+                          Icons.check_circle,
+                          color: Colors.green.shade600,
+                          size: 20,
+                        ),
                         const SizedBox(width: 8),
                         const Expanded(
                           child: Text(
@@ -505,7 +582,11 @@ class _EmployeeMapScreenState extends State<EmployeeMapScreen> with WidgetsBindi
                     const SizedBox(height: 8),
                     Row(
                       children: [
-                        Icon(Icons.check_circle, color: Colors.green.shade600, size: 20),
+                        Icon(
+                          Icons.check_circle,
+                          color: Colors.green.shade600,
+                          size: 20,
+                        ),
                         const SizedBox(width: 8),
                         const Expanded(
                           child: Text(
@@ -558,15 +639,18 @@ class _EmployeeMapScreenState extends State<EmployeeMapScreen> with WidgetsBindi
               onPressed: () async {
                 Navigator.of(context).pop();
                 print('✅ Usuario quiere activar ubicación');
-                
+
                 // ✅ Solicitar servicio de GPS primero
                 if (!_isLocationServiceEnabled) {
-                  final serviceEnabled = await _locationService.requestLocationService();
+                  final serviceEnabled =
+                      await _locationService.requestLocationService();
                   if (!serviceEnabled) {
                     if (mounted) {
                       ScaffoldMessenger.of(context).showSnackBar(
                         const SnackBar(
-                          content: Text('⚠️ GPS no activado. Por favor, activa el GPS manualmente'),
+                          content: Text(
+                            '⚠️ GPS no activado. Por favor, activa el GPS manualmente',
+                          ),
                           duration: Duration(seconds: 3),
                           backgroundColor: Colors.orange,
                         ),
@@ -575,15 +659,18 @@ class _EmployeeMapScreenState extends State<EmployeeMapScreen> with WidgetsBindi
                     return;
                   }
                 }
-                
+
                 // ✅ Solicitar permisos de ubicación
                 if (!_hasLocationPermission) {
-                  final permissionGranted = await _locationService.requestLocationPermission();
+                  final permissionGranted =
+                      await _locationService.requestLocationPermission();
                   if (!permissionGranted) {
                     if (mounted) {
                       ScaffoldMessenger.of(context).showSnackBar(
                         const SnackBar(
-                          content: Text('⚠️ Permisos denegados. Por favor, otorga permisos de ubicación'),
+                          content: Text(
+                            '⚠️ Permisos denegados. Por favor, otorga permisos de ubicación',
+                          ),
                           duration: Duration(seconds: 3),
                           backgroundColor: Colors.orange,
                         ),
@@ -592,14 +679,14 @@ class _EmployeeMapScreenState extends State<EmployeeMapScreen> with WidgetsBindi
                     return;
                   }
                 }
-                
+
                 // Verificar estado actualizado
                 await _checkLocationServices();
-                
+
                 // Intentar cargar ubicación
                 if (_isLocationServiceEnabled && _hasLocationPermission) {
                   await _loadUserLocation();
-                  
+
                   if (mounted) {
                     ScaffoldMessenger.of(context).showSnackBar(
                       const SnackBar(
@@ -614,7 +701,10 @@ class _EmployeeMapScreenState extends State<EmployeeMapScreen> with WidgetsBindi
               style: ElevatedButton.styleFrom(
                 backgroundColor: const Color(0xFF2D8A8A),
                 foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 24,
+                  vertical: 12,
+                ),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(8),
                 ),
@@ -629,7 +719,7 @@ class _EmployeeMapScreenState extends State<EmployeeMapScreen> with WidgetsBindi
 
   Future<void> _refreshData() async {
     setState(() => _isLoading = true);
-    
+
     try {
       await _loadAssignedArticles();
       await _loadUserLocation();
@@ -709,7 +799,7 @@ class _EmployeeMapScreenState extends State<EmployeeMapScreen> with WidgetsBindi
       options: MapOptions(
         initialCenter: _userLocation ?? const LatLng(-17.3895, -66.1568),
         initialZoom: _currentZoom,
-        minZoom: 6.0,  // ✅ Prevent zooming out beyond Bolivia
+        minZoom: 6.0, // ✅ Prevent zooming out beyond Bolivia
         maxZoom: 18.0,
         // ✅ Disable map rotation
         interactionOptions: const InteractionOptions(
@@ -718,7 +808,7 @@ class _EmployeeMapScreenState extends State<EmployeeMapScreen> with WidgetsBindi
         cameraConstraint: CameraConstraint.contain(
           bounds: LatLngBounds(
             const LatLng(-22.9, -69.7), // Southwest corner of Bolivia
-            const LatLng(-9.6, -57.4),   // Northeast corner of Bolivia
+            const LatLng(-9.6, -57.4), // Northeast corner of Bolivia
           ),
         ),
         onPositionChanged: (MapCamera position, bool hasGesture) {
@@ -730,18 +820,17 @@ class _EmployeeMapScreenState extends State<EmployeeMapScreen> with WidgetsBindi
               }
             });
           }
-        }
+        },
       ),
       children: [
         TileLayer(
-          urlTemplate: 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
+          urlTemplate:
+              'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
           subdomains: const ['a', 'b', 'c'],
         ),
         // ✅ User location marker with same style as distributor
         if (_showUserMarker && _hasUserLocation && _userLocation != null)
-          MarkerLayer(
-            markers: [MapMarkers.userLocationMarker(_userLocation!)],
-          ),
+          MarkerLayer(markers: [MapMarkers.userLocationMarker(_userLocation!)]),
         if (_assignedArticles.isNotEmpty) _buildDynamicMarkers(),
       ],
     );
@@ -750,7 +839,10 @@ class _EmployeeMapScreenState extends State<EmployeeMapScreen> with WidgetsBindi
   Widget _buildDynamicMarkers() {
     if (_assignedArticles.isEmpty) return const SizedBox.shrink();
 
-    final clusters = _clusterService.clusterItems(_assignedArticles, _currentZoom);
+    final clusters = _clusterService.clusterItems(
+      _assignedArticles,
+      _currentZoom,
+    );
     List<Marker> markers = [];
 
     for (var cluster in clusters) {
@@ -767,9 +859,10 @@ class _EmployeeMapScreenState extends State<EmployeeMapScreen> with WidgetsBindi
   }
 
   Marker _buildSingleMarker(RecyclingItem item) {
-    final isSelected = _showArticleNavigation && 
-                      _assignedArticles[_currentArticleIndex].id == item.id;
-    
+    final isSelected =
+        _showArticleNavigation &&
+        _assignedArticles[_currentArticleIndex].id == item.id;
+
     return Marker(
       point: LatLng(item.latitude, item.longitude),
       width: 40,
@@ -846,19 +939,19 @@ class _EmployeeMapScreenState extends State<EmployeeMapScreen> with WidgetsBindi
 
   void _onMarkerTap(RecyclingItem item) {
     final index = _assignedArticles.indexWhere((i) => i.id == item.id);
-    
+
     setState(() {
       _currentArticleIndex = index;
       _showArticleNavigation = true;
     });
-    
+
     if (_mapService.isMapReady(_mapController)) {
       _mapController.move(LatLng(item.latitude, item.longitude), 16);
     }
-    
+
     // Find nearby articles within 100 meters
     final nearbyArticles = _findNearbyArticles(item, maxDistance: 100);
-    
+
     if (nearbyArticles.length > 1) {
       // Show navigation modal if there are nearby articles
       _showArticleNavigationModal(nearbyArticles, item);
@@ -869,34 +962,47 @@ class _EmployeeMapScreenState extends State<EmployeeMapScreen> with WidgetsBindi
   }
 
   /// Find articles near the given article
-  List<RecyclingItem> _findNearbyArticles(RecyclingItem item, {required double maxDistance}) {
+  List<RecyclingItem> _findNearbyArticles(
+    RecyclingItem item, {
+    required double maxDistance,
+  }) {
     List<RecyclingItem> nearby = [];
-    
+
     for (var article in _assignedArticles) {
       final distance = _calculateDistance(
-        item.latitude, item.longitude,
-        article.latitude, article.longitude,
+        item.latitude,
+        item.longitude,
+        article.latitude,
+        article.longitude,
       );
-      
+
       if (distance <= maxDistance) {
         nearby.add(article);
       }
     }
-    
+
     return nearby;
   }
 
   /// Calculate distance between two points in meters (Haversine formula)
-  double _calculateDistance(double lat1, double lon1, double lat2, double lon2) {
+  double _calculateDistance(
+    double lat1,
+    double lon1,
+    double lat2,
+    double lon2,
+  ) {
     const double earthRadius = 6371000; // meters
-    
+
     final dLat = _toRadians(lat2 - lat1);
     final dLon = _toRadians(lon2 - lon1);
-    
-    final a = sin(dLat / 2) * sin(dLat / 2) +
-        cos(_toRadians(lat1)) * cos(_toRadians(lat2)) *
-        sin(dLon / 2) * sin(dLon / 2);
-    
+
+    final a =
+        sin(dLat / 2) * sin(dLat / 2) +
+        cos(_toRadians(lat1)) *
+            cos(_toRadians(lat2)) *
+            sin(dLon / 2) *
+            sin(dLon / 2);
+
     final c = 2 * atan2(sqrt(a), sqrt(1 - a));
     return earthRadius * c;
   }
@@ -913,19 +1019,20 @@ class _EmployeeMapScreenState extends State<EmployeeMapScreen> with WidgetsBindi
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (context) => _EmployeeSingleArticleModal(
-        item: item,
-        mediaDatabase: _mediaDatabase,
-        onNavigateToDetails: (item) {
-          Navigator.pop(context);
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (context) => DetailRecycleScreen(item: item),
-            ),
-          );
-        },
-      ),
+      builder:
+          (context) => _EmployeeSingleArticleModal(
+            item: item,
+            mediaDatabase: _mediaDatabase,
+            onNavigateToDetails: (item) {
+              Navigator.pop(context);
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => DetailRecycleScreen(item: item),
+                ),
+              );
+            },
+          ),
     ).then((_) {
       if (mounted) {
         setState(() {
@@ -936,7 +1043,10 @@ class _EmployeeMapScreenState extends State<EmployeeMapScreen> with WidgetsBindi
   }
 
   /// Show article navigation modal (with anterior/siguiente buttons)
-  void _showArticleNavigationModal(List<RecyclingItem> articles, RecyclingItem currentItem) async {
+  void _showArticleNavigationModal(
+    List<RecyclingItem> articles,
+    RecyclingItem currentItem,
+  ) async {
     if (!mounted) return;
 
     final currentIndex = articles.indexWhere((a) => a.id == currentItem.id);
@@ -945,26 +1055,27 @@ class _EmployeeMapScreenState extends State<EmployeeMapScreen> with WidgetsBindi
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (context) => _EmployeeArticleNavigationModal(
-        articles: articles,
-        initialIndex: currentIndex >= 0 ? currentIndex : 0,
-        mediaDatabase: _mediaDatabase,
-        onNavigateToDetails: (item) {
-          Navigator.pop(context);
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (context) => DetailRecycleScreen(item: item),
-            ),
-          );
-        },
-        onArticleChange: (item) {
-          // Move map to the new article location
-          if (_mapService.isMapReady(_mapController)) {
-            _mapController.move(LatLng(item.latitude, item.longitude), 16);
-          }
-        },
-      ),
+      builder:
+          (context) => _EmployeeArticleNavigationModal(
+            articles: articles,
+            initialIndex: currentIndex >= 0 ? currentIndex : 0,
+            mediaDatabase: _mediaDatabase,
+            onNavigateToDetails: (item) {
+              Navigator.pop(context);
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => DetailRecycleScreen(item: item),
+                ),
+              );
+            },
+            onArticleChange: (item) {
+              // Move map to the new article location
+              if (_mapService.isMapReady(_mapController)) {
+                _mapController.move(LatLng(item.latitude, item.longitude), 16);
+              }
+            },
+          ),
     ).then((_) {
       if (mounted) {
         setState(() {
@@ -1028,194 +1139,207 @@ class _EmployeeMapScreenState extends State<EmployeeMapScreen> with WidgetsBindi
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
-      builder: (context) => Container(
-        decoration: const BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.only(
-            topLeft: Radius.circular(20),
-            topRight: Radius.circular(20),
-          ),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // Handle bar
-            Container(
-              margin: const EdgeInsets.only(top: 12, bottom: 8),
-              width: 40,
-              height: 4,
-              decoration: BoxDecoration(
-                color: Colors.grey[300],
-                borderRadius: BorderRadius.circular(2),
+      builder:
+          (context) => Container(
+            decoration: const BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.only(
+                topLeft: Radius.circular(20),
+                topRight: Radius.circular(20),
               ),
             ),
-
-            // Título
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              child: Row(
-                children: [
-                  const Icon(Icons.location_on, color: Color(0xFF2D8A8A)),
-                  const SizedBox(width: 8),
-                  const Text(
-                    'Opciones de Ubicación',
-                    style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                      color: Color(0xFF2D8A8A),
-                    ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Handle bar
+                Container(
+                  margin: const EdgeInsets.only(top: 12, bottom: 8),
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: Colors.grey[300],
+                    borderRadius: BorderRadius.circular(2),
                   ),
-                ],
-              ),
-            ),
-
-            const Divider(height: 1),
-
-            // Opción 1: Ir a mi ubicación
-            ListTile(
-              leading: const CircleAvatar(
-                backgroundColor: Color(0xFF2D8A8A),
-                child: Icon(Icons.my_location, color: Colors.white, size: 20),
-              ),
-              title: const Text(
-                'Ir a mi ubicación',
-                style: TextStyle(fontWeight: FontWeight.w600),
-              ),
-              subtitle: Text(
-                _hasUserLocation 
-                    ? 'Centrar mapa en mi posición actual' 
-                    : 'GPS deshabilitado',
-              ),
-              onTap: () {
-                Navigator.pop(context);
-                _goToUserLocation();
-              },
-            ),
-
-            // Opción 2: Toggle marcador de usuario
-            ListTile(
-              leading: CircleAvatar(
-                backgroundColor: _showUserMarker 
-                    ? const Color(0xFF2D8A8A) 
-                    : Colors.grey[400],
-                child: Icon(
-                  _showUserMarker ? Icons.visibility : Icons.visibility_off,
-                  color: Colors.white,
-                  size: 20,
                 ),
-              ),
-              title: Text(
-                _showUserMarker 
-                    ? 'Ocultar mi marcador' 
-                    : 'Mostrar mi marcador',
-                style: const TextStyle(fontWeight: FontWeight.w600),
-              ),
-              subtitle: Text(
-                _showUserMarker 
-                    ? 'El marcador azul desaparecerá del mapa'
-                    : 'Mostrar marcador azul en el mapa',
-              ),
-              trailing: Switch(
-                value: _showUserMarker,
-                onChanged: (value) {
-                  Navigator.pop(context);
-                  setState(() {
-                    _showUserMarker = value;
-                  });
-                  
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text(
-                        _showUserMarker 
-                            ? '✅ Marcador visible' 
-                            : '❌ Marcador oculto'
-                      ),
-                      duration: const Duration(seconds: 1),
-                      backgroundColor: _showUserMarker ? Colors.green : Colors.grey,
-                    ),
-                  );
-                },
-                activeColor: const Color(0xFF2D8A8A),
-              ),
-            ),
 
-            // Opción 3: Ver todas las tareas
-            ListTile(
-              leading: const CircleAvatar(
-                backgroundColor: Colors.orange,
-                child: Icon(Icons.map, color: Colors.white, size: 20),
-              ),
-              title: const Text(
-                'Ver todas las tareas',
-                style: TextStyle(fontWeight: FontWeight.w600),
-              ),
-              subtitle: Text(
-                _assignedArticles.isEmpty
-                    ? 'No hay tareas asignadas'
-                    : 'Ajustar mapa para mostrar todas las ubicaciones',
-              ),
-              onTap: _assignedArticles.isEmpty 
-                  ? null
-                  : () {
-                      Navigator.pop(context);
-                      _fitMapToShowAllArticles();
-                    },
-            ),
-
-            // Opción 3: Recargar tareas
-            ListTile(
-              leading: const CircleAvatar(
-                backgroundColor: Color(0xFF2D8A8A),
-                child: Icon(Icons.refresh, color: Colors.white, size: 20),
-              ),
-              title: const Text(
-                'Recargar Tareas',
-                style: TextStyle(fontWeight: FontWeight.w600),
-              ),
-              subtitle: const Text('Actualizar lista de tareas asignadas'),
-              onTap: () async {
-                Navigator.pop(context);
-                
-                // Show loading snackbar
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Row(
-                      children: [
-                        SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(
-                            color: Colors.white,
-                            strokeWidth: 2,
-                          ),
-                        ),
-                        SizedBox(width: 12),
-                        Text('Recargando tareas...'),
-                      ],
-                    ),
-                    duration: Duration(seconds: 2),
-                    backgroundColor: Color(0xFF2D8A8A),
+                // Título
+                Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 8,
                   ),
-                );
-                
-                await _refreshData();
-                
-                if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text('✅ ${_assignedArticles.length} tarea${_assignedArticles.length == 1 ? "" : "s"} cargada${_assignedArticles.length == 1 ? "" : "s"}'),
-                      duration: const Duration(seconds: 2),
-                      backgroundColor: Colors.green,
-                    ),
-                  );
-                }
-              },
-            ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.location_on, color: Color(0xFF2D8A8A)),
+                      const SizedBox(width: 8),
+                      const Text(
+                        'Opciones de Ubicación',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFF2D8A8A),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
 
-            const SizedBox(height: 16),
-          ],
-        ),
-      ),
+                const Divider(height: 1),
+
+                // Opción 1: Ir a mi ubicación
+                ListTile(
+                  leading: const CircleAvatar(
+                    backgroundColor: Color(0xFF2D8A8A),
+                    child: Icon(
+                      Icons.my_location,
+                      color: Colors.white,
+                      size: 20,
+                    ),
+                  ),
+                  title: const Text(
+                    'Ir a mi ubicación',
+                    style: TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  subtitle: Text(
+                    _hasUserLocation
+                        ? 'Centrar mapa en mi posición actual'
+                        : 'GPS deshabilitado',
+                  ),
+                  onTap: () {
+                    Navigator.pop(context);
+                    _goToUserLocation();
+                  },
+                ),
+
+                // Opción 2: Toggle marcador de usuario
+                ListTile(
+                  leading: CircleAvatar(
+                    backgroundColor:
+                        _showUserMarker
+                            ? const Color(0xFF2D8A8A)
+                            : Colors.grey[400],
+                    child: Icon(
+                      _showUserMarker ? Icons.visibility : Icons.visibility_off,
+                      color: Colors.white,
+                      size: 20,
+                    ),
+                  ),
+                  title: Text(
+                    _showUserMarker
+                        ? 'Ocultar mi marcador'
+                        : 'Mostrar mi marcador',
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  subtitle: Text(
+                    _showUserMarker
+                        ? 'El marcador azul desaparecerá del mapa'
+                        : 'Mostrar marcador azul en el mapa',
+                  ),
+                  trailing: Switch(
+                    value: _showUserMarker,
+                    onChanged: (value) {
+                      Navigator.pop(context);
+                      setState(() {
+                        _showUserMarker = value;
+                      });
+
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            _showUserMarker
+                                ? '✅ Marcador visible'
+                                : '❌ Marcador oculto',
+                          ),
+                          duration: const Duration(seconds: 1),
+                          backgroundColor:
+                              _showUserMarker ? Colors.green : Colors.grey,
+                        ),
+                      );
+                    },
+                    activeColor: const Color(0xFF2D8A8A),
+                  ),
+                ),
+
+                // Opción 3: Ver todas las tareas
+                ListTile(
+                  leading: const CircleAvatar(
+                    backgroundColor: Colors.orange,
+                    child: Icon(Icons.map, color: Colors.white, size: 20),
+                  ),
+                  title: const Text(
+                    'Ver todas las tareas',
+                    style: TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  subtitle: Text(
+                    _assignedArticles.isEmpty
+                        ? 'No hay tareas asignadas'
+                        : 'Ajustar mapa para mostrar todas las ubicaciones',
+                  ),
+                  onTap:
+                      _assignedArticles.isEmpty
+                          ? null
+                          : () {
+                            Navigator.pop(context);
+                            _fitMapToShowAllArticles();
+                          },
+                ),
+
+                // Opción 3: Recargar tareas
+                ListTile(
+                  leading: const CircleAvatar(
+                    backgroundColor: Color(0xFF2D8A8A),
+                    child: Icon(Icons.refresh, color: Colors.white, size: 20),
+                  ),
+                  title: const Text(
+                    'Recargar Tareas',
+                    style: TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  subtitle: const Text('Actualizar lista de tareas asignadas'),
+                  onTap: () async {
+                    Navigator.pop(context);
+
+                    // Show loading snackbar
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Row(
+                          children: [
+                            SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(
+                                color: Colors.white,
+                                strokeWidth: 2,
+                              ),
+                            ),
+                            SizedBox(width: 12),
+                            Text('Recargando tareas...'),
+                          ],
+                        ),
+                        duration: Duration(seconds: 2),
+                        backgroundColor: Color(0xFF2D8A8A),
+                      ),
+                    );
+
+                    await _refreshData();
+
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            '✅ ${_assignedArticles.length} tarea${_assignedArticles.length == 1 ? "" : "s"} cargada${_assignedArticles.length == 1 ? "" : "s"}',
+                          ),
+                          duration: const Duration(seconds: 2),
+                          backgroundColor: Colors.green,
+                        ),
+                      );
+                    }
+                  },
+                ),
+
+                const SizedBox(height: 16),
+              ],
+            ),
+          ),
     );
   }
 
@@ -1271,17 +1395,17 @@ class _EmployeeMapScreenState extends State<EmployeeMapScreen> with WidgetsBindi
   /// ✅ Go to user location
   Future<void> _goToUserLocation() async {
     await _checkLocationServices();
-    
+
     if (!_isLocationServiceEnabled || !_hasLocationPermission) {
       _showEnableLocationDialog();
       return;
     }
-    
+
     if (_hasUserLocation && _userLocation != null) {
       if (_mapService.isMapReady(_mapController)) {
         _mapController.move(_userLocation!, 16.0);
       }
-      
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -1302,9 +1426,9 @@ class _EmployeeMapScreenState extends State<EmployeeMapScreen> with WidgetsBindi
           ),
         );
       }
-      
+
       await _loadUserLocation();
-      
+
       if (_hasUserLocation && _userLocation != null) {
         if (_mapService.isMapReady(_mapController)) {
           _mapController.move(_userLocation!, 16.0);
@@ -1340,10 +1464,12 @@ class _EmployeeSingleArticleModal extends StatefulWidget {
   });
 
   @override
-  State<_EmployeeSingleArticleModal> createState() => _EmployeeSingleArticleModalState();
+  State<_EmployeeSingleArticleModal> createState() =>
+      _EmployeeSingleArticleModalState();
 }
 
-class _EmployeeSingleArticleModalState extends State<_EmployeeSingleArticleModal> {
+class _EmployeeSingleArticleModalState
+    extends State<_EmployeeSingleArticleModal> {
   Multimedia? currentPhoto;
   bool isLoadingPhoto = false;
 
@@ -1355,11 +1481,13 @@ class _EmployeeSingleArticleModalState extends State<_EmployeeSingleArticleModal
 
   Future<void> _loadPhoto() async {
     setState(() => isLoadingPhoto = true);
-    
+
     try {
       final urlPattern = 'articles/${widget.item.id}';
-      final photo = await widget.mediaDatabase.getMainPhotoByPattern(urlPattern);
-      
+      final photo = await widget.mediaDatabase.getMainPhotoByPattern(
+        urlPattern,
+      );
+
       if (mounted) {
         setState(() {
           currentPhoto = photo;
@@ -1419,7 +1547,7 @@ class _EmployeeSingleArticleModalState extends State<_EmployeeSingleArticleModal
                   else
                     _buildPlaceholder(),
                   const SizedBox(height: 16),
-                  
+
                   // Title
                   Text(
                     widget.item.title,
@@ -1429,12 +1557,15 @@ class _EmployeeSingleArticleModalState extends State<_EmployeeSingleArticleModal
                     ),
                   ),
                   const SizedBox(height: 8),
-                  
+
                   // Category
                   Row(
                     children: [
                       Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 6,
+                        ),
                         decoration: BoxDecoration(
                           color: Colors.blue.withOpacity(0.1),
                           borderRadius: BorderRadius.circular(20),
@@ -1442,7 +1573,9 @@ class _EmployeeSingleArticleModalState extends State<_EmployeeSingleArticleModal
                         child: Row(
                           children: [
                             Icon(
-                              CategoryUtils.getCategoryIcon(widget.item.categoryName),
+                              CategoryUtils.getCategoryIcon(
+                                widget.item.categoryName,
+                              ),
                               size: 16,
                               color: Colors.blue,
                             ),
@@ -1460,7 +1593,7 @@ class _EmployeeSingleArticleModalState extends State<_EmployeeSingleArticleModal
                     ],
                   ),
                   const SizedBox(height: 16),
-                  
+
                   // Description
                   if (widget.item.description != null) ...[
                     const Text(
@@ -1477,19 +1610,20 @@ class _EmployeeSingleArticleModalState extends State<_EmployeeSingleArticleModal
                     ),
                     const SizedBox(height: 16),
                   ],
-                  
+
                   // Address
                   const Text(
                     'Ubicación:',
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                    ),
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                   ),
                   const SizedBox(height: 8),
                   Row(
                     children: [
-                      const Icon(Icons.location_on, color: Colors.red, size: 20),
+                      const Icon(
+                        Icons.location_on,
+                        color: Colors.red,
+                        size: 20,
+                      ),
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(
@@ -1500,7 +1634,7 @@ class _EmployeeSingleArticleModalState extends State<_EmployeeSingleArticleModal
                     ],
                   ),
                   const SizedBox(height: 24),
-                  
+
                   // View Details Button
                   SizedBox(
                     width: double.infinity,
@@ -1570,10 +1704,12 @@ class _EmployeeArticleNavigationModal extends StatefulWidget {
   });
 
   @override
-  State<_EmployeeArticleNavigationModal> createState() => _EmployeeArticleNavigationModalState();
+  State<_EmployeeArticleNavigationModal> createState() =>
+      _EmployeeArticleNavigationModalState();
 }
 
-class _EmployeeArticleNavigationModalState extends State<_EmployeeArticleNavigationModal> {
+class _EmployeeArticleNavigationModalState
+    extends State<_EmployeeArticleNavigationModal> {
   late int currentIndex;
   Multimedia? currentPhoto;
   bool isLoadingPhoto = false;
@@ -1589,11 +1725,13 @@ class _EmployeeArticleNavigationModalState extends State<_EmployeeArticleNavigat
 
   Future<void> _loadPhoto() async {
     setState(() => isLoadingPhoto = true);
-    
+
     try {
       final urlPattern = 'articles/${currentItem.id}';
-      final photo = await widget.mediaDatabase.getMainPhotoByPattern(urlPattern);
-      
+      final photo = await widget.mediaDatabase.getMainPhotoByPattern(
+        urlPattern,
+      );
+
       if (mounted) {
         setState(() {
           currentPhoto = photo;
@@ -1653,7 +1791,7 @@ class _EmployeeArticleNavigationModalState extends State<_EmployeeArticleNavigat
               borderRadius: BorderRadius.circular(3),
             ),
           ),
-          
+
           // Navigation header
           if (widget.articles.length > 1)
             Container(
@@ -1665,9 +1803,10 @@ class _EmployeeArticleNavigationModalState extends State<_EmployeeArticleNavigat
                     onPressed: currentIndex > 0 ? _goToPrevious : null,
                     icon: const Icon(Icons.arrow_back),
                     style: IconButton.styleFrom(
-                      backgroundColor: currentIndex > 0 
-                          ? const Color(0xFF2D8A8A).withOpacity(0.1)
-                          : Colors.grey[200],
+                      backgroundColor:
+                          currentIndex > 0
+                              ? const Color(0xFF2D8A8A).withOpacity(0.1)
+                              : Colors.grey[200],
                     ),
                   ),
                   Text(
@@ -1679,18 +1818,22 @@ class _EmployeeArticleNavigationModalState extends State<_EmployeeArticleNavigat
                     ),
                   ),
                   IconButton(
-                    onPressed: currentIndex < widget.articles.length - 1 ? _goToNext : null,
+                    onPressed:
+                        currentIndex < widget.articles.length - 1
+                            ? _goToNext
+                            : null,
                     icon: const Icon(Icons.arrow_forward),
                     style: IconButton.styleFrom(
-                      backgroundColor: currentIndex < widget.articles.length - 1
-                          ? const Color(0xFF2D8A8A).withOpacity(0.1)
-                          : Colors.grey[200],
+                      backgroundColor:
+                          currentIndex < widget.articles.length - 1
+                              ? const Color(0xFF2D8A8A).withOpacity(0.1)
+                              : Colors.grey[200],
                     ),
                   ),
                 ],
               ),
             ),
-          
+
           Expanded(
             child: SingleChildScrollView(
               padding: const EdgeInsets.all(20),
@@ -1713,7 +1856,7 @@ class _EmployeeArticleNavigationModalState extends State<_EmployeeArticleNavigat
                   else
                     _buildPlaceholder(),
                   const SizedBox(height: 16),
-                  
+
                   // Title
                   Text(
                     currentItem.title,
@@ -1723,12 +1866,15 @@ class _EmployeeArticleNavigationModalState extends State<_EmployeeArticleNavigat
                     ),
                   ),
                   const SizedBox(height: 8),
-                  
+
                   // Category
                   Row(
                     children: [
                       Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 6,
+                        ),
                         decoration: BoxDecoration(
                           color: Colors.blue.withOpacity(0.1),
                           borderRadius: BorderRadius.circular(20),
@@ -1736,7 +1882,9 @@ class _EmployeeArticleNavigationModalState extends State<_EmployeeArticleNavigat
                         child: Row(
                           children: [
                             Icon(
-                              CategoryUtils.getCategoryIcon(currentItem.categoryName),
+                              CategoryUtils.getCategoryIcon(
+                                currentItem.categoryName,
+                              ),
                               size: 16,
                               color: Colors.blue,
                             ),
@@ -1754,7 +1902,7 @@ class _EmployeeArticleNavigationModalState extends State<_EmployeeArticleNavigat
                     ],
                   ),
                   const SizedBox(height: 16),
-                  
+
                   // Description
                   if (currentItem.description != null) ...[
                     const Text(
@@ -1771,19 +1919,20 @@ class _EmployeeArticleNavigationModalState extends State<_EmployeeArticleNavigat
                     ),
                     const SizedBox(height: 16),
                   ],
-                  
+
                   // Address
                   const Text(
                     'Ubicación:',
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                    ),
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                   ),
                   const SizedBox(height: 8),
                   Row(
                     children: [
-                      const Icon(Icons.location_on, color: Colors.red, size: 20),
+                      const Icon(
+                        Icons.location_on,
+                        color: Colors.red,
+                        size: 20,
+                      ),
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(
@@ -1794,7 +1943,7 @@ class _EmployeeArticleNavigationModalState extends State<_EmployeeArticleNavigat
                     ],
                   ),
                   const SizedBox(height: 24),
-                  
+
                   // View Details Button
                   SizedBox(
                     width: double.infinity,

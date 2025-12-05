@@ -5,6 +5,7 @@ class Users {
   String? role;
   int? state;
   DateTime? lastUpdate;
+  bool? isLoggedIn;
 
   Users({
     this.id,
@@ -13,6 +14,7 @@ class Users {
     this.role,
     this.state,
     this.lastUpdate,
+    this.isLoggedIn,
   });
 
   factory Users.fromMap(Map<String, dynamic> map) {
@@ -22,7 +24,9 @@ class Users {
       email: map['email'] as String?,
       role: map['role'] as String?,
       state: map['state'] as int?,
-      lastUpdate: map['lastUpdate'] != null ? DateTime.parse(map['lastUpdate']) : null,
+      lastUpdate:
+          map['lastUpdate'] != null ? DateTime.parse(map['lastUpdate']) : null,
+      isLoggedIn: map['isLoggedIn'] as bool?,
     );
   }
 
@@ -33,11 +37,12 @@ class Users {
       'role': role,
       'state': state,
       'lastUpdate': lastUpdate?.toIso8601String(),
+      'isLoggedIn': isLoggedIn,
     };
   }
 
   @override
   String toString() {
-    return 'Users{id: $id, names: $names, email: $email, role: $role, state: $state, lastUpdate: $lastUpdate}';
+    return 'Users{id: $id, names: $names, email: $email, role: $role, state: $state, lastUpdate: $lastUpdate, isLoggedIn: $isLoggedIn}';
   }
 }

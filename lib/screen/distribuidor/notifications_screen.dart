@@ -22,10 +22,13 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   final _taskDatabase = TaskDatabase(); // ✅ Add task database
 
   List<Map<String, dynamic>> _pendingRequests = [];
+  List<Map<String, dynamic>> _assignedTasks =
+      []; // ✅ Tasks with assigned employees
   bool _isLoading = true;
   int? _currentUserId;
 
   RealtimeChannel? _requestChannel;
+  RealtimeChannel? _taskChannel; // ✅ Add task channel
 
   @override
   void initState() {
@@ -37,40 +40,82 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
 
   @override
   void dispose() {
-    // Unsubscribe from real-time channel
+    // Unsubscribe from real-time channels
     _requestChannel?.unsubscribe();
+    _taskChannel?.unsubscribe();
     super.dispose();
   }
 
   void _setupRealtimeListener() {
-    _requestChannel = Supabase.instance.client
-        .channel('distributor-notifications')
-        .onPostgresChanges(
-          event: PostgresChangeEvent.all,
-          schema: 'public',
-          table: 'request',
-          callback: (payload) {
-            print('🔔 Real-time notification received: ${payload.eventType}');
-            _loadNotifications(); // Refresh notifications on any change
-          },
-        ).subscribe();
+    // Listen to request table changes
+    _requestChannel =
+        Supabase.instance.client
+            .channel('distributor-notifications-requests')
+            .onPostgresChanges(
+              event: PostgresChangeEvent.all,
+              schema: 'public',
+              table: 'request',
+              callback: (payload) {
+                print(
+                  '🔔 Real-time request notification: ${payload.eventType}',
+                );
+                _loadNotifications();
+              },
+            )
+            .subscribe();
+
+    // ✅ Listen to tasks table changes for employee assignments
+    _taskChannel =
+        Supabase.instance.client
+            .channel('distributor-notifications-tasks')
+            .onPostgresChanges(
+              event: PostgresChangeEvent.all,
+              schema: 'public',
+              table: 'tasks',
+              callback: (payload) {
+                print('🔔 Real-time task notification: ${payload.eventType}');
+                _loadNotifications();
+              },
+            )
+            .subscribe();
   }
 
   /// ✅ Mark all current notifications as read locally
   Future<void> _markAllAsReadLocally() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final readNotifications = prefs.getStringList('read_distributor_notifications') ?? [];
-      
+      final readNotifications =
+          prefs.getStringList('read_distributor_notifications') ?? [];
+      final readAssignedTasks =
+          prefs.getStringList('read_distributor_assigned_tasks') ?? [];
+
+      // Mark pending requests as read
       for (var request in _pendingRequests) {
         final requestId = request['idRequest'].toString();
         if (!readNotifications.contains(requestId)) {
           readNotifications.add(requestId);
         }
       }
-      
-      await prefs.setStringList('read_distributor_notifications', readNotifications);
-      print('✅ Marked ${_pendingRequests.length} notifications as read locally');
+
+      // ✅ Mark assigned tasks as read
+      for (var task in _assignedTasks) {
+        final taskId = task['idTask'].toString();
+        if (!readAssignedTasks.contains(taskId)) {
+          readAssignedTasks.add(taskId);
+        }
+      }
+
+      await prefs.setStringList(
+        'read_distributor_notifications',
+        readNotifications,
+      );
+      await prefs.setStringList(
+        'read_distributor_assigned_tasks',
+        readAssignedTasks,
+      );
+      print(
+        '✅ Marked ${_pendingRequests.length} requests and ${_assignedTasks.length} assigned tasks as read locally',
+      );
     } catch (e) {
       print('❌ Error marking notifications as read: $e');
     }
@@ -79,11 +124,11 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   /// ✅ Get count of unread notifications
   // static Future<int> getUnreadCount(int? userId) async {
   //   if (userId == null) return 0;
-    
+
   //   try {
   //     final prefs = await SharedPreferences.getInstance();
   //     final readNotifications = prefs.getStringList('read_distributor_notifications') ?? [];
-      
+
   //     // Get pending requests for this user
   //     final requests = await Supabase.instance.client
   //         .from('request')
@@ -94,16 +139,16 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   //           )
   //         ''')
   //         .eq('status', 'pendiente');
-      
+
   //     // Filter by user's articles and check if read
   //     final unreadCount = requests.where((req) {
   //       final article = req['article'] as Map<String, dynamic>?;
   //       if (article == null || article['userID'] != userId) return false;
-        
+
   //       final requestId = req['idRequest'].toString();
   //       return !readNotifications.contains(requestId);
   //     }).length;
-      
+
   //     return unreadCount;
   //   } catch (e) {
   //     print('❌ Error getting unread count: $e');
@@ -113,7 +158,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
 
   Future<void> _loadNotifications() async {
     if (!mounted) return;
-    
+
     setState(() => _isLoading = true);
 
     try {
@@ -143,12 +188,52 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
               .order('requestDate', ascending: false);
 
           // Filter requests where article belongs to current user
-          final myRequests = requests.where((req) {
-            final article = req['article'] as Map<String, dynamic>?;
-            return article != null && article['userID'] == _currentUserId;
-          }).toList();
+          final myRequests =
+              requests.where((req) {
+                final article = req['article'] as Map<String, dynamic>?;
+                return article != null && article['userID'] == _currentUserId;
+              }).toList();
 
           print('🔔 Found ${myRequests.length} pending requests');
+
+          // ✅ Get tasks with assigned employees for user's articles
+          final tasks = await Supabase.instance.client
+              .from('tasks')
+              .select('''
+                idTask,
+                employeeID,
+                articleID,
+                assignedDate,
+                workflowStatus,
+                lastUpdate,
+                article:articleID (
+                  idArticle,
+                  name,
+                  userID
+                ),
+                employee:employeeID (
+                  idEmployee,
+                  user:userID (
+                    names
+                  )
+                ),
+                request:requestID (
+                  scheduledDay,
+                  scheduledStartTime,
+                  scheduledEndTime
+                )
+              ''')
+              .eq('workflowStatus', 'en_proceso')
+              .order('lastUpdate', ascending: false);
+
+          // Filter tasks where article belongs to current user
+          final myTasks =
+              tasks.where((task) {
+                final article = task['article'] as Map<String, dynamic>?;
+                return article != null && article['userID'] == _currentUserId;
+              }).toList();
+
+          print('🔔 Found ${myTasks.length} tasks with assigned employees');
 
           // Load company logos for each request
           for (var request in myRequests) {
@@ -157,7 +242,9 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
               final companyId = company['idCompany'];
               // Use only companyId pattern to avoid issues with special characters
               final logoPattern = 'empresa/$companyId/avatar/';
-              final logo = await _mediaDatabase.getMainPhotoByPattern(logoPattern);
+              final logo = await _mediaDatabase.getMainPhotoByPattern(
+                logoPattern,
+              );
               request['companyLogo'] = logo;
             }
           }
@@ -165,6 +252,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
           if (mounted) {
             setState(() {
               _pendingRequests = myRequests;
+              _assignedTasks = myTasks;
             });
             // Mark as read after loading
             await _markAllAsReadLocally();
@@ -179,8 +267,6 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
       }
     }
   }
-
-
 
   Future<void> _handleAccept(Map<String, dynamic> requestData) async {
     try {
@@ -221,18 +307,25 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
 
       await _taskDatabase.createTask(task);
 
-      print('✅ Task created with "sin_asignar" status - Article: $articleId, Company: $companyId, Request: $requestId');
-      
+      print(
+        '✅ Task created with "sin_asignar" status - Article: $articleId, Company: $companyId, Request: $requestId',
+      );
+
       // ✅ Verify task was created
-      final verifyTask = await Supabase.instance.client
-          .from('tasks')
-          .select()
-          .eq('requestID', requestId)
-          .maybeSingle();
-      
-      print('🔍 Verification - Task in DB: ${verifyTask != null ? "FOUND (ID: ${verifyTask['idTask']})" : "NOT FOUND"}');
+      final verifyTask =
+          await Supabase.instance.client
+              .from('tasks')
+              .select()
+              .eq('requestID', requestId)
+              .maybeSingle();
+
+      print(
+        '🔍 Verification - Task in DB: ${verifyTask != null ? "FOUND (ID: ${verifyTask['idTask']})" : "NOT FOUND"}',
+      );
       if (verifyTask != null) {
-        print('   Task details: workflowStatus=${verifyTask['workflowStatus']}, articleID=${verifyTask['articleID']}, companyID=${verifyTask['companyID']}');
+        print(
+          '   Task details: workflowStatus=${verifyTask['workflowStatus']}, articleID=${verifyTask['articleID']}, companyID=${verifyTask['companyID']}',
+        );
       }
 
       if (mounted) {
@@ -248,10 +341,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
       print('❌ Error accepting request: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('❌ Error: $e'),
-            backgroundColor: Colors.red,
-          ),
+          SnackBar(content: Text('❌ Error: $e'), backgroundColor: Colors.red),
         );
       }
     }
@@ -283,10 +373,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
       print('❌ Error rejecting request: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('❌ Error: $e'),
-            backgroundColor: Colors.red,
-          ),
+          SnackBar(content: Text('❌ Error: $e'), backgroundColor: Colors.red),
         );
       }
     }
@@ -342,52 +429,57 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
           ),
         ),
       ),
-      body: _isLoading
-          ? const Center(
-              child: CircularProgressIndicator(
-                color: Color(0xFF2D8A8A),
-              ),
-            )
-          : _pendingRequests.isEmpty
+      body:
+          _isLoading
+              ? const Center(
+                child: CircularProgressIndicator(color: Color(0xFF2D8A8A)),
+              )
+              : (_pendingRequests.isEmpty && _assignedTasks.isEmpty)
               ? _buildEmptyState()
               : RefreshIndicator(
-                  onRefresh: () async {
-                    await _loadNotifications();
-                  },
-                  color: const Color(0xFF2D8A8A),
-                  child: ListView(
-                    padding: const EdgeInsets.all(16),
-                    children: [
-                      // "Hoy" header
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 8),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Text(
-                              'Hoy',
-                              style: TextStyle(
-                                fontSize: 18,
-                                fontWeight: FontWeight.bold,
-                                color: Color(0xFF2D8A8A),
-                              ),
+                onRefresh: () async {
+                  await _loadNotifications();
+                },
+                color: const Color(0xFF2D8A8A),
+                child: ListView(
+                  padding: const EdgeInsets.all(16),
+                  children: [
+                    // "Hoy" header
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Hoy',
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                              color: Color(0xFF2D8A8A),
                             ),
-                            Text(
-                              'Tienes ${_pendingRequests.length} ${_pendingRequests.length == 1 ? 'notificación' : 'notificaciones'}',
-                              style: TextStyle(
-                                fontSize: 14,
-                                color: Colors.grey[600],
-                              ),
+                          ),
+                          Text(
+                            'Tienes ${_pendingRequests.length + _assignedTasks.length} ${(_pendingRequests.length + _assignedTasks.length) == 1 ? 'notificación' : 'notificaciones'}',
+                            style: TextStyle(
+                              fontSize: 14,
+                              color: Colors.grey[600],
                             ),
-                          ],
-                        ),
+                          ),
+                        ],
                       ),
-                      const SizedBox(height: 8),
-                      // Notifications list
-                      ..._pendingRequests.map((request) => _buildNotificationCard(request)),
-                    ],
-                  ),
+                    ),
+                    const SizedBox(height: 8),
+                    // ✅ Assigned tasks notifications (employee assigned)
+                    ..._assignedTasks.map(
+                      (task) => _buildAssignedTaskCard(task),
+                    ),
+                    // Pending requests notifications
+                    ..._pendingRequests.map(
+                      (request) => _buildNotificationCard(request),
+                    ),
+                  ],
                 ),
+              ),
     );
   }
 
@@ -422,10 +514,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                 const SizedBox(height: 8),
                 Text(
                   'Las solicitudes de empresas aparecerán aquí',
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: Colors.grey[500],
-                  ),
+                  style: TextStyle(fontSize: 14, color: Colors.grey[500]),
                 ),
               ],
             ),
@@ -439,22 +528,31 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     final company = request['company'] as Map<String, dynamic>?;
     final article = request['article'] as Map<String, dynamic>?;
     final companyLogo = request['companyLogo'] as Multimedia?;
-    final requestDate = request['requestDate'] != null 
-        ? DateTime.parse(request['requestDate']).toLocal() 
-        : DateTime.now();
+    final requestDate =
+        request['requestDate'] != null
+            ? DateTime.parse(request['requestDate']).toLocal()
+            : DateTime.now();
 
     final companyName = company?['nameCompany'] ?? 'Empresa';
     final articleName = article?['name'] ?? 'Artículo';
     final timeAgo = _getTimeAgo(requestDate);
     final scheduledDay = request['scheduledDay'] as String?;
     final scheduledStartTime = request['scheduledStartTime'] as String?;
-    
+
     // Format the scheduled day to show day name and date
     String? formattedScheduledDay;
     if (scheduledDay != null) {
       try {
         final date = DateTime.parse(scheduledDay);
-        final dayNames = ['lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado', 'domingo'];
+        final dayNames = [
+          'lunes',
+          'martes',
+          'miércoles',
+          'jueves',
+          'viernes',
+          'sábado',
+          'domingo',
+        ];
         final dayName = dayNames[date.weekday - 1];
         formattedScheduledDay = '$dayName ${date.day}';
       } catch (e) {
@@ -492,20 +590,22 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                   decoration: BoxDecoration(
                     color: const Color(0xFF2D8A8A).withOpacity(0.1),
                     borderRadius: BorderRadius.circular(12),
-                    image: companyLogo?.url != null
-                        ? DecorationImage(
-                            image: NetworkImage(companyLogo!.url!),
-                            fit: BoxFit.cover,
-                          )
-                        : null,
+                    image:
+                        companyLogo?.url != null
+                            ? DecorationImage(
+                              image: NetworkImage(companyLogo!.url!),
+                              fit: BoxFit.cover,
+                            )
+                            : null,
                   ),
-                  child: companyLogo?.url == null
-                      ? const Icon(
-                          Icons.business,
-                          color: Color(0xFF2D8A8A),
-                          size: 24,
-                        )
-                      : null,
+                  child:
+                      companyLogo?.url == null
+                          ? const Icon(
+                            Icons.business,
+                            color: Color(0xFF2D8A8A),
+                            size: 24,
+                          )
+                          : null,
                 ),
                 const SizedBox(width: 12),
                 // Company name and time
@@ -564,7 +664,8 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                       fontStyle: FontStyle.italic,
                     ),
                   ),
-                  if (formattedScheduledDay != null && scheduledStartTime != null) ...[
+                  if (formattedScheduledDay != null &&
+                      scheduledStartTime != null) ...[
                     const TextSpan(text: ' el '),
                     TextSpan(
                       text: formattedScheduledDay,
@@ -634,6 +735,173 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                   ),
                 ),
               ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// ✅ Build notification card for assigned tasks (employee assigned to collect)
+  Widget _buildAssignedTaskCard(Map<String, dynamic> task) {
+    final article = task['article'] as Map<String, dynamic>?;
+    final employee = task['employee'] as Map<String, dynamic>?;
+    final employeeUser = employee?['user'] as Map<String, dynamic>?;
+    final request = task['request'] as Map<String, dynamic>?;
+
+    final lastUpdate =
+        task['lastUpdate'] != null
+            ? DateTime.parse(task['lastUpdate']).toLocal()
+            : DateTime.now();
+
+    final articleName = article?['name'] ?? 'Artículo';
+    final employeeName = employeeUser?['names'] ?? 'Empleado';
+    final timeAgo = _getTimeAgo(lastUpdate);
+    final scheduledDay = request?['scheduledDay'] as String?;
+    final scheduledStartTime = request?['scheduledStartTime'] as String?;
+
+    // Format the scheduled day to show day name and date
+    String? formattedScheduledDay;
+    if (scheduledDay != null) {
+      try {
+        final date = DateTime.parse(scheduledDay);
+        final dayNames = [
+          'lunes',
+          'martes',
+          'miércoles',
+          'jueves',
+          'viernes',
+          'sábado',
+          'domingo',
+        ];
+        final dayName = dayNames[date.weekday - 1];
+        formattedScheduledDay = '$dayName ${date.day}';
+      } catch (e) {
+        formattedScheduledDay = scheduledDay;
+      }
+    }
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.green.withOpacity(0.3), width: 2),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.grey.withOpacity(0.1),
+            blurRadius: 4,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Header with icon and time
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Colors.green.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: const Icon(
+                    Icons.person_pin_circle,
+                    color: Colors.green,
+                    size: 24,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Empleado Asignado',
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.green,
+                        ),
+                      ),
+                      Text(
+                        'Tu reciclaje será recogido',
+                        style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                      ),
+                    ],
+                  ),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 4,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.green,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    timeAgo,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            // Message
+            RichText(
+              text: TextSpan(
+                style: TextStyle(
+                  fontSize: 14,
+                  color: Colors.grey[800],
+                  height: 1.4,
+                ),
+                children: [
+                  TextSpan(
+                    text: employeeName,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: Colors.green,
+                    ),
+                  ),
+                  const TextSpan(text: ' recogerá tu: '),
+                  TextSpan(
+                    text: '"$articleName"',
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w600,
+                      fontStyle: FontStyle.italic,
+                    ),
+                  ),
+                  if (formattedScheduledDay != null &&
+                      scheduledStartTime != null) ...[
+                    const TextSpan(text: ' el '),
+                    TextSpan(
+                      text: formattedScheduledDay,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.bold,
+                        color: Colors.green,
+                      ),
+                    ),
+                    const TextSpan(text: ' a las '),
+                    TextSpan(
+                      text: _formatTime(scheduledStartTime),
+                      style: const TextStyle(
+                        fontWeight: FontWeight.bold,
+                        color: Colors.green,
+                      ),
+                    ),
+                    const TextSpan(text: '.'),
+                  ],
+                ],
+              ),
             ),
           ],
         ),
