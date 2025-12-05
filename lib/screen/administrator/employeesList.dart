@@ -9,7 +9,8 @@ import '/theme/app_text_styles.dart';
 import 'package:flutter/material.dart';
 
 class EmployeesList extends StatefulWidget {
-  const EmployeesList({super.key});
+  final int companyId;
+  const EmployeesList({super.key, required this.companyId});
 
   @override
   State<EmployeesList> createState() => _EmployeesListState();
@@ -31,22 +32,23 @@ class _EmployeesListState extends State<EmployeesList> {
     _loadUsers();
   }
 
-  Future<void> _loadUsers() async {
-    try {
-      final data = await _db.fetchUsers();
-      if (mounted) {
-        setState(() {
-          _users = data;
-          _isLoading = false;
-        });
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() => _isLoading = false);
-      }
-      debugPrint('❌ Error cargando distribuidores: $e');
+Future<void> _loadUsers() async {
+  try {
+    final data = await _db.fetchEmployees(companyId: widget.companyId);
+    if (mounted) {
+      setState(() {
+        _users = data;
+        _isLoading = false;
+      });
     }
+  } catch (e) {
+    if (mounted) {
+      setState(() => _isLoading = false);
+    }
+    debugPrint('❌ Error cargando empleados: $e');
   }
+}
+
 
   @override
   void dispose() {
@@ -64,7 +66,7 @@ class _EmployeesListState extends State<EmployeesList> {
         backgroundColor: AppColors.fondoBlanco,
         elevation: 0,
         toolbarHeight: 48,
-        title: const Text('Distribuidores', style: AppTextStyles.title),
+        title: const Text('Empleados', style: AppTextStyles.title),
       ),
       body:
           _isLoading
@@ -76,7 +78,7 @@ class _EmployeesListState extends State<EmployeesList> {
                   children: [
                     CustomSearchBar(
                       controller: _searchController,
-                      hintText: 'Buscar distribuidor',
+                      hintText: 'Buscar empleado',
                       onChanged: (_) => setState(() {}),
                     ),
                     const SizedBox(height: AppSpacing.spacingMedium),
@@ -94,7 +96,7 @@ class _EmployeesListState extends State<EmployeesList> {
                     const SizedBox(height: AppSpacing.spacingMedium),
 
                     Text(
-                      'Total: ${filteredUsers.length} distribuidor${filteredUsers.length == 1 ? '' : 'es'}',
+                      'Total: ${filteredUsers.length} empleado${filteredUsers.length == 1 ? '' : 's'}',
                       style: AppTextStyles.textSmall,
                     ),
                     const SizedBox(height: AppSpacing.spacingMedium),
@@ -104,7 +106,7 @@ class _EmployeesListState extends State<EmployeesList> {
                           filteredUsers.isEmpty
                               ? const Center(
                                 child: Text(
-                                  'No se encontraron distribuidores.',
+                                  'No se encontraron empleados.',
                                   style: AppTextStyles.textMedium,
                                 ),
                               )

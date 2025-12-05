@@ -1,3 +1,5 @@
+import 'package:reciclaje_app/screen/administrator/employeesList.dart';
+
 import '/database/admin/companyList_db.dart';
 import '/model/admin/company_model.dart';
 import '/components/admin/company_card.dart';
@@ -163,6 +165,17 @@ class _CompanyListState extends State<CompanyList> {
                                           ),
                                         );
                                       }
+                                    },
+                                    onEmployees: () {
+                                      Navigator.push(
+                                        context,
+                                        MaterialPageRoute(
+                                          builder:
+                                              (_) => EmployeesList(
+                                                companyId: user.idCompany,
+                                              ),
+                                        ),
+                                      );
                                     },
                                   );
                                 },
