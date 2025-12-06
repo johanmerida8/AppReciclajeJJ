@@ -3,6 +3,7 @@ import 'package:reciclaje_app/auth/auth_service.dart';
 import 'package:reciclaje_app/components/my_button.dart';
 import 'package:reciclaje_app/components/my_textfield.dart';
 import 'package:reciclaje_app/database/employee_database.dart';
+import 'package:reciclaje_app/screen/administrator/administrator_navigations.dart';
 // import 'package:reciclaje_app/screen/home_screen.dart';
 import 'package:reciclaje_app/screen/distribuidor/navigation_screens.dart';
 import 'package:reciclaje_app/screen/distribuidor/recover_password.dart';
@@ -160,7 +161,13 @@ class _LoginScreenState extends State<LoginScreen> {
       }
 
       // Check user role to navigate to correct screen
-      final role = await authService.fetchUserRole(email);
+      // final role = await authService.fetchUserRole(email);
+
+      final role = userResponse['role'] as String?;
+
+      if (role == null) {
+        throw Exception('No se pudo determinar el rol del usuario.');
+      }
 
       // Navigate to appropriate screen based on role
       if (mounted) {
@@ -176,43 +183,100 @@ class _LoginScreenState extends State<LoginScreen> {
         );
 
         // navigate based on role
-        if (role?.toLowerCase() == 'administrador') {
-          Navigator.of(context).pushReplacement(
-            MaterialPageRoute(
-              builder: (context) => const AdminDashboardScreen(),
-            ),
-          );
-        } else if (role?.toLowerCase() == 'admin-empresa') {
-          Navigator.of(context).pushReplacement(
-            MaterialPageRoute(
-              builder: (context) => const CompanyNavigationScreens(),
-            ),
-          );
-        } else if (role?.toLowerCase() == 'empleado') {
-          Navigator.of(context).pushReplacement(
-            MaterialPageRoute(
-              builder: (context) => const EmployeeNavigationScreens(),
-            ),
-          );
-        } else {
-          // distribuidor or any other role
-          Navigator.of(context).pushReplacement(
-            MaterialPageRoute(builder: (context) => const NavigationScreens()),
-          );
+        Widget destinationScreen;
+
+        // navigate based on role
+        // if (role?.toLowerCase() == 'administrador') {
+        //   Navigator.of(context).pushReplacement(
+        //     MaterialPageRoute(
+        //       builder: (context) => const adminNavigationScreens(),
+        //     ),
+        //   );
+        // } else if (role?.toLowerCase() == 'admin-empresa') {
+        //   Navigator.of(context).pushReplacement(
+        //     MaterialPageRoute(
+        //       builder: (context) => const CompanyNavigationScreens(),
+        //     ),
+        //   );
+        // } else if (role?.toLowerCase() == 'empleado') {
+        //   Navigator.of(context).pushReplacement(
+        //     MaterialPageRoute(
+        //       builder: (context) => const EmployeeNavigationScreens(),
+        //     ),
+        //   );
+        // } else {
+        //   // distribuidor or any other role
+        //   Navigator.of(context).pushReplacement(
+        //     MaterialPageRoute(builder: (context) => const NavigationScreens()),
+        //   );
+        // }
+
+        switch (role.toLowerCase()) {
+          case 'administrador':
+            destinationScreen = const adminNavigationScreens();
+            break;
+          case 'admin-empresa':
+            destinationScreen = const CompanyNavigationScreens();
+            break;
+          case 'empleado':
+            destinationScreen = const EmployeeNavigationScreens();
+            break;
+          default:
+            destinationScreen = const NavigationScreens();
         }
       }
-    } catch (e) {
+    } on AuthException catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).hideCurrentSnackBar();
 
+        String errorMsg = "Error al iniciar sesion";
+
+        if (e.message.toLowerCase().contains('invalid') || 
+            e.message.toLowerCase().contains('credentials')) {
+              errorMsg = "Correo o contraseña incorrecta";
+            } else if (e.message.toLowerCase().contains('network') ||
+                       e.message.toLowerCase().contains('connection')) {
+              errorMsg = "Error de conexion. Verifica tu internet.";
+            }
+
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text("Error al iniciar sesion"),
+            content: Text(errorMsg),
             backgroundColor: Colors.red,
           ),
         );
       }
-      print("Error during login: $e");
+      print(" Auth error during login: ${e.message}");
+    } on PostgrestException catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text("Error de base de datos. Intenta nuevamente."),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+      print("Database error during login: ${e.message}");
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+
+        String errorMessage = "Error al iniciar sesión";
+      
+        if (e.toString().contains('SocketException') || 
+            e.toString().contains('Failed host lookup')) {
+          errorMessage = "Sin conexión a internet. Verifica tu red.";
+        }
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(errorMessage),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+      print("Unexpected error during login: $e");
     }
   }
 

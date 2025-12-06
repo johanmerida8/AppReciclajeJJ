@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_root"
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content"
+    android:padding="8dp"
+    android:background="@drawable/bg_widget_distribuidor">
+
+    <!-- Contenedor horizontal de las secciones de texto -->
+    <LinearLayout
+        android:id="@+id/contenedor_textos_horizontal"
+        android:orientation="horizontal"
+        android:layout_width="wrap_content"
+        android:layout_height="match_parent"
+        android:layout_toLeftOf="@id/icono_rayo"
+        android:layout_marginRight="14dp"
+        android:gravity="center_vertical">
+
+        <!-- Sección Puntos Exp -->
+        <LinearLayout
+            android:id="@+id/contenedor_puntos"
+            android:orientation="vertical"
+            android:layout_width="wrap_content"
+            android:layout_height="match_parent"
+            android:gravity="center_vertical">
+
+            <TextView
+                android:id="@+id/titulo_puntos"
+                android:text="Puntos Exp"
+                android:textSize="8sp"
+                android:textStyle="bold"
+                android:textColor="#ffffff"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"/>
+
+            <TextView
+                android:id="@+id/txtPuntos"
+                android:text="120"
+                android:textSize="18sp"
+                android:textStyle="bold"
+                android:textColor="#ffffff"
+                android:layout_marginTop="0dp"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"/>
+        </LinearLayout>
+
+        <!-- Sección Posición -->
+        <LinearLayout
+            android:id="@+id/contenedor_posicion"
+            android:orientation="vertical"
+            android:layout_width="wrap_content"
+            android:layout_height="match_parent"
+            android:layout_marginStart="16dp"
+            android:gravity="center_vertical">
+
+            <TextView
+                android:id="@+id/titulo_posicion"
+                android:text="Posición"
+                android:textSize="8sp"
+                android:textStyle="bold"
+                android:textColor="#ffffff"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"/>
+
+            <TextView
+                android:id="@+id/txtRanking"
+                android:text="3°"
+                android:textSize="16sp"
+                android:textStyle="bold"
+                android:textColor="#ffffff"
+                android:layout_marginTop="0dp"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"/>
+        </LinearLayout>
+    </LinearLayout>
+
+    <!-- Vector rayo a la derecha -->
+    <ImageView
+        android:id="@+id/icono_rayo"
+        android:src="@drawable/ic_rayo_custom"
+        android:layout_width="54dp"
+        android:layout_height="91dp"
+        android:layout_alignParentRight="true"
+        android:layout_centerVertical="true"
+        android:scaleType="centerCrop"
+        android:translationX="3dp"/>
+
+</RelativeLayout>

@@ -6,6 +6,7 @@ import 'package:reciclaje_app/screen/employee/employee_home_screen.dart';
 // import 'package:reciclaje_app/screen/employee/employee_tasks_screen.dart';
 import 'package:reciclaje_app/screen/employee/employee_map_screen.dart';
 import 'package:reciclaje_app/screen/employee/employee_profile_screen.dart';
+import 'package:reciclaje_app/theme/app_colors.dart';
 // import 'package:reciclaje_app/screen/employee/employee_profile_screen.dart';
 
 class EmployeeNavigationScreens extends StatefulWidget {
@@ -61,9 +62,9 @@ class _EmployeeNavigationScreensState extends State<EmployeeNavigationScreens> {
       body: _buildScreen(_currentIndex),
       bottomNavigationBar: CurvedNavigationBar(
         backgroundColor: Colors.transparent,
-        color: const Color(0xFF2D8A8A),
-        buttonBackgroundColor: const Color.fromARGB(255, 45, 138, 138),
-        height: 75,
+        color: AppColors.verdeOscuro,
+        buttonBackgroundColor: AppColors.verdeOscuro,
+        height: 60,
         items: const [
           Icon(Icons.map, size: 30, color: Colors.white),
           Icon(Icons.assignment, size: 30, color: Colors.white),

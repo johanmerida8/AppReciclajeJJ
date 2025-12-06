@@ -6,6 +6,7 @@ import 'package:reciclaje_app/screen/empresa/employees_screen.dart';
 import 'package:reciclaje_app/auth/auth_service.dart';
 import 'package:reciclaje_app/database/company_database.dart';
 import 'package:reciclaje_app/database/users_database.dart';
+import 'package:reciclaje_app/theme/app_colors.dart';
 
 class CompanyNavigationScreens extends StatefulWidget {
   const CompanyNavigationScreens({super.key});
@@ -91,9 +92,9 @@ class _CompanyNavigationScreensState extends State<CompanyNavigationScreens> {
             ),
       bottomNavigationBar: CurvedNavigationBar(
         backgroundColor: Colors.transparent,
-        color: const Color(0xFF2D8A8A),
-        buttonBackgroundColor: const Color.fromARGB(255, 45, 138, 138),
-        height: 75,
+        color: AppColors.verdeOscuro,
+        buttonBackgroundColor: AppColors.verdeOscuro,
+        height: 60,
         items: _navigationItems,
         index: _currentIndex,
         animationDuration: const Duration(milliseconds: 300),

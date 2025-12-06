@@ -4,6 +4,7 @@ import 'package:reciclaje_app/screen/distribuidor/RegisterRecycle_screen.dart';
 import 'package:reciclaje_app/screen/distribuidor/home_screen.dart';
 import 'package:reciclaje_app/screen/distribuidor/ranking_screen.dart';
 import 'package:reciclaje_app/screen/distribuidor/profile_screen.dart';
+import 'package:reciclaje_app/theme/app_colors.dart';
 
 class NavigationScreens extends StatefulWidget {
   const NavigationScreens({super.key});
@@ -61,10 +62,10 @@ class _NavigationScreensState extends State<NavigationScreens> {
       body: _buildScreen(_currentIndex),
       bottomNavigationBar: CurvedNavigationBar(
         backgroundColor: Colors.transparent,
-        color: const Color(0xFF2D8A8A), // Your app's teal color
+        color: AppColors.verdeOscuro, // Your app's teal color
         // buttonBackgroundColor: const Color(0xFF2D8A8A), // Green accent
-        buttonBackgroundColor: const Color.fromARGB(255, 45, 138, 138),
-        height: 75,
+        buttonBackgroundColor: AppColors.verdeOscuro,
+        height: 60,
         items: const [
           Icon(Icons.home, size: 30, color: Colors.white),
           Icon(Icons.add_box, size: 30, color: Colors.white),

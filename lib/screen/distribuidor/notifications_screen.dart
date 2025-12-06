@@ -1,15 +1,19 @@
 import 'package:flutter/material.dart';
 import 'package:reciclaje_app/auth/auth_service.dart';
+import 'package:reciclaje_app/database/articleHistory_database.dart';
 import 'package:reciclaje_app/database/media_database.dart';
 import 'package:reciclaje_app/database/users_database.dart';
 import 'package:reciclaje_app/database/task_database.dart'; // ✅ Add task database
+import 'package:reciclaje_app/model/articleHistory.dart';
 import 'package:reciclaje_app/model/multimedia.dart';
+import 'package:reciclaje_app/model/recycling_items.dart';
 import 'package:reciclaje_app/model/task.dart'; // ✅ Add task model
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class NotificationsScreen extends StatefulWidget {
-  const NotificationsScreen({super.key});
+  final RecyclingItem? item;
+  const NotificationsScreen({super.key, this.item});
 
   @override
   State<NotificationsScreen> createState() => _NotificationsScreenState();
@@ -20,6 +24,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   final _usersDatabase = UsersDatabase();
   final _mediaDatabase = MediaDatabase();
   final _taskDatabase = TaskDatabase(); // ✅ Add task database
+  final _articleHistoryDb = ArticlehistoryDatabase();
 
   List<Map<String, dynamic>> _pendingRequests = [];
   List<Map<String, dynamic>> _assignedTasks =
@@ -350,6 +355,15 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
       print(
         '✅ Task created with "sin_asignar" status - Article: $articleId, Company: $companyId, Request: $requestId',
       );
+
+      final newLog = articleHistory(
+        articleId: articleId,
+        actorId: widget.item?.ownerUserId,
+        targetId: companyId,
+        description: 'request_accepted',
+      );
+
+      await _articleHistoryDb.createArticleHistory(newLog);
 
       // ✅ Verify task was created
       final verifyTask =

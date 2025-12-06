@@ -74,25 +74,28 @@ class AuthService {
 
   // fetch role
   Future<String?> fetchUserRole(String email) async {
-    print('🔍 AUTH_SERVICE: Fetching role for email: $email');
+    try {
+      final response = await Supabase.instance.client
+          .from('users')
+          .select('role')
+          .eq('email', email)
+          .maybeSingle(); // ✅ Use maybeSingle instead of single
 
-    final response =
-        await _supabase
-            .from('users')
-            .select('role, state')
-            .eq('email', email)
-            .maybeSingle();
+      if (response == null) {
+        print('⚠️ No user found with email: $email');
+        return null;
+      }
 
-    print('🔍 AUTH_SERVICE: Response from DB: $response');
-
-    if (response != null && response['role'] != null) {
-      final role = response['role'] as String;
-      print('🔍 AUTH_SERVICE: Returning role: "$role"');
+      final role = response['role'] as String?;
+      print('✅ Role fetched for $email: $role');
       return role;
+    } on PostgrestException catch (e) {
+      print('❌ Database error fetching role: ${e.message} (code: ${e.code})');
+      return null;
+    } catch (e) {
+      print('❌ Unexpected error fetching role: $e');
+      return null;
     }
-
-    print('❌ AUTH_SERVICE: No role found, returning null');
-    return null;
   }
 
   // check if user is approved (state = 1)

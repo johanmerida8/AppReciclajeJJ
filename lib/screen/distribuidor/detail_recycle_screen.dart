@@ -11,6 +11,8 @@ import 'package:reciclaje_app/components/location_map_preview.dart';
 import 'package:reciclaje_app/components/photo_gallery_widget.dart';
 import 'package:reciclaje_app/components/photo_validation.dart';
 import 'package:reciclaje_app/components/schedule_pickup_dialog.dart'; // ✅ Add import
+import 'package:reciclaje_app/database/articleHistory_database.dart';
+import 'package:reciclaje_app/model/articleHistory.dart';
 import 'package:reciclaje_app/model/users.dart';
 import 'package:reciclaje_app/utils/Fixed43Cropper.dart';
 // import 'package:reciclaje_app/components/row_button_2.dart';
@@ -76,6 +78,8 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
   final taskDatabase = TaskDatabase(); // ✅ Add task database
   final pointsLogDatabase =
       UserpointslogDatabase(); // ✅ Add points log database
+  
+  final _articleHistoryDb = ArticlehistoryDatabase();
 
   final _authService = AuthService();
   Users? currentUser;
@@ -986,6 +990,15 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
 
       final createdTaskId = taskInsertResponse['idTask'];
       print('✅ Task created with "sin_asignar" status (ID: $createdTaskId)');
+
+      final newLog = articleHistory(
+        articleId: articleId,
+        actorId: widget.item.ownerUserId,
+        targetId: companyId,
+        description: 'request_accepted',
+      );
+
+      await _articleHistoryDb.createArticleHistory(newLog);
 
       // 3. ✅ Verify task was created
       final verifyTask =
@@ -2319,6 +2332,28 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
           })
           .eq('idTask', _distributorTaskId!);
 
+      // create articleHistory log only when task is completed
+      if (taskCompleted && newStatus == 'completado') {
+        // get company id from task
+        final taskData =
+            await Supabase.instance.client
+                .from('tasks')
+                .select('companyID')
+                .eq('idTask', _distributorTaskId!)
+                .single();
+        
+        final companyId = taskData['companyID'] as int;
+
+        final deliveredLog = articleHistory(
+          articleId: widget.item.id,
+          actorId: widget.item.ownerUserId,
+          targetId: companyId,
+          description: 'delivered'
+        );
+        await _articleHistoryDb.createArticleHistory(deliveredLog);
+      }
+
+
       // ℹ️ Note: Employees do NOT receive points in userPointsLog (Option B)
       // Only distributors receive points when employees review them
       print('ℹ️ Distributor reviewed employee (rating: $rating stars)');
@@ -2441,6 +2476,29 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
             'lastUpdate': DateTime.now().toIso8601String(),
           })
           .eq('idTask', _employeeTaskId!);
+      
+      if (taskCompleted && newStatus == 'completado') {
+        // Get company ID from the task
+        final taskData = await Supabase.instance.client
+            .from('tasks')
+            .select('companyID')
+            .eq('idTask', _employeeTaskId!)
+            .single();
+        
+        final companyId = taskData['companyID'] as int?;
+        
+        if (companyId != null) {
+          final deliveredLog = articleHistory(
+            articleId: widget.item.id,
+            actorId: widget.item.ownerUserId, // ✅ Distributor (article owner) who delivered
+            targetId: companyId, // ✅ Company (empresa) who received
+            description: 'delivered',
+          );
+          
+          await _articleHistoryDb.createArticleHistory(deliveredLog);
+          print('✅ Article history "delivered" log created - Distributor ${widget.item.ownerUserId} delivered to Company $companyId');
+        }
+      }
 
       // ✅ 3. Create userPointsLog for distributor IMMEDIATELY (don't wait for task completion)
       // Employee reviews distributor → distributor gets points right away

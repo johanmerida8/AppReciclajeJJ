@@ -1,0 +1,208 @@
+import 'package:flutter/material.dart';
+import 'package:reciclaje_app/widgets/distribuidor_widget_controller.dart';
+import '/model/admin/ranking_model.dart';
+import '/database/admin/ranking_db.dart';
+import '/theme/app_colors.dart';
+import '/theme/app_text_styles.dart';
+
+// Componentes separados
+import '/components/admin/podio_ranking.dart';
+import '/components/admin/ranking_card.dart';
+
+class Ranking extends StatefulWidget {
+  const Ranking({super.key});
+
+  @override
+  State<Ranking> createState() => _RankingState();
+}
+
+class _RankingState extends State<Ranking> {
+  final RankingDB _db = RankingDB();
+  List<RankingModel> _ranking = [];
+  bool _isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadRanking();
+  }
+/*
+  Future<void> _loadRanking() async {
+    setState(() => _isLoading = true);
+
+    final manualUsers = [
+      RankingModel(
+        idUser: 1,
+        names: 'Usuario 1',
+        totalPoints: 100,
+        position: 1,
+        idCycle: 1,
+        cycleName: "Ciclo Noviembre",
+        startDate: DateTime(2025, 11, 1),
+        endDate: DateTime(2025, 11, 30),
+      ),
+      RankingModel(
+        idUser: 2,
+        names: 'Usuario 2',
+        totalPoints: 90,
+        position: 2,
+        idCycle: 1,
+        cycleName: "Ciclo Noviembre",
+        startDate: DateTime(2025, 11, 1),
+        endDate: DateTime(2025, 11, 30),
+      ),
+
+    ];
+
+    setState(() {
+      _ranking = manualUsers;
+      _isLoading = false;
+
+      if (_ranking.isNotEmpty) {
+        DistribuidorWidgetController.actualizar(
+          puntos: _ranking.first.totalPoints,
+          ranking: _ranking.first.position,
+        );
+      }
+    });
+  }
+
+  */
+  Future<void> _loadRanking() async {
+    setState(() => _isLoading = true);
+    final data = await _db.fetchRanking();
+    setState(() {
+      _ranking = data;
+      _isLoading = false;
+
+      // ✅ Actualizar widget home con el primer usuario del ranking
+      if (_ranking.isNotEmpty) {
+        DistribuidorWidgetController.actualizar(
+          
+          puntos: _ranking.first.totalPoints,
+          ranking: _ranking.first.position,
+        );
+      }
+    });
+  }
+
+
+
+  int daysRemaining(DateTime endDate) {
+    final today = DateTime.now();
+    final difference = endDate.difference(today).inDays;
+    return difference >= 0 ? difference : 0;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final int remainingDays =
+        _ranking.isNotEmpty ? daysRemaining(_ranking.first.endDate) : 0;
+
+    return Scaffold(
+      backgroundColor: AppColors.fondoBlanco,
+      appBar: AppBar(
+        backgroundColor: AppColors.verdeOscuro,
+        elevation: 0,
+        title: const Text(
+          "Ranking",
+          style: TextStyle(
+            color: Colors.white, // 👈 TEXTO BLANCO
+            fontSize: 20,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        centerTitle: false,
+        actions: [
+          if (_ranking.isNotEmpty)
+            Row(
+              children: [
+                const Icon(
+                  Icons.access_time,
+                  color: AppColors.amarilloBrillante,
+                  size: 20,
+                ),
+                const SizedBox(width: 4),
+                Text(
+                  "$remainingDays días",
+                  style: AppTextStyles.textSmall.copyWith(
+                    color: AppColors.amarilloBrillante,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 16,
+                  ),
+                ),
+                const SizedBox(width: 12),
+              ],
+            ),
+        ],
+      ),
+
+      body:
+          _isLoading
+              ? const Center(child: CircularProgressIndicator())
+              : RefreshIndicator(
+                onRefresh: _loadRanking,
+                child: ListView(
+                  padding: EdgeInsets.zero,
+                  children: [
+                    /// 🟩 Sección del PODIO con fondo verde
+                    Container(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.bottomCenter,
+                          end: Alignment.topCenter,
+                          colors: [AppColors.verdeMedio, AppColors.verdeOscuro],
+                        ),
+                      ),
+                      padding: const EdgeInsets.all(8),
+                      child: Column(
+                        children: [
+                          if (_ranking.length >= 1)
+                            PodioRanking(ranking: _ranking),
+                            const SizedBox(height: 20),
+                        ],
+                      ),
+                    ),
+
+                    const SizedBox(height: 0),
+
+                    /// ⚪ Sección de la LISTA con fondo blanco
+                    /// ⚪ Sección de la LISTA con fondo blanco y borde redondeado arriba
+                    Transform.translate(
+                      offset: const Offset(0, -16),
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: AppColors.fondoBlanco,
+                          borderRadius: const BorderRadius.only(
+                            topLeft: Radius.circular(24),
+                            topRight: Radius.circular(24),
+                          ),
+                        ),
+                        padding: const EdgeInsets.all(16),
+                        child: Column(
+                          children: [
+                            ..._ranking.asMap().entries.map((entry) {
+                              int index = entry.key;
+                              var user = entry.value;
+
+                              if (index < 3) return const SizedBox();
+
+                              final avatarUrl =
+                                  "https://ui-avatars.com/api/?name=${Uri.encodeComponent(user.names)}"
+                                  "&background=F1F5F9&color=314158&font-size=0.3&size=128&bold=true";
+
+                              return RankingCard(
+                                user: user,
+                                avatarUrl: avatarUrl,
+                              );
+                            }),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+    );
+  }
+}

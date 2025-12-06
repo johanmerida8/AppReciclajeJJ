@@ -4,6 +4,8 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:reciclaje_app/auth/auth_service.dart';
+import 'package:reciclaje_app/database/articleHistory_database.dart';
+import 'package:reciclaje_app/model/articleHistory.dart';
 import 'package:reciclaje_app/model/recycling_items.dart';
 import 'package:reciclaje_app/model/request.dart';
 import 'package:reciclaje_app/database/request_database.dart';
@@ -44,6 +46,7 @@ class _CompanyMapScreenState extends State<CompanyMapScreen>
   final _mediaDatabase = MediaDatabase();
   final _requestDatabase = RequestDatabase();
   final _taskDatabase = TaskDatabase(); // ✅ Add TaskDatabase
+  final _articleHistoryDb = ArticlehistoryDatabase();
 
   // Controllers
   final _mapController = MapController();
@@ -853,6 +856,15 @@ class _CompanyMapScreenState extends State<CompanyMapScreen>
       );
 
       await _requestDatabase.createRequest(newRequest);
+
+      final newLog = articleHistory(
+        articleId: item.id,
+        actorId: item.ownerUserId,
+        targetId: _companyId, 
+        description: 'request_sent',
+      );
+
+      await _articleHistoryDb.createArticleHistory(newLog);
 
       // Success - no need to refresh map as the request is on the distributor side
       print(

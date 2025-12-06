@@ -10,7 +10,9 @@ class CompanyListDB {
       // 1️⃣ Traer las empresas con el nombre del administrador
       final response = await client
           .from('company')
-          .select('idCompany, nameCompany, state, created_at, adminUserID, users(names, email)');
+          .select(
+            'idCompany, nameCompany, state, created_at, adminUserID, users(names, email)',
+          );
 
       final List companiesData = response as List;
 
@@ -19,13 +21,12 @@ class CompanyListDB {
         final logoResponse = await client
             .from('multimedia')
             .select('url')
-            .eq('entityType', 'empresa') // 👈 importante: tipo de entidad
-            .eq('entityID', company['idCompany']) // 👈 id de la empresa
-            .eq('isMain', true) // solo el logo principal
-            .maybeSingle();
+            .eq('entityType', 'empresa')
+            .eq('entityID', company['idCompany'])
+            .eq('isMain', true);
 
-        company['avatarUrl'] = logoResponse != null ? logoResponse['url'] : null;
-
+        company['avatarUrl'] =
+            logoResponse.isNotEmpty ? logoResponse[0]['url'] : null;
       }
 
       // 4️⃣ Convertir los datos al modelo
@@ -38,4 +39,15 @@ class CompanyListDB {
       return [];
     }
   }
+
+  Future<bool> setCompanyState(int companyId, int newState) async {
+  try {
+    await client.from('company').update({'state': newState}).eq('idCompany', companyId);
+    return true;
+  } catch (e) {
+    print('❌ Error cambiando estado de compañía: $e');
+    return false;
+  }
+}
+
 }

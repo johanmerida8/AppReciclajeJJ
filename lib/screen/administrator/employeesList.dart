@@ -1,8 +1,6 @@
-import 'package:reciclaje_app/screen/administrator/employeesList.dart';
-
-import '/database/admin/companyList_db.dart';
-import '/model/admin/company_model.dart';
-import '/components/admin/company_card.dart';
+import '/database/admin/userList_db.dart';
+import '/model/admin/user_model.dart';
+import '/components/admin/user_card.dart';
 import '/components/admin/custom_search_bar.dart';
 import '/components/admin/filter_buttons.dart';
 import '/theme/app_colors.dart';
@@ -10,45 +8,47 @@ import '/theme/app_spacing.dart';
 import '/theme/app_text_styles.dart';
 import 'package:flutter/material.dart';
 
-class CompanyList extends StatefulWidget {
-  const CompanyList({super.key});
+class EmployeesList extends StatefulWidget {
+  final int companyId;
+  const EmployeesList({super.key, required this.companyId});
 
   @override
-  State<CompanyList> createState() => _CompanyListState();
+  State<EmployeesList> createState() => _EmployeesListState();
 }
 
-class _CompanyListState extends State<CompanyList> {
-  final CompanyListDB _db = CompanyListDB();
+class _EmployeesListState extends State<EmployeesList> {
+  final UserListDB _db = UserListDB();
   final TextEditingController _searchController = TextEditingController();
 
   bool _showArchived = false;
   bool _ascending = true;
   bool _isLoading = true;
 
-  List<CompanyModel> _companies = [];
+  List<UserModel> _users = [];
 
   @override
   void initState() {
     super.initState();
-    _loadCompanies();
+    _loadUsers();
   }
 
-  Future<void> _loadCompanies() async {
-    try {
-      final data = await _db.fetchCompanies();
-      if (mounted) {
-        setState(() {
-          _companies = data;
-          _isLoading = false;
-        });
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() => _isLoading = false);
-      }
-      debugPrint('❌ Error cargando usuarios: $e');
+Future<void> _loadUsers() async {
+  try {
+    final data = await _db.fetchEmployees(companyId: widget.companyId);
+    if (mounted) {
+      setState(() {
+        _users = data;
+        _isLoading = false;
+      });
     }
+  } catch (e) {
+    if (mounted) {
+      setState(() => _isLoading = false);
+    }
+    debugPrint('❌ Error cargando empleados: $e');
   }
+}
+
 
   @override
   void dispose() {
@@ -66,7 +66,7 @@ class _CompanyListState extends State<CompanyList> {
         backgroundColor: AppColors.fondoBlanco,
         elevation: 0,
         toolbarHeight: 48,
-        title: const Text('Compañias', style: AppTextStyles.title),
+        title: const Text('Empleados', style: AppTextStyles.title),
       ),
       body:
           _isLoading
@@ -78,7 +78,7 @@ class _CompanyListState extends State<CompanyList> {
                   children: [
                     CustomSearchBar(
                       controller: _searchController,
-                      hintText: 'Buscar compañia',
+                      hintText: 'Buscar empleado',
                       onChanged: (_) => setState(() {}),
                     ),
                     const SizedBox(height: AppSpacing.spacingMedium),
@@ -96,7 +96,7 @@ class _CompanyListState extends State<CompanyList> {
                     const SizedBox(height: AppSpacing.spacingMedium),
 
                     Text(
-                      'Total: ${filteredUsers.length} compañia${filteredUsers.length == 1 ? '' : 's'}',
+                      'Total: ${filteredUsers.length} empleado${filteredUsers.length == 1 ? '' : 's'}',
                       style: AppTextStyles.textSmall,
                     ),
                     const SizedBox(height: AppSpacing.spacingMedium),
@@ -106,7 +106,7 @@ class _CompanyListState extends State<CompanyList> {
                           filteredUsers.isEmpty
                               ? const Center(
                                 child: Text(
-                                  'No se encontraron compañias.',
+                                  'No se encontraron empleados.',
                                   style: AppTextStyles.textMedium,
                                 ),
                               )
@@ -118,9 +118,9 @@ class _CompanyListState extends State<CompanyList> {
                                     ),
                                 itemBuilder: (context, index) {
                                   final user = filteredUsers[index];
-                                  return CompanyCard(
-                                    name: user.nameCompany,
-                                    adminName: user.adminName,
+                                  return UserCard(
+                                    name: user.names,
+                                    articles: user.articles,
                                     state: user.state,
                                     date:
                                         user.createdAt
@@ -130,7 +130,7 @@ class _CompanyListState extends State<CompanyList> {
                                     imageUrl:
                                         user.avatarUrl?.isNotEmpty == true
                                             ? user.avatarUrl!
-                                            : 'https://ui-avatars.com/api/?name=${Uri.encodeComponent(user.nameCompany)}'
+                                            : 'https://ui-avatars.com/api/?name=${Uri.encodeComponent(user.names)}'
                                                 '&background=F1F5F9'
                                                 '&color=314158'
                                                 '&font-size=0.3'
@@ -143,8 +143,8 @@ class _CompanyListState extends State<CompanyList> {
                                     onArchive: () async {
                                       final newState = user.state == 1 ? 0 : 1;
 
-                                      final ok = await _db.setCompanyState(
-                                        user.idCompany,
+                                      final ok = await _db.setUserState(
+                                        user.idUser,
                                         newState,
                                       );
 
@@ -159,23 +159,12 @@ class _CompanyListState extends State<CompanyList> {
                                           SnackBar(
                                             content: Text(
                                               newState == 0
-                                                  ? "Compañía archivada correctamente"
-                                                  : "Compañía activada correctamente",
+                                                  ? "Usuario archivado correctamente"
+                                                  : "Usuario activado nuevamente",
                                             ),
                                           ),
                                         );
                                       }
-                                    },
-                                    onEmployees: () {
-                                      Navigator.push(
-                                        context,
-                                        MaterialPageRoute(
-                                          builder:
-                                              (_) => EmployeesList(
-                                                companyId: user.idCompany,
-                                              ),
-                                        ),
-                                      );
                                     },
                                   );
                                 },
@@ -188,15 +177,13 @@ class _CompanyListState extends State<CompanyList> {
   }
 
   /// 🔍 Aplica búsqueda, archivado y orden al listado
-  List<CompanyModel> _applyFilters() {
-    List<CompanyModel> filtered =
-        _companies.where((company) {
+  List<UserModel> _applyFilters() {
+    List<UserModel> filtered =
+        _users.where((user) {
           final query = _searchController.text.toLowerCase();
-          final matchesSearch = company.nameCompany.toLowerCase().contains(
-            query,
-          );
+          final matchesSearch = user.names.toLowerCase().contains(query);
           final matchesArchived =
-              _showArchived ? company.state == 0 : company.state == 1;
+              _showArchived ? user.state == 0 : user.state == 1;
           return matchesSearch && matchesArchived;
         }).toList();
 
