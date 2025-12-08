@@ -38,11 +38,11 @@ class CustomSearchBar extends StatelessWidget {
           fontSize: 16, // <-- tamaño del texto escrito
         ),
         filled: true,
-        fillColor: AppColors.fondoBlanco,
+        fillColor: AppColors.fondoGrisClaro,
         enabledBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(AppSpacing.radiusLarge),
           borderSide: const BorderSide(
-            color: AppColors.fondoGrisOscuro,
+            color: AppColors.fondoGrisClaro,
             width: 0.8,
           ),
         ),

@@ -293,6 +293,8 @@ class _MapPickerScreenState extends State<MapPickerScreen> with WidgetsBindingOb
     );
   }
 
+  double _currentZoom = 13.0;
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -312,12 +314,30 @@ class _MapPickerScreenState extends State<MapPickerScreen> with WidgetsBindingOb
             options: MapOptions(
               initialCenter: widget.initialLocation,
               initialZoom: 13.0,
+              minZoom: 6.0,  // ✅ Prevent zooming out beyond Bolivia
+              maxZoom: 18.0,
+              // ✅ Disable map rotation
+              interactionOptions: const InteractionOptions(
+                flags: InteractiveFlag.all & ~InteractiveFlag.rotate,
+              ),
+              cameraConstraint: CameraConstraint.contain(
+                bounds: LatLngBounds(
+                  const LatLng(-22.9, -69.7), // Southwest corner of Bolivia
+                  const LatLng(-9.6, -57.4), // Northeast corner of Bolivia
+                ),
+              ),
               onTap: (tapPosition, point) async {
                 await _handleLocationSelection(
                   point.latitude, 
                   point.longitude, 
                   fromMap: true
                 );
+              },
+              onPositionChanged: (MapCamera position, bool hasGesture) {
+                _currentZoom = position.zoom;
+                if (position.zoom >= 14 || position.zoom < 12) {
+                  FocusScope.of(context).unfocus();
+                }
               },
             ),
             children: [

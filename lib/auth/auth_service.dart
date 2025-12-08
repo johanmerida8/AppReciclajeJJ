@@ -10,7 +10,10 @@ class AuthService {
   static const int MAX_DAILY_RESETS = 3;
 
   // sign in with email and password
-  Future<AuthResponse> signInWithEmailPassword(String email, String password) async {
+  Future<AuthResponse> signInWithEmailPassword(
+    String email,
+    String password,
+  ) async {
     return await _supabase.auth.signInWithPassword(
       email: email,
       password: password,
@@ -27,7 +30,10 @@ class AuthService {
   }) async {
     try {
       // 1) Crear auth user
-      final response = await _supabase.auth.signUp(email: email, password: password);
+      final response = await _supabase.auth.signUp(
+        email: email,
+        password: password,
+      );
 
       // 2) Si el auth user fue creado (response.user != null), aseguramos la fila en 'users'
       if (response.user != null) {
@@ -48,11 +54,7 @@ class AuthService {
           try {
             await _supabase
                 .from('users')
-                .update({
-                  'names': name,
-                  'role': role,
-                  'state': 1,
-                })
+                .update({'names': name, 'role': role, 'state': 1})
                 .eq('email', email);
           } catch (updateError) {
             // si update también falla, mostramos/loggeamos para depuración
@@ -72,34 +74,39 @@ class AuthService {
 
   // fetch role
   Future<String?> fetchUserRole(String email) async {
-    print('🔍 AUTH_SERVICE: Fetching role for email: $email');
-    
-    final response = await _supabase
-      .from('users')
-      .select('role, state')
-      .eq('email', email)
-      .maybeSingle();
-    
-    print('🔍 AUTH_SERVICE: Response from DB: $response');
-    
-    if (response != null && response['role'] != null) {
-      final role = response['role'] as String;
-      print('🔍 AUTH_SERVICE: Returning role: "$role"');
+    try {
+      final response = await Supabase.instance.client
+          .from('users')
+          .select('role')
+          .eq('email', email)
+          .maybeSingle(); // ✅ Use maybeSingle instead of single
+
+      if (response == null) {
+        print('⚠️ No user found with email: $email');
+        return null;
+      }
+
+      final role = response['role'] as String?;
+      print('✅ Role fetched for $email: $role');
       return role;
+    } on PostgrestException catch (e) {
+      print('❌ Database error fetching role: ${e.message} (code: ${e.code})');
+      return null;
+    } catch (e) {
+      print('❌ Unexpected error fetching role: $e');
+      return null;
     }
-    
-    print('❌ AUTH_SERVICE: No role found, returning null');
-    return null;
   }
 
   // check if user is approved (state = 1)
   Future<bool> isUserApproved(String email) async {
-    final response = await _supabase
-      .from('users')
-      .select('state')
-      .eq('email', email)
-      .maybeSingle();
-    
+    final response =
+        await _supabase
+            .from('users')
+            .select('state')
+            .eq('email', email)
+            .maybeSingle();
+
     if (response != null && response['state'] != null) {
       return response['state'] == 1;
     }
@@ -107,9 +114,22 @@ class AuthService {
   }
 
   // sign out
-  Future<void> signOut() async => await _supabase.auth.signOut();
+  Future<void> signOut() async {
+    try {
+      // Get current user email before signing out
+      final email = getCurrentUserEmail();
 
-  // get user email
+      // Sign out from Supabase auth
+      await _supabase.auth.signOut();
+
+      print('✅ User logged out: ${email ?? "unknown"}');
+    } catch (e) {
+      print('⚠️ Error during sign out: $e');
+      // Still attempt to sign out even if there's an error
+      await _supabase.auth.signOut();
+    }
+  } // get user email
+
   String? getCurrentUserEmail() {
     final session = _supabase.auth.currentSession;
     final user = session?.user;
@@ -123,21 +143,24 @@ class AuthService {
   /// Send OTP to email for password reset verification
   /// Uses Supabase's built-in email OTP (free, unlimited)
   /// OTP expires in 60 seconds by default (configurable in Supabase Dashboard)
-  /// 
+  ///
   /// ⚠️ IMPORTANT: This does NOT store OTP in database!
   /// Supabase handles OTP codes internally - no OTP table needed
   Future<void> sendOTPToEmail(String email) async {
     try {
       print('📧 Sending Supabase OTP to: $email');
-      print('⚠️ NOTE: OTP will NOT appear in database - Supabase handles it internally');
-      
+      print(
+        '⚠️ NOTE: OTP will NOT appear in database - Supabase handles it internally',
+      );
+
       // 🎯 IMPORTANT: Use shouldCreateUser: false to only send OTP (not magic link)
       await _supabase.auth.signInWithOtp(
         email: email,
-        shouldCreateUser: false, // This ensures OTP code is sent, not a magic link
+        shouldCreateUser:
+            false, // This ensures OTP code is sent, not a magic link
         emailRedirectTo: null, // No redirect needed for OTP
       );
-      
+
       print('✅ OTP sent successfully to: $email');
       print('💡 Check your email for the 6-digit code (expires in 60 seconds)');
     } catch (e) {
@@ -148,25 +171,27 @@ class AuthService {
 
   /// Verify OTP code entered by user
   /// Returns true if OTP is valid, false otherwise
-  /// 
+  ///
   /// ⚠️ This verifies against Supabase's internal OTP system (NOT database table)
   Future<bool> verifySupabaseOTP(String email, String otp) async {
     try {
       print('🔍 Verifying OTP for: $email');
       print('🔍 OTP code entered: $otp');
-      
+
       final response = await _supabase.auth.verifyOTP(
         type: OtpType.email,
         email: email,
         token: otp,
       );
-      
+
       if (response.session != null) {
         print('✅ OTP verified successfully for: $email');
-        print('✅ User authenticated with session ID: ${response.session!.accessToken.substring(0, 20)}...');
+        print(
+          '✅ User authenticated with session ID: ${response.session!.accessToken.substring(0, 20)}...',
+        );
         return true;
       }
-      
+
       print('❌ Invalid OTP for: $email');
       return false;
     } catch (e) {
@@ -185,9 +210,7 @@ class AuthService {
         throw Exception('User must be authenticated to update password');
       }
 
-      await _supabase.auth.updateUser(
-        UserAttributes(password: newPassword),
-      );
+      await _supabase.auth.updateUser(UserAttributes(password: newPassword));
       print('✅ Password updated successfully');
     } catch (e) {
       print('❌ Error updating password: $e');
@@ -197,14 +220,14 @@ class AuthService {
 
   /// Send password reset email with clickable link
   /// ⏱️ Link expires in 1 HOUR (Supabase default, configurable up to 24 hours)
-  /// 
+  ///
   /// IMPORTANT: Configure Supabase Dashboard first:
   /// 1. Go to Authentication → Email Templates → "Reset Password"
   /// 2. Customize the template (optional)
   /// 3. Set redirect URL in Settings → Authentication → Site URL
-  /// 
+  ///
   /// This method is FREE, unlimited, and requires NO external email service
-  /// 
+  ///
   /// Flow:
   /// 1. User enters email
   /// 2. Supabase sends email with reset link
@@ -215,7 +238,7 @@ class AuthService {
     try {
       // Check rate limits first
       final eligibility = await canRequestPasswordReset(email);
-      
+
       if (eligibility['canReset'] != true) {
         return {
           'success': false,
@@ -234,10 +257,11 @@ class AuthService {
       await logPasswordResetAttempt(email);
 
       print('✅ Password reset email sent to: $email (link expires in 1 hour)');
-      
+
       return {
         'success': true,
-        'message': 'Se ha enviado un correo para restablecer la contraseña. El enlace expira en 1 hora.',
+        'message':
+            'Se ha enviado un correo para restablecer la contraseña. El enlace expira en 1 hora.',
         'attemptsToday': (eligibility['attemptsToday'] ?? 0) + 1,
       };
     } catch (e) {
@@ -255,9 +279,7 @@ class AuthService {
   Future<void> updatePasswordFromResetLink(String newPassword) async {
     try {
       // User is automatically authenticated via the reset link token
-      await _supabase.auth.updateUser(
-        UserAttributes(password: newPassword),
-      );
+      await _supabase.auth.updateUser(UserAttributes(password: newPassword));
       print('✅ Password updated successfully from reset link');
     } catch (e) {
       print('❌ Error updating password: $e');
@@ -289,14 +311,15 @@ class AuthService {
       await _supabase.from('OTP').insert({
         'email': email,
         'token': otp,
-        'expires_at': DateTime.now().add(Duration(minutes: 15)).toIso8601String(),
+        'expires_at':
+            DateTime.now().add(Duration(minutes: 15)).toIso8601String(),
         'used': false,
       });
       // ⚠️ REQUIRES SendGrid edge function 'resend-email' (not free)
-      await _supabase.functions.invoke('resend-email', body: {
-        'email': email,
-        'otp': otp,
-      });
+      await _supabase.functions.invoke(
+        'resend-email',
+        body: {'email': email, 'otp': otp},
+      );
       return otp;
     } catch (e) {
       throw Exception('Failed to generate and send OTP: $e');
@@ -308,15 +331,16 @@ class AuthService {
   @Deprecated('Use verifySupabaseOTP() instead - Supabase built-in OTP')
   Future<bool> verifyOTP(String email, String otp) async {
     try {
-      final res = await _supabase
-          .from('OTP')
-          .select()
-          .eq('email', email)
-          .eq('token', otp)
-          .eq('used', false)
-          .gt('expires_at', DateTime.now().toIso8601String())
-          .maybeSingle();
-      
+      final res =
+          await _supabase
+              .from('OTP')
+              .select()
+              .eq('email', email)
+              .eq('token', otp)
+              .eq('used', false)
+              .gt('expires_at', DateTime.now().toIso8601String())
+              .maybeSingle();
+
       if (res != null) {
         // ✅ Mark OTP as used here since verification is successful
         await _supabase
@@ -334,17 +358,15 @@ class AuthService {
 
   Future<void> updatePassword(String email, String newPassword) async {
     try {
-
-      final res = await _supabase.functions.invoke('reset-user-password', body: {
-        'email': email,
-        'newPassword': newPassword,
-      });
+      final res = await _supabase.functions.invoke(
+        'reset-user-password',
+        body: {'email': email, 'newPassword': newPassword},
+      );
 
       // check if there was an error in the function response
       if (res.data != null && res.data['error'] != null) {
         throw Exception(res.data['error']);
       }
-
     } catch (e) {
       throw Exception('Error al actualizar la contraseña: $e');
     }
@@ -361,21 +383,25 @@ class AuthService {
           .eq('email', normalizedEmail)
           .order('reset_requested_at', ascending: false)
           .limit(1);
-      
+
       if (lastResetResponse.isNotEmpty) {
-        final lastResetTime = DateTime.parse(lastResetResponse.first['reset_requested_at']);
+        final lastResetTime = DateTime.parse(
+          lastResetResponse.first['reset_requested_at'],
+        );
         final timeDifference = DateTime.now().difference(lastResetTime);
 
         print('Last reset time: $lastResetTime');
         print('Time since last reset: ${timeDifference.inMinutes} minutes');
 
         if (timeDifference.inMinutes < RESET_COOLDOWN_MINUTES) {
-          final remainingMinutes = RESET_COOLDOWN_MINUTES - timeDifference.inMinutes;
+          final remainingMinutes =
+              RESET_COOLDOWN_MINUTES - timeDifference.inMinutes;
           return {
             'canRequest': false,
             'reason': 'cooldown',
             'remainingMinutes': remainingMinutes,
-            'message': 'Por favor espera $remainingMinutes minutos antes de intentar de nuevo.'
+            'message':
+                'Por favor espera $remainingMinutes minutos antes de intentar de nuevo.',
           };
         }
       }
@@ -389,20 +415,21 @@ class AuthService {
           .select('idLog')
           .eq('email', normalizedEmail)
           .gte('reset_requested_at', startOfDay.toIso8601String());
-      
+
       if (dailyAttemptsResponse.length >= MAX_DAILY_RESETS) {
         return {
           'canRequest': false,
           'reason': 'daily_limit',
           'attempts': dailyAttemptsResponse.length,
-          'message': 'Has alcanzado el límite diario de $MAX_DAILY_RESETS intentos. Por favor intenta de nuevo mañana.'
+          'message':
+              'Has alcanzado el límite diario de $MAX_DAILY_RESETS intentos. Por favor intenta de nuevo mañana.',
         };
       }
 
       return {
         'canReset': true,
         'attemptsToday': dailyAttemptsResponse.length,
-        'message': 'Puedes solicitar el restablecimiento'
+        'message': 'Puedes solicitar el restablecimiento',
       };
     } catch (e) {
       print('Error checking password reset eligibility: $e');
@@ -445,16 +472,18 @@ class AuthService {
 
       // log the attempt
       await logPasswordResetAttempt(email);
-      
+
       return {
         'success': true,
-        'message': 'Se ha enviado un correo para restablecer la contraseña si el correo existe en nuestro sistema!',
+        'message':
+            'Se ha enviado un correo para restablecer la contraseña si el correo existe en nuestro sistema!',
         'attemptsToday': eligibility['attemptsToday'] + 1,
       };
     } catch (e) {
       return {
         'success': false,
-        'message': 'Error al solicitar el restablecimiento de la contraseña: $e',
+        'message':
+            'Error al solicitar el restablecimiento de la contraseña: $e',
         'error': e.toString(),
       };
     }
@@ -470,7 +499,7 @@ class AuthService {
           .from('OTP')
           .delete()
           .lt('expires_at', now.toIso8601String());
-      
+
       // also delete used OTPs older than 1 hour
       final oneHourAgo = now.subtract(const Duration(hours: 1));
       await _supabase
@@ -478,7 +507,7 @@ class AuthService {
           .delete()
           .eq('used', true)
           .lt('expires_at', oneHourAgo.toIso8601String());
-      
+
       print('OTP limpeza completada');
     } catch (e) {
       print('Error en la limpieza de OTPs: $e');
@@ -501,10 +530,7 @@ class AuthService {
   // clean up method - call periodically
   Future<void> performDatabaseCleanup() async {
     try {
-      await Future.wait([
-        cleanupExpiredOTPs(),
-        cleanupOldPasswordLogs(),
-      ]);
+      await Future.wait([cleanupExpiredOTPs(), cleanupOldPasswordLogs()]);
       print('La limpieza de logs y otps se ha completado.');
     } catch (e) {
       print('Error durante la limpieza de base de datos: $e');

@@ -16,15 +16,18 @@ import 'package:reciclaje_app/components/my_textformfield.dart';
 import 'package:reciclaje_app/components/limit_character_two.dart';
 // import 'package:reciclaje_app/components/row_button.dart';
 import 'package:reciclaje_app/components/row_button_2.dart';
+import 'package:reciclaje_app/database/articleHistory_database.dart';
 import 'package:reciclaje_app/database/article_database.dart';
 import 'package:reciclaje_app/database/category_database.dart';
 import 'package:reciclaje_app/database/days_available_database.dart';
 import 'package:reciclaje_app/database/media_database.dart';
 import 'package:reciclaje_app/database/users_database.dart';
 import 'package:reciclaje_app/model/article.dart';
+import 'package:reciclaje_app/model/articleHistory.dart';
 import 'package:reciclaje_app/model/category.dart';
 import 'package:reciclaje_app/model/daysAvailable.dart';
 import 'package:reciclaje_app/model/multimedia.dart';
+import 'package:reciclaje_app/model/recycling_items.dart';
 import 'package:reciclaje_app/screen/distribuidor/map_picker_screen.dart';
 import 'package:reciclaje_app/services/workflow_service.dart'; // ✅ Nuevo servicio
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -58,6 +61,7 @@ class _RegisterRecycleScreenState extends State<RegisterRecycleScreen> {
   final daysAvailableDatabase = DaysAvailableDatabase();
   // final deliverDatabase = DeliverDatabase();
   final mediaDatabase = MediaDatabase();
+  final articleHistoryDb = ArticlehistoryDatabase();
   
   List<Category> _categories = [];
   Category? _selectedCategory;
@@ -97,6 +101,10 @@ class _RegisterRecycleScreenState extends State<RegisterRecycleScreen> {
   Future<void> _checkUserPublishStatus() async {
     final canPublish = await workflowService.canUserPublish();
     final usedCategories = await workflowService.getUsedPendingCategoryIds();
+    
+    // ✅ Check if widget is still mounted before calling setState
+    if (!mounted) return;
+    
     setState(() {
       _canPublish = canPublish;
       _usedCategoryIds = usedCategories;
@@ -122,6 +130,10 @@ class _RegisterRecycleScreenState extends State<RegisterRecycleScreen> {
   Future<void> _loadCategories() async {
     try {
       final categories = await categoryDatabase.getAllCategories();
+      
+      // ✅ Check if widget is still mounted
+      if (!mounted) return;
+      
       setState(() {
         _categories = categories;
         _isLoading = false;
@@ -129,6 +141,8 @@ class _RegisterRecycleScreenState extends State<RegisterRecycleScreen> {
       });
 
     } catch (e) {
+      if (!mounted) return;
+      
       setState(() {
         _isLoading = false;
       });
@@ -158,6 +172,9 @@ class _RegisterRecycleScreenState extends State<RegisterRecycleScreen> {
       if (res != null && res is Map<String, dynamic>) {
         final LatLng pickedLocation = res['location'];
         final String pickedAddress = res['address'];
+
+        // ✅ Check if widget is still mounted
+        if (!mounted) return;
 
         setState(() {
           _selectedLocation = pickedLocation;
@@ -272,6 +289,16 @@ class _RegisterRecycleScreenState extends State<RegisterRecycleScreen> {
 
       final articleId = await articleDatabase.createArticle(newArticle);
       print('✅ Artículo creado con ID: $articleId');
+
+      final newLog = articleHistory(
+        articleId: articleId, // ✅ Use the newly created articleId
+        actorId: currentUser.id,
+        targetId: null,
+        description: 'published'
+      );
+
+      await articleHistoryDb.createArticleHistory(newLog);
+      print('Log de historial creado por usuario ${currentUser.id}');
 
       // Create daysAvailable records for each selected day
       if (_selectedAvailability != null) {
@@ -509,11 +536,8 @@ class _RegisterRecycleScreenState extends State<RegisterRecycleScreen> {
           actions: [
             ElevatedButton(
               onPressed: () {
-                // ✅ Cerrar el diálogo
+                // ✅ Solo cerrar el diálogo y quedarse en la misma pantalla
                 Navigator.of(dialogContext).pop();
-                
-                // ✅ Volver a la pantalla anterior (HomeScreen) con resultado
-                Navigator.of(context).pop(true);
               },
               style: ElevatedButton.styleFrom(
                 backgroundColor: const Color(0xFF2D8A8A),

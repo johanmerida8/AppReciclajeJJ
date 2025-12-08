@@ -11,6 +11,7 @@ class CompanyCard extends StatelessWidget {
   final String imageUrl;
   final VoidCallback? onPressed;
   final VoidCallback? onArchive;
+  final VoidCallback? onEmployees; // 👉 NUEVO CALLBACK
 
   const CompanyCard({
     super.key,
@@ -21,6 +22,7 @@ class CompanyCard extends StatelessWidget {
     required this.imageUrl,
     this.onPressed,
     this.onArchive,
+    this.onEmployees, // 👉 NUEVO CALLBACK
   });
 
   @override
@@ -120,7 +122,8 @@ class CompanyCard extends StatelessWidget {
                         ],
                       ),
                       const SizedBox(height: 2),
-                      // Calificación
+                      // Calificación/* estrellas */
+                      /*
                       Row(
                         children: [
                           const Icon(Icons.star, color: Colors.amber, size: 16),
@@ -133,6 +136,7 @@ class CompanyCard extends StatelessWidget {
                           ),
                         ],
                       ),
+                      */
                     ],
                   ),
                 ),
@@ -314,12 +318,15 @@ class CompanyCard extends StatelessWidget {
               ),
               // Archivar usuario
               ListTile(
-                leading: const Icon(
-                  Icons.archive_outlined,
+                leading: Icon(
+                  state == 1
+                      ? Icons.archive_outlined
+                      : Icons.unarchive_outlined,
                   color: AppColors.fondoGrisOscuro,
                 ),
-                title: const Text(
-                  'Archivar Empresa',
+
+                title: Text(
+                  state == 1 ? 'Archivar empresa' : 'Activar empresa',
                   style: AppTextStyles.textLarge,
                 ),
                 onTap: () {
@@ -328,6 +335,21 @@ class CompanyCard extends StatelessWidget {
                 },
               ),
               const SizedBox(height: AppSpacing.spacingMedium),
+              // Ver empleados de la empresa
+              ListTile(
+                leading: const Icon(
+                  Icons.people_outline,
+                  color: AppColors.fondoGrisOscuro,
+                ),
+                title: const Text(
+                  'Ver empleados',
+                  style: AppTextStyles.textLarge,
+                ),
+                onTap: () {
+                  Navigator.pop(context);
+                  onEmployees?.call(); // 👉 NUEVO CALLBACK
+                },
+              ),
             ],
           ),
         );

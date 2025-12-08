@@ -48,7 +48,7 @@ class _UserListState extends State<UserList> {
       if (mounted) {
         setState(() => _isLoading = false);
       }
-      debugPrint('❌ Error cargando usuarios: $e');
+      debugPrint('❌ Error cargando distribuidores: $e');
     }
   }
 
@@ -86,6 +86,8 @@ class _UserListState extends State<UserList> {
     }
   }
 
+  
+
   @override
   void dispose() {
     _searchController.dispose();
@@ -105,9 +107,8 @@ class _UserListState extends State<UserList> {
         title: const Text('Usuarios', style: AppTextStyles.title),
         actions: [
           IconButton(
-            icon: const Icon(Icons.logout),
+            icon: const Icon(Icons.logout, color: Colors.red),
             onPressed: _logout,
-            tooltip: 'Cerrar Sesión',
           ),
         ],
       ),
@@ -121,7 +122,7 @@ class _UserListState extends State<UserList> {
                   children: [
                     CustomSearchBar(
                       controller: _searchController,
-                      hintText: 'Buscar usuario',
+                      hintText: 'Buscar distribuidor',
                       onChanged: (_) => setState(() {}),
                     ),
                     const SizedBox(height: AppSpacing.spacingMedium),
@@ -139,7 +140,7 @@ class _UserListState extends State<UserList> {
                     const SizedBox(height: AppSpacing.spacingMedium),
 
                     Text(
-                      'Total: ${filteredUsers.length} usuario${filteredUsers.length == 1 ? '' : 's'}',
+                      'Total: ${filteredUsers.length} distribuidor${filteredUsers.length == 1 ? '' : 'es'}',
                       style: AppTextStyles.textSmall,
                     ),
                     const SizedBox(height: AppSpacing.spacingMedium),
@@ -149,7 +150,7 @@ class _UserListState extends State<UserList> {
                           filteredUsers.isEmpty
                               ? const Center(
                                 child: Text(
-                                  'No se encontraron usuarios.',
+                                  'No se encontraron distribuidores.',
                                   style: AppTextStyles.textMedium,
                                 ),
                               )
@@ -183,8 +184,31 @@ class _UserListState extends State<UserList> {
                                     onPressed: () {
                                       // Acción para abrir perfil o detalles
                                     },
-                                    onArchive: () {
-                                      // Acción para archivar
+                                    onArchive: () async {
+                                      final newState = user.state == 1 ? 0 : 1;
+
+                                      final ok = await _db.setUserState(
+                                        user.idUser,
+                                        newState,
+                                      );
+
+                                      if (ok && mounted) {
+                                        setState(() {
+                                          user.state = newState;
+                                        });
+
+                                        ScaffoldMessenger.of(
+                                          context,
+                                        ).showSnackBar(
+                                          SnackBar(
+                                            content: Text(
+                                              newState == 0
+                                                  ? "Usuario archivado correctamente"
+                                                  : "Usuario activado nuevamente",
+                                            ),
+                                          ),
+                                        );
+                                      }
                                     },
                                   );
                                 },

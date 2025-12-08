@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:reciclaje_app/auth/auth_service.dart';
-import 'package:reciclaje_app/screen/administrator/administrator_dashboard_screen.dart';
 import 'package:reciclaje_app/screen/administrator/administrator_navigations.dart';
 import 'package:reciclaje_app/screen/empresa/company_navigation_screens.dart';
 import 'package:reciclaje_app/screen/employee/employee_navigation_screens.dart';
@@ -9,7 +8,6 @@ import 'package:reciclaje_app/screen/distribuidor/login_screen.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class AuthGate extends StatelessWidget {
-
   const AuthGate({super.key});
 
   @override
@@ -50,7 +48,9 @@ class AuthGate extends StatelessWidget {
 
             if (roleSnapshot.hasError) {
               return Scaffold(
-                body: Center(child: Text('Error al obtener el rol: ${roleSnapshot.error}')),
+                body: Center(
+                  child: Text('Error al obtener el rol: ${roleSnapshot.error}'),
+                ),
               );
             }
 

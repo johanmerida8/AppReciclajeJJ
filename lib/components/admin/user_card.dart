@@ -123,6 +123,7 @@ class UserCard extends StatelessWidget {
                   Row(
                     children: [
                       // 🔹 Calificación con icono
+                      /*
                       const Icon(Icons.star, color: Colors.amber, size: 16),
                       const SizedBox(width: 4),
                       Text(
@@ -131,11 +132,10 @@ class UserCard extends StatelessWidget {
                           color: AppColors.grisLetra,
                         ),
                       ),
-
+                      */
                       const SizedBox(
                         width: 12,
                       ), // espacio entre calificación y fecha
-
                       // Fecha de creación
                       const Icon(
                         Icons.calendar_today,
@@ -213,14 +213,18 @@ class UserCard extends StatelessWidget {
               ),
               // Archivar usuario
               ListTile(
-                leading: const Icon(
-                  Icons.archive_outlined,
+                leading: Icon(
+                  state == 1
+                      ? Icons.archive_outlined
+                      : Icons.unarchive_outlined,
                   color: AppColors.fondoGrisOscuro,
                 ),
-                title: const Text(
-                  'Archivar usuario',
+
+                title: Text(
+                  state == 1 ? 'Archivar usuario' : 'Activar usuario',
                   style: AppTextStyles.textLarge,
                 ),
+
                 onTap: () {
                   Navigator.pop(context);
                   onArchive?.call();

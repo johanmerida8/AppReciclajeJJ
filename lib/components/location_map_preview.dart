@@ -108,12 +108,20 @@ class _LocationMapPreviewState extends State<LocationMapPreview> {
                     options: MapOptions(
                       initialCenter: displayLocation,
                       initialZoom: _isExpanded ? 15.0 : 14.0,
-                      minZoom: 10.0,
+                      minZoom: 6.0,  // ✅ Prevent zooming out beyond Bolivia
                       maxZoom: 18.0,
+                      // ✅ Disable map rotation
                       interactionOptions: InteractionOptions(
                         flags: _isExpanded
-                            ? InteractiveFlag.all
+                            ? (InteractiveFlag.all & ~InteractiveFlag.rotate)
                             : InteractiveFlag.none,
+                      ),
+                      // ✅ Restrict map to Bolivia boundaries
+                      cameraConstraint: CameraConstraint.contain(
+                        bounds: LatLngBounds(
+                          const LatLng(-22.9, -69.7), // Southwest corner of Bolivia
+                          const LatLng(-9.6, -57.4),   // Northeast corner of Bolivia
+                        ),
                       ),
                       onTap: (widget.isEditing && _isExpanded && !_isEditingOnMap)
                           ? (tapPosition, point) {

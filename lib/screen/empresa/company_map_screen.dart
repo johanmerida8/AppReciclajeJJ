@@ -1,8 +1,11 @@
 import 'dart:math';
 import 'package:flutter/material.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:reciclaje_app/auth/auth_service.dart';
+import 'package:reciclaje_app/database/articleHistory_database.dart';
+import 'package:reciclaje_app/model/articleHistory.dart';
 import 'package:reciclaje_app/model/recycling_items.dart';
 import 'package:reciclaje_app/model/request.dart';
 import 'package:reciclaje_app/database/request_database.dart';
@@ -20,7 +23,9 @@ import 'package:reciclaje_app/utils/category_utils.dart';
 import 'package:reciclaje_app/screen/distribuidor/detail_recycle_screen.dart';
 import 'package:reciclaje_app/screen/empresa/company_notifications_screen.dart'; // ✅ Add import
 import 'package:reciclaje_app/components/schedule_pickup_dialog.dart'; // ✅ Add schedule dialog import
+import 'package:reciclaje_app/widgets/status_indicator.dart'; // ✅ Add StatusIndicators widget
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class CompanyMapScreen extends StatefulWidget {
   const CompanyMapScreen({super.key});
@@ -29,7 +34,8 @@ class CompanyMapScreen extends StatefulWidget {
   State<CompanyMapScreen> createState() => _CompanyMapScreenState();
 }
 
-class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBindingObserver {
+class _CompanyMapScreenState extends State<CompanyMapScreen>
+    with WidgetsBindingObserver {
   // Services
   final _authService = AuthService();
   final _dataService = RecyclingDataService();
@@ -40,6 +46,7 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
   final _mediaDatabase = MediaDatabase();
   final _requestDatabase = RequestDatabase();
   final _taskDatabase = TaskDatabase(); // ✅ Add TaskDatabase
+  final _articleHistoryDb = ArticlehistoryDatabase();
 
   // Controllers
   final _mapController = MapController();
@@ -51,15 +58,24 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
   int? _currentUserId;
   int? _companyId;
   int _approvedRequestCount = 0; // ✅ Notification count for approved requests
-  
+
+  // ✅ Track requests and tasks by article ID for status determination
+  Map<int, Request> _requestsByArticleId = {}; // articleID -> Request
+  Map<int, Map<String, dynamic>> _tasksByArticleId =
+      {}; // articleID -> Task data
+
   // Filter states
-  Set<String> _selectedStatuses = {'publicados', 'en_espera', 'sin_asignar', 'en_proceso', 'recogidos', 'vencidos'};
-  String _sortBy = 'recent'; // 'recent', 'oldest', 'status'
-  
+  Set<String> _selectedStatuses = {
+    'publicados',
+    'en_espera',
+    'sin_asignar',
+    'en_proceso',
+    // ✅ recogidos and vencidos moved to profile screen
+  };
+
   int _currentArticleIndex = 0;
   bool _showArticleNavigation = false;
   double _currentZoom = 13.0;
-  Map<LatLng, bool> _expandedClusters = {};
 
   // Location state
   LatLng? _userLocation;
@@ -72,8 +88,10 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
   String _errorMessage = '';
 
   // Connection state
+  bool _isConnected = true;
   bool _hasLocationPermission = false;
   bool _isLocationServiceEnabled = false;
+  bool _hasCheckedLocation = false;
 
   @override
   void initState() {
@@ -85,6 +103,12 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    // ✅ Clear cached data to prevent memory leaks
+    _allItems.clear();
+    _filteredItems.clear();
+    _employees.clear();
+    _requestsByArticleId.clear();
+    _tasksByArticleId.clear();
     super.dispose();
   }
 
@@ -99,12 +123,12 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
   Future<void> _recheckLocationAfterResume() async {
     final previousServiceEnabled = _isLocationServiceEnabled;
     final previousPermission = _hasLocationPermission;
-    
+
     await _checkLocationServices();
-    
+
     final gpsJustEnabled = !previousServiceEnabled && _isLocationServiceEnabled;
     final permissionJustGranted = !previousPermission && _hasLocationPermission;
-    
+
     if (gpsJustEnabled || permissionJustGranted) {
       await _loadUserLocation();
       if (mounted) {
@@ -122,13 +146,26 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
   Future<void> _initialize() async {
     await _loadUserData();
     await _loadEmployees();
+    await _loadRequestsAndTasks(); // ✅ Load requests and tasks for status tracking
     await _loadApprovedRequestCount(); // ✅ Load notification count
-    await _loadData();
+
+    // ✅ Show map immediately after basic data loads
+    if (mounted) {
+      setState(() => _isLoading = false);
+    }
+
     await _checkLocationServices();
-    
+
     if (_isLocationServiceEnabled && _hasLocationPermission) {
       await _loadUserLocation();
     }
+
+    // ✅ Load articles after map is ready (deferred for faster initial render)
+    Future.delayed(const Duration(milliseconds: 300), () {
+      if (mounted) {
+        _loadData();
+      }
+    });
   }
 
   Future<void> _loadUserData() async {
@@ -138,34 +175,36 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
       setState(() {
         _currentUserId = userData?.id;
       });
-      
+
       // Load company ID
       if (_currentUserId != null) {
         try {
           // Try to get company ID from empresa table (if user is admin-empresa)
-          Map<String, dynamic>? companyData = await Supabase.instance.client
-              .from('company')
-              .select('idCompany')
-              .eq('adminUserID', _currentUserId!)
-              .maybeSingle();
-          
+          Map<String, dynamic>? companyData =
+              await Supabase.instance.client
+                  .from('company')
+                  .select('idCompany')
+                  .eq('adminUserID', _currentUserId!)
+                  .maybeSingle();
+
           int? foundCompanyId;
-          
+
           // If not found in empresa table, try employees table (if user is employee)
           if (companyData == null) {
-            companyData = await Supabase.instance.client
-                .from('employees')
-                .select('companyID')
-                .eq('userID', _currentUserId!)
-                .maybeSingle();
-            
+            companyData =
+                await Supabase.instance.client
+                    .from('employees')
+                    .select('companyID')
+                    .eq('userID', _currentUserId!)
+                    .maybeSingle();
+
             if (companyData != null) {
               foundCompanyId = companyData['companyID'] as int?;
             }
           } else {
             foundCompanyId = companyData['idCompany'] as int?;
           }
-          
+
           if (foundCompanyId != null) {
             setState(() {
               _companyId = foundCompanyId;
@@ -180,13 +219,13 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
 
   Future<void> _loadEmployees() async {
     if (_companyId == null) return;
-    
+
     try {
       final employees = await Supabase.instance.client
           .from('employees')
           .select('idEmployee, userID, users:userID(names, email)')
           .eq('companyID', _companyId!);
-      
+
       if (mounted) {
         setState(() {
           _employees = List<Map<String, dynamic>>.from(employees);
@@ -198,38 +237,113 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
     }
   }
 
+  /// ✅ Load all requests and tasks for this company to determine article statuses
+  Future<void> _loadRequestsAndTasks() async {
+    if (_companyId == null) {
+      print('⚠️ Cannot load requests and tasks: _companyId is null');
+      return;
+    }
+
+    print('🔍 Loading requests and tasks for company ID: $_companyId');
+
+    try {
+      // Load all requests for this company
+      final requests = await Supabase.instance.client
+          .from('request')
+          .select('*')
+          .eq('companyID', _companyId!)
+          .eq('state', 1);
+
+      print('📥 Received ${requests.length} requests from database');
+
+      // Load all tasks for this company with request schedule data
+      final tasks = await Supabase.instance.client
+          .from('tasks')
+          .select('''
+            *,
+            request:requestID(
+              scheduledDay,
+              scheduledStartTime,
+              scheduledEndTime
+            )
+          ''')
+          .eq('companyID', _companyId!)
+          .eq('state', 1);
+
+      print('📥 Received ${tasks.length} tasks from database');
+
+      if (mounted) {
+        setState(() {
+          // Map requests by article ID
+          _requestsByArticleId = {};
+          for (var req in requests) {
+            final articleId = req['articleID'] as int?;
+            if (articleId != null) {
+              _requestsByArticleId[articleId] = Request.fromMap(req);
+            }
+          }
+
+          // Map tasks by article ID
+          _tasksByArticleId = {};
+          for (var task in tasks) {
+            final articleId = task['articleID'] as int?;
+            if (articleId != null) {
+              _tasksByArticleId[articleId] = task;
+            }
+          }
+        });
+
+        print(
+          '✅ Loaded ${_requestsByArticleId.length} requests and ${_tasksByArticleId.length} tasks for company',
+        );
+      }
+    } catch (e) {
+      print('❌ Error loading requests and tasks: $e');
+    }
+  }
+
   /// ✅ Load count of approved requests for company
   Future<void> _loadApprovedRequestCount() async {
     if (_companyId == null) return;
-    
+
     try {
+      final prefs = await SharedPreferences.getInstance();
+      final readNotifications =
+          prefs.getStringList('read_company_notifications') ?? [];
+
       final approvedRequests = await Supabase.instance.client
           .from('request')
           .select('idRequest')
           .eq('companyID', _companyId!)
           .eq('status', 'aprobado');
-      
+
+      // Filter out read notifications
+      final unreadRequests =
+          (approvedRequests as List).where((req) {
+            final requestId = req['idRequest'].toString();
+            return !readNotifications.contains(requestId);
+          }).toList();
+
       if (mounted) {
         setState(() {
-          _approvedRequestCount = approvedRequests.length;
+          _approvedRequestCount = unreadRequests.length;
         });
       }
-      print('✅ Loaded $_approvedRequestCount approved requests');
+      print(
+        '📊 Unread approved requests: ${unreadRequests.length} out of ${approvedRequests.length} total',
+      );
     } catch (e) {
       print('❌ Error loading approved request count: $e');
     }
   }
 
   Future<void> _loadData({bool forceRefresh = false}) async {
+    // ✅ Don't change loading state - keep map visible
+
     if (!forceRefresh && await _loadFromCache()) {
       _loadFreshDataInBackground();
       return;
     }
-
-    setState(() {
-      _isLoading = true;
-      _hasError = false;
-    });
 
     await _loadFreshData();
   }
@@ -257,22 +371,45 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
       final items = await _dataService.loadRecyclingItems();
       final categories = await _dataService.loadCategories();
 
-      if (mounted) {
-        setState(() {
-          _allItems = items;
-          _applyFilters();
-          _hasError = false;
-          _isLoading = false;
-        });
+      if (!mounted) return;
 
-        await _cacheService.saveCache(items, categories, _currentUserId);
-        print('✅ Loaded ${items.length} items fresh');
+      print('📦 Found ${items.length} items to load progressively');
 
-        if (_filteredItems.isNotEmpty) {
-          Future.delayed(const Duration(milliseconds: 300), () {
-            if (mounted) _fitMapToShowAllArticles();
+      // ✅ Load items in batches of 10 for smooth progressive rendering
+      const batchSize = 10;
+      final allItems = <RecyclingItem>[];
+
+      for (var i = 0; i < items.length; i += batchSize) {
+        if (!mounted) break;
+
+        final batch = items.skip(i).take(batchSize).toList();
+        allItems.addAll(batch);
+
+        // ✅ Update UI with each batch
+        if (mounted) {
+          setState(() {
+            _allItems = List.from(allItems);
+            _applyFilters();
+            _hasError = false;
+            _isLoading = false;
           });
+          print('✅ Loaded batch: ${allItems.length}/${items.length} items');
         }
+
+        // Small delay between batches for smooth rendering
+        if (i + batchSize < items.length) {
+          await Future.delayed(const Duration(milliseconds: 80));
+        }
+      }
+
+      // Save cache after all items loaded
+      await _cacheService.saveCache(items, categories, _currentUserId);
+      print('✅ Finished loading ${items.length} items');
+
+      if (mounted && _filteredItems.isNotEmpty) {
+        Future.delayed(const Duration(milliseconds: 300), () {
+          if (mounted) _fitMapToShowAllArticles();
+        });
       }
     } catch (e) {
       if (mounted) {
@@ -297,24 +434,26 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
   Future<void> _loadUserLocation() async {
     try {
       await _checkLocationServices();
-      
+
       if (!_isLocationServiceEnabled || !_hasLocationPermission) {
         return;
       }
-      
+
       final location = await _locationService.getCurrentLocation();
-      
+
       if (location != null) {
         setState(() {
           _userLocation = LatLng(location.latitude, location.longitude);
           _hasUserLocation = true;
         });
-        
+
         if (_mapService.isMapReady(_mapController)) {
           _mapController.move(_userLocation!, MapService.closeZoomLevel);
         }
-        
-        print('✅ Ubicación del usuario cargada: ${location.latitude}, ${location.longitude}');
+
+        print(
+          '✅ Ubicación del usuario cargada: ${location.latitude}, ${location.longitude}',
+        );
       }
     } catch (e) {
       print('❌ Error obteniendo ubicación del usuario: $e');
@@ -327,69 +466,148 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
 
   Future<void> _checkLocationServices() async {
     final status = await _locationService.checkLocationStatus();
-    
-    setState(() {
-      _isLocationServiceEnabled = status['serviceEnabled'] ?? false;
-      _hasLocationPermission = status['hasPermission'] ?? false;
-    });
+
+    if (mounted) {
+      setState(() {
+        _isLocationServiceEnabled = status['serviceEnabled'] ?? false;
+        _hasLocationPermission = status['hasPermission'] ?? false;
+        _hasCheckedLocation = true;
+      });
+    }
   }
 
   void _applyFilters() {
+    print('🔍 Applying filters...');
+    print('   Selected statuses: $_selectedStatuses');
+    print('   Total items: ${_allItems.length}');
+
     List<RecyclingItem> filtered = List.from(_allItems);
-    
+
     // ✅ DON'T filter by company - show ALL articles like distributor
     // Companies can see all published articles to assign to their employees
-    
+
     // Filter by selected statuses
-    filtered = filtered.where((item) {
-      final status = _getItemStatus(item);
-      return _selectedStatuses.contains(status);
-    }).toList();
-    
-    // Sort
-    switch (_sortBy) {
-      case 'recent':
-        filtered.sort((a, b) => b.createdAt.compareTo(a.createdAt));
-        break;
-      case 'oldest':
-        filtered.sort((a, b) => a.createdAt.compareTo(b.createdAt));
-        break;
-      case 'status':
-        filtered.sort((a, b) => _getItemStatus(a).compareTo(_getItemStatus(b)));
-        break;
-    }
-    
+    filtered =
+        filtered.where((item) {
+          final status = _getItemStatus(item);
+          // ✅ Exclude recogidos and vencidos from map (they show in profile)
+          if (status == 'recogidos' || status == 'vencidos') return false;
+          return _selectedStatuses.contains(status);
+        }).toList();
+
+    print('   After status filter: ${filtered.length} items');
+
+    // Sort by most recent (default)
+    filtered.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+
     setState(() {
       _filteredItems = filtered;
     });
+
+    print('✅ Filters applied: ${_filteredItems.length} items displayed');
   }
 
   String _getItemStatus(RecyclingItem item) {
-    final status = item.workflowStatus?.toLowerCase() ?? 'publicados';
-    
-    if (status == 'completado') return 'recogidos';
-    if (status == 'en_proceso') return 'en_proceso';
-    if (status == 'sin_asignar') return 'sin_asignar'; // ✅ Task created but no employee assigned yet
-    if (status == 'solicitado') return 'en_espera'; // Request sent, waiting for distributor approval
+    // Check if there's a task for this article (most recent status)
+    // ✅ Ignore vencido tasks - they don't block new requests
+    final task = _tasksByArticleId[item.id];
+    if (task != null) {
+      final taskStatus = task['workflowStatus'] as String?;
+      final request = task['request'] as Map<String, dynamic>?;
+
+      // ✅ Skip vencido tasks - article should be available for new requests
+      if (taskStatus == 'vencido') {
+        // Check if there's a non-vencido request for this article
+        final request = _requestsByArticleId[item.id];
+        if (request != null && request.status != 'rechazado') {
+          if (request.status == 'aprobado') return 'sin_asignar';
+          if (request.status == 'pendiente') return 'en_espera';
+        }
+        // No active request - article is available
+        return 'publicados';
+      }
+
+      // ✅ Check if task is overdue (vencido) based on schedule
+      if (taskStatus == 'asignado' || taskStatus == 'en_proceso') {
+        if (request != null) {
+          final scheduledDay = request['scheduledDay'] as String?;
+          final scheduledEndTime = request['scheduledEndTime'] as String?;
+
+          if (scheduledDay != null && scheduledEndTime != null) {
+            try {
+              final scheduledDate = DateTime.parse(scheduledDay);
+              final endTimeParts = scheduledEndTime.split(':');
+              final scheduledDateTime = DateTime(
+                scheduledDate.year,
+                scheduledDate.month,
+                scheduledDate.day,
+                int.parse(endTimeParts[0]),
+                int.parse(endTimeParts[1]),
+              );
+
+              if (DateTime.now().isAfter(scheduledDateTime)) {
+                return 'vencidos'; // ✅ Overdue
+              }
+            } catch (e) {
+              print('Error checking vencido: $e');
+            }
+          }
+        }
+      }
+
+      if (taskStatus == 'completado') return 'recogidos'; // ✅ Completed
+      // Note: vencido is already handled at the top of this function
+      if (taskStatus == 'en_proceso') return 'en_proceso'; // ✅ Employee working
+      if (taskStatus == 'asignado')
+        return 'en_proceso'; // ✅ Employee assigned (treat as en_proceso)
+      // If task has employee assigned but unknown status, treat as en_proceso
+      final employeeId = task['employeeID'] as int?;
+      if (employeeId != null) return 'en_proceso';
+      // Task exists but no employee assigned yet
+      return 'sin_asignar';
+    }
+
+    // Check if there's a request for this article
+    final request = _requestsByArticleId[item.id];
+    if (request != null) {
+      // If request is approved, company needs to assign employee
+      if (request.status == 'aprobado') return 'sin_asignar';
+      // If request is rejected, article goes back to published
+      if (request.status == 'rechazado') return 'publicados';
+      // Otherwise it's waiting for distributor approval
+      return 'en_espera';
+    }
+
+    // Check article's workflow status as fallback
+    final status = item.workflowStatus?.toLowerCase();
     if (status == 'vencido') return 'vencidos';
-    if (status == 'pendiente' || status == 'publicados') return 'publicados';
-    
+
+    // No request, no task - article is just published
     return 'publicados';
   }
 
   Future<void> _refreshData() async {
-    await _cacheService.clearCache();
-    await _loadData(forceRefresh: true);
-    await _loadEmployees();
-    await _loadApprovedRequestCount(); // ✅ Refresh notification count
+    setState(() => _isLoading = true);
 
-    final lastLocation = _locationService.lastKnownLocation ?? _userLocation;
-    if (lastLocation != null) {
-      Future.microtask(() {
-        if (_mapService.isMapReady(_mapController)) {
-          _mapController.move(lastLocation, _currentZoom);
-        }
-      });
+    try {
+      await _cacheService.clearCache();
+      await _loadData(forceRefresh: true);
+      await _loadEmployees();
+      await _loadRequestsAndTasks(); // ✅ Refresh requests and tasks
+      await _loadApprovedRequestCount(); // ✅ Refresh notification count
+
+      final lastLocation = _locationService.lastKnownLocation ?? _userLocation;
+      if (lastLocation != null) {
+        Future.microtask(() {
+          if (_mapService.isMapReady(_mapController)) {
+            _mapController.move(lastLocation, _currentZoom);
+          }
+        });
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
     }
   }
 
@@ -419,36 +637,51 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (context) => _FilterDialog(
-        selectedStatuses: _selectedStatuses,
-        sortBy: _sortBy,
-        onApply: (statuses, sort) {
-          setState(() {
-            _selectedStatuses = statuses;
-            _sortBy = sort;
-            _applyFilters();
-          });
-        },
-      ),
+      builder:
+          (context) => _FilterDialog(
+            selectedStatuses: _selectedStatuses,
+            onApply: (statuses) {
+              if (mounted) {
+                setState(() {
+                  _selectedStatuses = statuses;
+                  _applyFilters();
+                });
+                print('✅ Filters applied: ${statuses.length} statuses');
+                print(
+                  '   Filtered items: ${_filteredItems.length} of ${_allItems.length}',
+                );
+              }
+            },
+          ),
     );
   }
 
   /// ✅ Show employee assignment dialog (when request is approved)
-  void _showAssignEmployeeDialogWithRequest(RecyclingItem item, Request approvedRequest) {
+  void _showAssignEmployeeDialogWithRequest(
+    RecyclingItem item,
+    Request approvedRequest,
+  ) {
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-        contentPadding: EdgeInsets.zero,
-        content: _AssignEmployeeDialog(
-          item: item,
-          employees: _employees,
-          approvedRequest: approvedRequest,
-          onAssign: (employeeId) async {
-            await _assignArticleToEmployee(item, employeeId, approvedRequest);
-          },
-        ),
-      ),
+      builder:
+          (context) => AlertDialog(
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(15),
+            ),
+            contentPadding: EdgeInsets.zero,
+            content: _AssignEmployeeDialog(
+              item: item,
+              employees: _employees,
+              approvedRequest: approvedRequest,
+              onAssign: (employeeId) async {
+                await _assignArticleToEmployee(
+                  item,
+                  employeeId,
+                  approvedRequest,
+                );
+              },
+            ),
+          ),
     );
   }
 
@@ -457,105 +690,129 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
     // Changed from "Asignar" to "Solicitar"
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: const Color(0xFF2D8A8A).withOpacity(0.1),
-                shape: BoxShape.circle,
-              ),
-              child: const Icon(Icons.send, color: Color(0xFF2D8A8A), size: 24),
+      builder:
+          (context) => AlertDialog(
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
             ),
-            const SizedBox(width: 12),
-            const Expanded(
-              child: Text(
-                'Solicitar Artículo',
-                style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-              ),
-            ),
-          ],
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              '¿Deseas enviar una solicitud al distribuidor para recoger este artículo?',
-              style: TextStyle(fontSize: 15, color: Colors.grey[700]),
-            ),
-            const SizedBox(height: 16),
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.blue[50],
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Row(
-                children: [
-                  const Icon(Icons.info_outline, color: Colors.blue, size: 20),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      'El distribuidor recibirá una notificación y podrá aprobar o rechazar tu solicitud.',
-                      style: TextStyle(fontSize: 13, color: Colors.blue[900]),
-                    ),
+            title: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF2D8A8A).withOpacity(0.1),
+                    shape: BoxShape.circle,
                   ),
-                ],
-              ),
+                  child: const Icon(
+                    Icons.send,
+                    color: Color(0xFF2D8A8A),
+                    size: 24,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                const Expanded(
+                  child: Text(
+                    'Solicitar Artículo',
+                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ],
             ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text('Cancelar', style: TextStyle(color: Colors.grey[600])),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '¿Deseas enviar una solicitud al distribuidor para recoger este artículo?',
+                  style: TextStyle(fontSize: 15, color: Colors.grey[700]),
+                ),
+                const SizedBox(height: 16),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.blue[50],
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(
+                        Icons.info_outline,
+                        color: Colors.blue,
+                        size: 20,
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'El distribuidor recibirá una notificación y podrá aprobar o rechazar tu solicitud.',
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: Colors.blue[900],
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () {
+                  Navigator.of(context).pop();
+                },
+                child: Text(
+                  'Cancelar',
+                  style: TextStyle(color: Colors.grey[600]),
+                ),
+              ),
+              ElevatedButton(
+                onPressed: () async {
+                  // Store navigator and scaffold messenger references before async operations
+                  final navigator = Navigator.of(context);
+                  final scaffoldMessenger = ScaffoldMessenger.of(context);
+
+                  // Close the confirmation dialog first
+                  navigator.pop();
+
+                  // ✅ Call _sendRequestToDistributor which will show schedule dialog
+                  try {
+                    await _sendRequestToDistributor(item);
+
+                    // Show success message
+                    scaffoldMessenger.showSnackBar(
+                      const SnackBar(
+                        content: Text('✅ Solicitud enviada al distribuidor'),
+                        backgroundColor: Colors.green,
+                        duration: Duration(seconds: 3),
+                      ),
+                    );
+
+                    // Refresh data to update UI
+                    await _refreshData();
+                  } catch (e) {
+                    // Show error message
+                    scaffoldMessenger.showSnackBar(
+                      SnackBar(
+                        content: Text('❌ Error: $e'),
+                        backgroundColor: Colors.red,
+                        duration: const Duration(seconds: 3),
+                      ),
+                    );
+                  }
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF2D8A8A),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                ),
+                child: const Text(
+                  'Continuar',
+                  style: TextStyle(color: Colors.white),
+                ),
+              ),
+            ],
           ),
-          ElevatedButton(
-            onPressed: () async {
-              // Store navigator and scaffold messenger references before async operations
-              final navigator = Navigator.of(context);
-              final scaffoldMessenger = ScaffoldMessenger.of(context);
-              
-              // Close the confirmation dialog first
-              navigator.pop();
-              
-              // ✅ Call _sendRequestToDistributor which will show schedule dialog
-              try {
-                await _sendRequestToDistributor(item);
-                
-                // Show success message
-                scaffoldMessenger.showSnackBar(
-                  const SnackBar(
-                    content: Text('✅ Solicitud enviada al distribuidor'),
-                    backgroundColor: Colors.green,
-                    duration: Duration(seconds: 3),
-                  ),
-                );
-                
-                // Refresh data to update UI
-                await _refreshData();
-              } catch (e) {
-                // Show error message
-                scaffoldMessenger.showSnackBar(
-                  SnackBar(
-                    content: Text('❌ Error: $e'),
-                    backgroundColor: Colors.red,
-                    duration: const Duration(seconds: 3),
-                  ),
-                );
-              }
-            },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF2D8A8A),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-            ),
-            child: const Text('Continuar', style: TextStyle(color: Colors.white)),
-          ),
-        ],
-      ),
     );
   }
 
@@ -568,7 +825,7 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
           .select()
           .eq('articleID', item.id)
           .order('dateAvailable', ascending: true);
-      
+
       daysAvailableData = response.cast<Map<String, dynamic>>();
     } catch (e) {
       print('❌ Error loading daysAvailable: $e');
@@ -577,13 +834,14 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
     // ✅ Show scheduling dialog to select day and time
     final scheduleData = await showDialog<Map<String, String>>(
       context: context,
-      builder: (context) => SchedulePickupDialog(
-        availableDays: item.availableDays,
-        availableTimeStart: item.availableTimeStart,
-        availableTimeEnd: item.availableTimeEnd,
-        articleName: item.title,
-        daysAvailableData: daysAvailableData,
-      ),
+      builder:
+          (context) => SchedulePickupDialog(
+            availableDays: item.availableDays,
+            availableTimeStart: item.availableTimeStart,
+            availableTimeEnd: item.availableTimeEnd,
+            articleName: item.title,
+            daysAvailableData: daysAvailableData,
+          ),
     );
 
     if (scheduleData == null) return; // User cancelled
@@ -591,10 +849,12 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
     try {
       // Parse time strings (HH:MM) and format as HH:MM:SS for database
       final startTimeParts = scheduleData['startTime']!.split(':');
-      final startTimeFormatted = '${startTimeParts[0].padLeft(2, '0')}:${startTimeParts[1].padLeft(2, '0')}:00';
-      
+      final startTimeFormatted =
+          '${startTimeParts[0].padLeft(2, '0')}:${startTimeParts[1].padLeft(2, '0')}:00';
+
       final endTimeParts = scheduleData['endTime']!.split(':');
-      final endTimeFormatted = '${endTimeParts[0].padLeft(2, '0')}:${endTimeParts[1].padLeft(2, '0')}:00';
+      final endTimeFormatted =
+          '${endTimeParts[0].padLeft(2, '0')}:${endTimeParts[1].padLeft(2, '0')}:00';
 
       // Create request with status "pendiente" and scheduled time window
       final newRequest = Request(
@@ -610,9 +870,20 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
       );
 
       await _requestDatabase.createRequest(newRequest);
-      
+
+      final newLog = articleHistory(
+        articleId: item.id,
+        actorId: item.ownerUserId,
+        targetId: _companyId,
+        description: 'request_sent',
+      );
+
+      await _articleHistoryDb.createArticleHistory(newLog);
+
       // Success - no need to refresh map as the request is on the distributor side
-      print('✅ Request sent successfully to distributor with schedule: ${scheduleData['day']} between ${scheduleData['startTime']} - ${scheduleData['endTime']}');
+      print(
+        '✅ Request sent successfully to distributor with schedule: ${scheduleData['day']} between ${scheduleData['startTime']} - ${scheduleData['endTime']}',
+      );
     } catch (e) {
       print('❌ Error sending request: $e');
       rethrow; // Re-throw to handle in calling code
@@ -621,8 +892,8 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
 
   /// ✅ Assign employee to approved request and update task
   Future<void> _assignArticleToEmployee(
-    RecyclingItem item, 
-    int employeeId, 
+    RecyclingItem item,
+    int employeeId,
     Request approvedRequest,
   ) async {
     try {
@@ -631,7 +902,9 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
       }
 
       // ✅ Get existing task created by distributor with "sin_asignar" status
-      final existingTask = await _taskDatabase.getTaskByRequestId(approvedRequest.id!);
+      final existingTask = await _taskDatabase.getTaskByRequestId(
+        approvedRequest.id!,
+      );
 
       if (existingTask == null) {
         throw Exception('No se encontró la tarea para esta solicitud');
@@ -651,8 +924,10 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
       );
 
       await _taskDatabase.updateTask(updatedTask);
-      
-      print('✅ Task updated successfully - Employee: $employeeId assigned and working on Article: ${item.id}');
+
+      print(
+        '✅ Task updated successfully - Employee: $employeeId assigned and working on Article: ${item.id}',
+      );
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -687,9 +962,19 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
       options: MapOptions(
         initialCenter: _userLocation ?? MapService.cochabambaCenter,
         initialZoom: _currentZoom,
-        minZoom: 10.0,
+        minZoom: 6.0, // ✅ Prevent zooming out beyond Bolivia
         maxZoom: 18.0,
-        onPositionChanged: (position, hasGesture) {
+        // ✅ Disable map rotation
+        interactionOptions: const InteractionOptions(
+          flags: InteractiveFlag.all & ~InteractiveFlag.rotate,
+        ),
+        cameraConstraint: CameraConstraint.contain(
+          bounds: LatLngBounds(
+            const LatLng(-22.9, -69.7), // Southwest corner of Bolivia
+            const LatLng(-9.6, -57.4), // Northeast corner of Bolivia
+          ),
+        ),
+        onPositionChanged: (MapCamera position, bool hasGesture) {
           if (hasGesture) {
             setState(() {
               _currentZoom = position.zoom;
@@ -699,7 +984,8 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
       ),
       children: [
         TileLayer(
-          urlTemplate: 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
+          urlTemplate:
+              'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
           subdomains: const ['a', 'b', 'c'],
           maxNativeZoom: 19,
           maxZoom: 19,
@@ -716,7 +1002,11 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
                     color: Colors.blue.withOpacity(0.3),
                     shape: BoxShape.circle,
                   ),
-                  child: const Icon(Icons.my_location, color: Colors.blue, size: 24),
+                  child: const Icon(
+                    Icons.my_location,
+                    color: Colors.blue,
+                    size: 24,
+                  ),
                 ),
               ),
             ],
@@ -733,12 +1023,8 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
     List<Marker> markers = [];
 
     for (var cluster in clusters) {
-      final isExpanded = _expandedClusters[cluster.center] ?? false;
-
       if (cluster.isSingleItem) {
         markers.add(_buildSingleMarker(cluster.items[0]));
-      } else if (isExpanded) {
-        markers.addAll(_buildExpandedClusterMarkers(cluster));
       } else {
         markers.add(_buildClusterMarker(cluster));
       }
@@ -748,11 +1034,12 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
   }
 
   Marker _buildSingleMarker(RecyclingItem item) {
-    final isSelected = _showArticleNavigation && 
-                      _filteredItems[_currentArticleIndex].id == item.id;
+    final isSelected =
+        _showArticleNavigation &&
+        _filteredItems[_currentArticleIndex].id == item.id;
     final status = _getItemStatus(item);
     final color = _getStatusColor(status);
-    
+
     return Marker(
       point: LatLng(item.latitude, item.longitude),
       width: isSelected ? 60 : 50,
@@ -763,9 +1050,10 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
           decoration: BoxDecoration(
             shape: BoxShape.circle,
             color: color,
-            border: isSelected
-                ? Border.all(color: Colors.white, width: 4)
-                : Border.all(color: Colors.white, width: 2),
+            border:
+                isSelected
+                    ? Border.all(color: Colors.white, width: 4)
+                    : Border.all(color: Colors.white, width: 2),
             boxShadow: [
               BoxShadow(
                 color: Colors.black.withOpacity(0.3),
@@ -793,12 +1081,8 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
       height: 70,
       child: GestureDetector(
         onTap: () {
-          setState(() {
-            _expandedClusters[cluster.center] = true;
-          });
-          if (_mapService.isMapReady(_mapController)) {
-            _mapController.move(cluster.center, min(_currentZoom + 2, 18.0));
-          }
+          // ✅ Show navigation modal instead of expanding cluster
+          _onClusterTap(cluster);
         },
         child: Container(
           decoration: BoxDecoration(
@@ -826,10 +1110,7 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
               ),
               const Text(
                 'artículos',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 9,
-                ),
+                style: TextStyle(color: Colors.white, fontSize: 9),
               ),
             ],
           ),
@@ -838,102 +1119,209 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
     );
   }
 
-  List<Marker> _buildExpandedClusterMarkers(MarkerCluster cluster) {
-    List<Marker> markers = [];
-    final itemCount = cluster.items.length;
-    const double radius = 0.0015;
+  /// ✅ Handle cluster tap - Show navigation modal
+  void _onClusterTap(MarkerCluster cluster) {
+    // Find the index of the first article in the cluster
+    final firstItem = cluster.items[0];
+    final index = _filteredItems.indexWhere((i) => i.id == firstItem.id);
 
-    for (int i = 0; i < itemCount; i++) {
-      double angle = (2 * pi * i) / itemCount;
-      double offsetLat = radius * cos(angle);
-      double offsetLng = radius * sin(angle);
-
-      LatLng position = LatLng(
-        cluster.center.latitude + offsetLat,
-        cluster.center.longitude + offsetLng,
-      );
-
-      final item = cluster.items[i];
-      final isSelected = _showArticleNavigation && 
-                        _filteredItems[_currentArticleIndex].id == item.id;
-      final status = _getItemStatus(item);
-      final color = _getStatusColor(status);
-
-      markers.add(
-        Marker(
-          point: position,
-          width: isSelected ? 60 : 50,
-          height: isSelected ? 60 : 50,
-          child: GestureDetector(
-            onTap: () => _onMarkerTap(item),
-            child: Container(
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: color,
-                border: isSelected
-                    ? Border.all(color: Colors.white, width: 4)
-                    : Border.all(color: Colors.white, width: 2),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.3),
-                    blurRadius: 8,
-                    offset: const Offset(0, 4),
-                  ),
-                ],
-              ),
-              child: Center(
-                child: Icon(
-                  _getStatusIcon(status),
-                  color: Colors.white,
-                  size: isSelected ? 28 : 24,
-                ),
-              ),
-            ),
-          ),
-        ),
-      );
-    }
-
-    markers.add(_buildCollapseMarker(cluster));
-    return markers;
-  }
-
-  Marker _buildCollapseMarker(MarkerCluster cluster) {
-    return Marker(
-      point: cluster.center,
-      width: 40,
-      height: 40,
-      child: GestureDetector(
-        onTap: () {
-          setState(() {
-            _expandedClusters[cluster.center] = false;
-          });
-        },
-        child: Container(
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: Colors.red,
-            border: Border.all(color: Colors.white, width: 2),
-          ),
-          child: const Icon(Icons.close, color: Colors.white, size: 20),
-        ),
-      ),
-    );
-  }
-
-  void _onMarkerTap(RecyclingItem item) {
-    final index = _filteredItems.indexWhere((i) => i.id == item.id);
-    
+    // Activate navigation and update index
     setState(() {
       _currentArticleIndex = index;
       _showArticleNavigation = true;
     });
-    
+
+    // ✅ Center map on the cluster
     if (_mapService.isMapReady(_mapController)) {
-      _mapController.move(LatLng(item.latitude, item.longitude), 15.0);
+      _mapController.move(cluster.center, 16.0);
     }
-    
-    _showArticleDetailModal(item);
+
+    // Show modal with navigation through the cluster's articles
+    _showClusterNavigationModal(cluster);
+
+    print('📦 Cluster tapped - ${cluster.count} articles to navigate');
+  }
+
+  /// ✅ Modal for navigating through clustered articles
+  void _showClusterNavigationModal(MarkerCluster cluster) {
+    if (!mounted) return;
+
+    final clusterItems = cluster.items;
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      isDismissible: true,
+      enableDrag: true,
+      builder:
+          (context) => _CompanyArticleNavigationModal(
+            articles: clusterItems,
+            initialIndex: 0,
+            mediaDatabase: _mediaDatabase,
+            onAssignEmployee: (item) {
+              Navigator.pop(context);
+              _showSendRequestDialog(item);
+            },
+            onAssignEmployeeApproved: (article, request) {
+              Navigator.pop(context);
+              _showAssignEmployeeDialogWithRequest(article, request);
+            },
+            onNavigateToDetails: (article) {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => DetailRecycleScreen(item: article),
+                ),
+              );
+            },
+            onArticleChange: (article) {
+              // Update map position when navigating
+              if (_mapService.isMapReady(_mapController)) {
+                _mapController.move(
+                  LatLng(article.latitude, article.longitude),
+                  16.0,
+                );
+              }
+            },
+          ),
+    ).then((_) {
+      if (mounted) {
+        setState(() {
+          _showArticleNavigation = false;
+        });
+      }
+    });
+  }
+
+  void _onMarkerTap(RecyclingItem item) {
+    final index = _filteredItems.indexWhere((i) => i.id == item.id);
+
+    // ✅ Find nearby articles within 300 meters
+    final nearbyArticles = _findNearbyArticles(item, maxDistance: 300.0);
+
+    setState(() {
+      _currentArticleIndex = index;
+      _showArticleNavigation = true;
+    });
+
+    if (_mapService.isMapReady(_mapController)) {
+      _mapController.move(LatLng(item.latitude, item.longitude), 16.0);
+    }
+
+    // ✅ Show navigation modal if multiple articles nearby, otherwise single modal
+    if (nearbyArticles.length > 1) {
+      _showArticleNavigationModal(nearbyArticles, item);
+    } else {
+      _showArticleDetailModal(item);
+    }
+  }
+
+  /// ✅ Find articles near the given article
+  List<RecyclingItem> _findNearbyArticles(
+    RecyclingItem item, {
+    required double maxDistance,
+  }) {
+    List<RecyclingItem> nearbyArticles = [item]; // Include current article
+
+    for (var otherItem in _filteredItems) {
+      if (otherItem.id == item.id) continue; // Skip same article
+
+      final distance = _calculateDistance(
+        item.latitude,
+        item.longitude,
+        otherItem.latitude,
+        otherItem.longitude,
+      );
+
+      if (distance <= maxDistance) {
+        nearbyArticles.add(otherItem);
+      }
+    }
+
+    return nearbyArticles;
+  }
+
+  /// ✅ Calculate distance between two points in meters (Haversine formula)
+  double _calculateDistance(
+    double lat1,
+    double lon1,
+    double lat2,
+    double lon2,
+  ) {
+    const double earthRadius = 6371000; // meters
+
+    final dLat = _toRadians(lat2 - lat1);
+    final dLon = _toRadians(lon2 - lon1);
+
+    final a =
+        sin(dLat / 2) * sin(dLat / 2) +
+        cos(_toRadians(lat1)) *
+            cos(_toRadians(lat2)) *
+            sin(dLon / 2) *
+            sin(dLon / 2);
+
+    final c = 2 * atan2(sqrt(a), sqrt(1 - a));
+    return earthRadius * c;
+  }
+
+  double _toRadians(double degrees) {
+    return degrees * pi / 180;
+  }
+
+  /// ✅ Show article navigation modal (with anterior/siguiente buttons)
+  void _showArticleNavigationModal(
+    List<RecyclingItem> articles,
+    RecyclingItem currentItem,
+  ) {
+    if (!mounted) return;
+
+    final currentIndex = articles.indexWhere((a) => a.id == currentItem.id);
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      isDismissible: true,
+      enableDrag: true,
+      builder:
+          (context) => _CompanyArticleNavigationModal(
+            articles: articles,
+            initialIndex: currentIndex,
+            mediaDatabase: _mediaDatabase,
+            onAssignEmployee: (item) {
+              Navigator.pop(context);
+              _showSendRequestDialog(item);
+            },
+            onAssignEmployeeApproved: (article, request) {
+              Navigator.pop(context);
+              _showAssignEmployeeDialogWithRequest(article, request);
+            },
+            onNavigateToDetails: (article) {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => DetailRecycleScreen(item: article),
+                ),
+              );
+            },
+            onArticleChange: (article) {
+              // Update map position when navigating
+              if (_mapService.isMapReady(_mapController)) {
+                _mapController.move(
+                  LatLng(article.latitude, article.longitude),
+                  16.0,
+                );
+              }
+            },
+          ),
+    ).then((_) {
+      if (mounted) {
+        setState(() {
+          _showArticleNavigation = false;
+        });
+      }
+    });
   }
 
   void _showArticleDetailModal(RecyclingItem item) async {
@@ -945,26 +1333,27 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
       isScrollControlled: true,
       isDismissible: true,
       enableDrag: true,
-      builder: (context) => _CompanyArticleModal(
-        item: item,
-        mediaDatabase: _mediaDatabase,
-        onAssignEmployee: () {
-          Navigator.pop(context);
-          _showSendRequestDialog(item);
-        },
-        onAssignEmployeeApproved: (article, request) {
-          Navigator.pop(context);
-          _showAssignEmployeeDialogWithRequest(article, request);
-        },
-        onNavigateToDetails: (RecyclingItem article) {
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (context) => DetailRecycleScreen(item: article),
-            ),
-          );
-        },
-      ),
+      builder:
+          (context) => _CompanyArticleModal(
+            item: item,
+            mediaDatabase: _mediaDatabase,
+            onAssignEmployee: () {
+              Navigator.pop(context);
+              _showSendRequestDialog(item);
+            },
+            onAssignEmployeeApproved: (article, request) {
+              Navigator.pop(context);
+              _showAssignEmployeeDialogWithRequest(article, request);
+            },
+            onNavigateToDetails: (RecyclingItem article) {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => DetailRecycleScreen(item: article),
+                ),
+              );
+            },
+          ),
     ).then((_) {
       if (mounted) {
         setState(() {
@@ -1031,7 +1420,7 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
           const SizedBox(height: 10),
           FloatingActionButton(
             heroTag: 'location',
-            onPressed: _goToUserLocation,
+            onPressed: _showLocationMenu,
             backgroundColor: const Color(0xFF2D8A8A),
             child: const Icon(Icons.my_location, color: Colors.white),
           ),
@@ -1040,116 +1429,422 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
     );
   }
 
+  /// ✅ Mostrar menú de opciones de ubicación
+  void _showLocationMenu() {
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder:
+          (context) => Container(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Icon(Icons.location_on, color: Color(0xFF2D8A8A)),
+                    const SizedBox(width: 12),
+                    const Text(
+                      'Opciones de Ubicación',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        color: Color(0xFF2D8A8A),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 20),
+                ListTile(
+                  leading: const CircleAvatar(
+                    backgroundColor: Color(0xFF2D8A8A),
+                    child: Icon(Icons.my_location, color: Colors.white),
+                  ),
+                  title: const Text(
+                    'Ir a mi ubicación',
+                    style: TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  subtitle: const Text('Centrar mapa en mi posición actual'),
+                  onTap: () {
+                    Navigator.pop(context);
+                    _goToUserLocation();
+                  },
+                ),
+                ListTile(
+                  leading: CircleAvatar(
+                    backgroundColor: const Color(0xFF2D8A8A),
+                    child: Icon(
+                      _showUserMarker ? Icons.visibility : Icons.visibility_off,
+                      color: Colors.white,
+                    ),
+                  ),
+                  title: const Text(
+                    'Ocultar mi marcador',
+                    style: TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  subtitle: const Text(
+                    'El marcador azul desaparecerá del mapa',
+                  ),
+                  trailing: Switch(
+                    value: _showUserMarker,
+                    onChanged: (value) {
+                      setState(() {
+                        _showUserMarker = value;
+                      });
+                      Navigator.pop(context);
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            _showUserMarker
+                                ? '✅ Marcador visible'
+                                : '❌ Marcador oculto',
+                          ),
+                          duration: const Duration(seconds: 1),
+                          backgroundColor:
+                              _showUserMarker ? Colors.green : Colors.grey,
+                        ),
+                      );
+                    },
+                    activeColor: const Color(0xFF2D8A8A),
+                  ),
+                ),
+                const SizedBox(height: 16),
+              ],
+            ),
+          ),
+    );
+  }
+
+  /// ✅ Ir a la ubicación del usuario
   Future<void> _goToUserLocation() async {
+    // ✅ Primero verificar el estado del GPS
     await _checkLocationServices();
-    
+
+    // Si GPS está deshabilitado o sin permisos, mostrar diálogo de habilitación
     if (!_isLocationServiceEnabled || !_hasLocationPermission) {
+      _showEnableLocationDialog();
+      return;
+    }
+
+    if (_hasUserLocation && _userLocation != null) {
+      // Ya tenemos la ubicación, solo centrar el mapa
+      if (_mapService.isMapReady(_mapController)) {
+        _mapController.move(_userLocation!, 16.0);
+      }
+
       if (mounted) {
-        showDialog(
-          context: context,
-          builder: (context) => AlertDialog(
-            title: const Text('Ubicación no disponible'),
-            content: const Text('Por favor, activa la ubicación en la configuración.'),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('OK'),
-              ),
-            ],
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('📍 Centrado en tu ubicación'),
+            duration: Duration(seconds: 1),
+            backgroundColor: Colors.green,
           ),
         );
       }
-      return;
-    }
-    
-    if (_hasUserLocation && _userLocation != null) {
-      if (_mapService.isMapReady(_mapController)) {
-        _mapController.move(_userLocation!, 15.0);
-      }
     } else {
+      // No tenemos ubicación, intentar obtenerla
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('📍 Obteniendo tu ubicación...'),
+            duration: Duration(seconds: 2),
+            backgroundColor: Color(0xFF2D8A8A),
+          ),
+        );
+      }
+
       await _loadUserLocation();
+
+      if (_hasUserLocation && _userLocation != null && mounted) {
+        if (_mapService.isMapReady(_mapController)) {
+          _mapController.move(_userLocation!, 16.0);
+        }
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('✅ Ubicación encontrada'),
+            duration: Duration(seconds: 1),
+            backgroundColor: Colors.green,
+          ),
+        );
+      } else if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('❌ No se pudo obtener la ubicación'),
+            duration: Duration(seconds: 2),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     }
   }
 
+  /// ✅ Mostrar diálogo para activar ubicación
+  void _showEnableLocationDialog() {
+    if (!mounted || ModalRoute.of(context)?.isCurrent != true) {
+      return;
+    }
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+          ),
+          title: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF2D8A8A).withOpacity(0.2),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.location_on,
+                  color: Color(0xFF2D8A8A),
+                  size: 28,
+                ),
+              ),
+              const SizedBox(width: 12),
+              const Expanded(
+                child: Text(
+                  'Habilitar ubicación',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                ),
+              ),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Para una mejor experiencia, tu dispositivo necesita usar la ubicación.',
+                style: TextStyle(fontSize: 15, height: 1.4),
+              ),
+              const SizedBox(height: 16),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade100,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(
+                          Icons.check_circle,
+                          color: Colors.green.shade600,
+                          size: 20,
+                        ),
+                        const SizedBox(width: 8),
+                        const Expanded(
+                          child: Text(
+                            'Ver tu ubicación en el mapa',
+                            style: TextStyle(fontSize: 13),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Icon(
+                          Icons.check_circle,
+                          color: Colors.green.shade600,
+                          size: 20,
+                        ),
+                        const SizedBox(width: 8),
+                        const Expanded(
+                          child: Text(
+                            'Asignar tareas a empleados cercanos',
+                            style: TextStyle(fontSize: 13),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              if (!_isLocationServiceEnabled) ...[
+                const SizedBox(height: 12),
+                Text(
+                  '⚠️ GPS está desactivado',
+                  style: TextStyle(
+                    color: Colors.orange.shade700,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+              if (!_hasLocationPermission) ...[
+                const SizedBox(height: 12),
+                Text(
+                  '⚠️ Permisos de ubicación no otorgados',
+                  style: TextStyle(
+                    color: Colors.orange.shade700,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.of(context).pop();
+                print('❌ Usuario rechazó activar ubicación');
+              },
+              child: Text(
+                'No, gracias',
+                style: TextStyle(color: Colors.grey.shade600),
+              ),
+            ),
+            ElevatedButton(
+              onPressed: () async {
+                Navigator.of(context).pop();
+                print('✅ Usuario quiere activar ubicación');
+
+                // ✅ Solicitar servicio de GPS primero
+                if (!_isLocationServiceEnabled) {
+                  final serviceEnabled =
+                      await _locationService.requestLocationService();
+                  if (!serviceEnabled) {
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text(
+                            '⚠️ GPS no activado. Por favor, activa el GPS manualmente',
+                          ),
+                          duration: Duration(seconds: 3),
+                          backgroundColor: Colors.orange,
+                        ),
+                      );
+                    }
+                    return;
+                  }
+                }
+
+                // ✅ Solicitar permisos de ubicación
+                if (!_hasLocationPermission) {
+                  final permissionGranted =
+                      await _locationService.requestLocationPermission();
+                  if (!permissionGranted) {
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text(
+                            '⚠️ Permisos denegados. Por favor, otorga permisos de ubicación',
+                          ),
+                          duration: Duration(seconds: 3),
+                          backgroundColor: Colors.orange,
+                        ),
+                      );
+                    }
+                    return;
+                  }
+                }
+
+                // Verificar estado actualizado
+                await _checkLocationServices();
+
+                // Intentar cargar ubicación
+                if (_isLocationServiceEnabled && _hasLocationPermission) {
+                  await _loadUserLocation();
+
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('✅ Ubicación activada correctamente'),
+                        duration: Duration(seconds: 2),
+                        backgroundColor: Colors.green,
+                      ),
+                    );
+                  }
+                }
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF2D8A8A),
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 24,
+                  vertical: 12,
+                ),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ),
+              child: const Text('Activar'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   Widget _buildTopBar() {
+    // Count only published articles (excluding completed tasks)
+    final publishedCount =
+        _filteredItems.where((item) {
+          final status = _getItemStatus(item);
+          return status != 'recogidos'; // Exclude completed/recogidos
+        }).length;
+
     return Positioned(
       top: 0,
       left: 0,
       right: 0,
       child: Container(
-        padding: const EdgeInsets.fromLTRB(16, 50, 16, 16),
         decoration: BoxDecoration(
           gradient: LinearGradient(
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
             colors: [
-              Colors.black.withOpacity(0.7),
+              Colors.black.withOpacity(0.4),
+              Colors.black.withOpacity(0.2),
               Colors.transparent,
             ],
           ),
         ),
-        child: Row(
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'Mapa de Artículos',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 24,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  Text(
-                    '${_filteredItems.length} artículos',
-                    style: const TextStyle(color: Colors.white70, fontSize: 14),
-                  ),
-                ],
-              ),
-            ),
-            // ✅ Notification bell with badge
-            Stack(
-              clipBehavior: Clip.none,
+        child: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                IconButton(
-                  icon: const Icon(Icons.notifications_outlined, color: Colors.white),
-                  onPressed: _navigateToNotifications,
-                  tooltip: 'Notificaciones',
+                const SizedBox(height: 8),
+                // Status indicators below
+                StatusIndicators(
+                  isDeviceConnected: _isConnected,
+                  isLocationServiceEnabled: _isLocationServiceEnabled,
+                  hasLocationPermission: _hasLocationPermission,
+                  hasCheckedLocation: _hasCheckedLocation,
+                  onGpsTap: _checkLocationServices,
+                  onRefreshTap: _refreshData,
+                  notificationCount: _approvedRequestCount,
+                  onNotificationTap: _navigateToNotifications,
                 ),
-                if (_approvedRequestCount > 0)
-                  Positioned(
-                    right: 8,
-                    top: 8,
-                    child: Container(
-                      padding: const EdgeInsets.all(4),
-                      decoration: const BoxDecoration(
-                        color: Colors.red,
-                        shape: BoxShape.circle,
-                      ),
-                      constraints: const BoxConstraints(
-                        minWidth: 18,
-                        minHeight: 18,
-                      ),
-                      child: Text(
-                        _approvedRequestCount > 99 ? '99+' : '$_approvedRequestCount',
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 10,
-                          fontWeight: FontWeight.bold,
-                        ),
-                        textAlign: TextAlign.center,
-                      ),
-                    ),
+                const SizedBox(height: 8),
+                // Article count at the top
+                Text(
+                  'Total $publishedCount artículos',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    shadows: [Shadow(color: Colors.black87, blurRadius: 4)],
                   ),
+                ),
               ],
             ),
-            IconButton(
-              icon: const Icon(Icons.refresh, color: Colors.white),
-              onPressed: _refreshData,
-            ),
-          ],
+          ),
         ),
       ),
     );
@@ -1164,7 +1859,10 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
           children: [
             CircularProgressIndicator(color: Color(0xFF2D8A8A)),
             SizedBox(height: 16),
-            Text('Cargando artículos...'),
+            Text(
+              'Cargando mapa...',
+              style: TextStyle(color: Color(0xFF2D8A8A), fontSize: 16),
+            ),
           ],
         ),
       ),
@@ -1196,14 +1894,9 @@ class _CompanyMapScreenState extends State<CompanyMapScreen> with WidgetsBinding
 // Filter Dialog Widget
 class _FilterDialog extends StatefulWidget {
   final Set<String> selectedStatuses;
-  final String sortBy;
-  final Function(Set<String>, String) onApply;
+  final Function(Set<String>) onApply;
 
-  const _FilterDialog({
-    required this.selectedStatuses,
-    required this.sortBy,
-    required this.onApply,
-  });
+  const _FilterDialog({required this.selectedStatuses, required this.onApply});
 
   @override
   State<_FilterDialog> createState() => _FilterDialogState();
@@ -1211,13 +1904,11 @@ class _FilterDialog extends StatefulWidget {
 
 class _FilterDialogState extends State<_FilterDialog> {
   late Set<String> _tempStatuses;
-  late String _tempSort;
 
   @override
   void initState() {
     super.initState();
     _tempStatuses = Set.from(widget.selectedStatuses);
-    _tempSort = widget.sortBy;
   }
 
   @override
@@ -1246,26 +1937,27 @@ class _FilterDialogState extends State<_FilterDialog> {
               _buildStatusChip('En Espera', 'en_espera', Colors.purple),
               _buildStatusChip('Sin Asignar', 'sin_asignar', Colors.amber),
               _buildStatusChip('En Proceso', 'en_proceso', Colors.orange),
-              _buildStatusChip('Recogidos', 'recogidos', Colors.green),
-              _buildStatusChip('Vencidos', 'vencidos', Colors.red),
+              // ✅ Recogidos and Vencidos removed - they show in profile
             ],
           ),
-          const SizedBox(height: 20),
-          const Text('Ordenar por:', style: TextStyle(fontWeight: FontWeight.bold)),
-          const SizedBox(height: 10),
-          DropdownButton<String>(
-            value: _tempSort,
-            isExpanded: true,
-            items: const [
-              DropdownMenuItem(value: 'recent', child: Text('Más recientes')),
-              DropdownMenuItem(value: 'oldest', child: Text('Más antiguos')),
-              DropdownMenuItem(value: 'status', child: Text('Por estado')),
-            ],
-            onChanged: (value) {
-              setState(() {
-                _tempSort = value!;
-              });
-            },
+          const SizedBox(height: 15),
+          // ✅ Clear filters button
+          Center(
+            child: TextButton.icon(
+              onPressed: () {
+                setState(() {
+                  _tempStatuses = {
+                    'publicados',
+                    'en_espera',
+                    'sin_asignar',
+                    'en_proceso',
+                  };
+                });
+              },
+              icon: const Icon(Icons.clear_all),
+              label: const Text('Limpiar filtros'),
+              style: TextButton.styleFrom(foregroundColor: Colors.orange),
+            ),
           ),
           const SizedBox(height: 20),
           Row(
@@ -1280,7 +1972,7 @@ class _FilterDialogState extends State<_FilterDialog> {
               Expanded(
                 child: ElevatedButton(
                   onPressed: () {
-                    widget.onApply(_tempStatuses, _tempSort);
+                    widget.onApply(_tempStatuses);
                     Navigator.pop(context);
                   },
                   style: ElevatedButton.styleFrom(
@@ -1350,87 +2042,109 @@ class _AssignEmployeeDialogState extends State<_AssignEmployeeDialog> {
   void _showConfirmationDialog(Map<String, dynamic> employee) {
     final user = employee['users'] as Map<String, dynamic>?;
     final name = user?['names'] ?? 'Empleado';
-    
-    final scheduledDay = widget.approvedRequest.scheduledDay ?? 'No especificado';
+
+    final scheduledDay =
+        widget.approvedRequest.scheduledDay ?? 'No especificado';
     final startTime = widget.approvedRequest.scheduledStartTime;
     final endTime = widget.approvedRequest.scheduledEndTime;
-    final formattedStartTime = startTime != null ? _formatTime(startTime) : 'No especificado';
-    final formattedEndTime = endTime != null ? _formatTime(endTime) : 'No especificado';
+    final formattedStartTime =
+        startTime != null ? _formatTime(startTime) : 'No especificado';
+    final formattedEndTime =
+        endTime != null ? _formatTime(endTime) : 'No especificado';
 
     showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Confirmar Asignación'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Asignar tarea a: $name',
-              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-            ),
-            const SizedBox(height: 16),
-            const Divider(),
-            const SizedBox(height: 12),
-            Row(
+      builder:
+          (ctx) => AlertDialog(
+            title: const Text('Confirmar Asignación'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Icon(Icons.article, color: Color(0xFF2D8A8A), size: 20),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    widget.item.title,
-                    style: const TextStyle(fontSize: 15),
+                Text(
+                  'Asignar tarea a: $name',
+                  style: const TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 16,
                   ),
                 ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                const Icon(Icons.calendar_today, color: Color(0xFF2D8A8A), size: 20),
-                const SizedBox(width: 8),
-                Text(
-                  'Día: $scheduledDay',
-                  style: const TextStyle(fontSize: 15),
+                const SizedBox(height: 16),
+                const Divider(),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    const Icon(
+                      Icons.article,
+                      color: Color(0xFF2D8A8A),
+                      size: 20,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        widget.item.title,
+                        style: const TextStyle(fontSize: 15),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    const Icon(
+                      Icons.calendar_today,
+                      color: Color(0xFF2D8A8A),
+                      size: 20,
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Día: $scheduledDay',
+                      style: const TextStyle(fontSize: 15),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    const Icon(
+                      Icons.access_time,
+                      color: Color(0xFF2D8A8A),
+                      size: 20,
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Horario: $formattedStartTime - $formattedEndTime',
+                      style: const TextStyle(fontSize: 15),
+                    ),
+                  ],
                 ),
               ],
             ),
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                const Icon(Icons.access_time, color: Color(0xFF2D8A8A), size: 20),
-                const SizedBox(width: 8),
-                Text(
-                  'Horario: $formattedStartTime - $formattedEndTime',
-                  style: const TextStyle(fontSize: 15),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Cancelar'),
+              ),
+              ElevatedButton(
+                onPressed: () {
+                  Navigator.pop(ctx); // Close confirmation dialog
+                  Navigator.pop(context); // Close employee list dialog
+                  final employeeId = employee['idEmployee'] as int?;
+                  if (employeeId != null) {
+                    widget.onAssign(employeeId);
+                  } else {
+                    print('❌ Error: employeeId is null');
+                  }
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF2D8A8A),
                 ),
-              ],
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancelar'),
+                child: const Text(
+                  'Asignar',
+                  style: TextStyle(color: Colors.white),
+                ),
+              ),
+            ],
           ),
-          ElevatedButton(
-            onPressed: () {
-              Navigator.pop(ctx); // Close confirmation dialog
-              Navigator.pop(context); // Close employee list dialog
-              final employeeId = employee['idEmployee'] as int?;
-              if (employeeId != null) {
-                widget.onAssign(employeeId);
-              } else {
-                print('❌ Error: employeeId is null');
-              }
-            },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF2D8A8A),
-            ),
-            child: const Text('Asignar', style: TextStyle(color: Colors.white)),
-          ),
-        ],
-      ),
     );
   }
 
@@ -1453,7 +2167,10 @@ class _AssignEmployeeDialogState extends State<_AssignEmployeeDialog> {
           const SizedBox(height: 20),
           Text('Artículo: ${widget.item.title}'),
           const SizedBox(height: 20),
-          const Text('Selecciona un empleado:', style: TextStyle(fontWeight: FontWeight.bold)),
+          const Text(
+            'Selecciona un empleado:',
+            style: TextStyle(fontWeight: FontWeight.bold),
+          ),
           const SizedBox(height: 10),
           if (widget.employees.isEmpty)
             const Center(
@@ -1467,7 +2184,7 @@ class _AssignEmployeeDialogState extends State<_AssignEmployeeDialog> {
               final user = employee['users'] as Map<String, dynamic>?;
               final name = user?['names'] ?? 'Empleado';
               final email = user?['email'] ?? '';
-              
+
               return ListTile(
                 leading: CircleAvatar(
                   backgroundColor: const Color(0xFF2D8A8A),
@@ -1489,7 +2206,8 @@ class _CompanyArticleModal extends StatefulWidget {
   final RecyclingItem item;
   final MediaDatabase mediaDatabase;
   final VoidCallback onAssignEmployee;
-  final Function(RecyclingItem, Request) onAssignEmployeeApproved; // ✅ Add callback with request
+  final Function(RecyclingItem, Request)
+  onAssignEmployeeApproved; // ✅ Add callback with request
   final Function(RecyclingItem) onNavigateToDetails;
 
   const _CompanyArticleModal({
@@ -1510,21 +2228,25 @@ class _CompanyArticleModalState extends State<_CompanyArticleModal> {
   Request? _existingRequest; // ✅ Track request status
   bool _isLoadingRequest = false; // ✅ Loading request status
   int? _companyId;
+  Map<String, dynamic>? _existingTask; // ✅ Track task status
+  bool _isLoadingTask = false; // ✅ Loading task status
 
   @override
   void initState() {
     super.initState();
     _loadPhoto();
-    _loadRequestStatus(); // ✅ Load request status
+    _loadRequestStatus(); // ✅ Load request status (this will also load task status)
   }
 
   Future<void> _loadPhoto() async {
     setState(() {
       isLoadingPhoto = true;
     });
-    
+
     try {
-      final photo = await widget.mediaDatabase.getMainPhotoByPattern('articles/${widget.item.id}');
+      final photo = await widget.mediaDatabase.getMainPhotoByPattern(
+        'articles/${widget.item.id}',
+      );
       if (mounted) {
         setState(() {
           currentPhoto = photo;
@@ -1549,27 +2271,29 @@ class _CompanyArticleModalState extends State<_CompanyArticleModal> {
       final authService = AuthService();
       final usersDatabase = UsersDatabase();
       final email = authService.getCurrentUserEmail();
-      
+
       if (email != null) {
         final user = await usersDatabase.getUserByEmail(email);
-        
+
         if (user != null) {
           // Get company ID
-          var companyData = await Supabase.instance.client
-              .from('company')
-              .select('idCompany')
-              .eq('adminUserID', user.id!)
-              .limit(1)
-              .maybeSingle();
-          
+          var companyData =
+              await Supabase.instance.client
+                  .from('company')
+                  .select('idCompany')
+                  .eq('adminUserID', user.id!)
+                  .limit(1)
+                  .maybeSingle();
+
           if (companyData == null) {
-            companyData = await Supabase.instance.client
-                .from('employees')
-                .select('companyID')
-                .eq('userID', user.id!)
-                .limit(1)
-                .maybeSingle();
-            
+            companyData =
+                await Supabase.instance.client
+                    .from('employees')
+                    .select('companyID')
+                    .eq('userID', user.id!)
+                    .limit(1)
+                    .maybeSingle();
+
             if (companyData != null) {
               _companyId = companyData['companyID'] as int?;
             }
@@ -1577,22 +2301,27 @@ class _CompanyArticleModalState extends State<_CompanyArticleModal> {
             _companyId = companyData['idCompany'] as int?;
           }
 
-          // Check for existing request
+          // Check for existing ACTIVE request (state=1)
           if (_companyId != null) {
-            final existingRequest = await Supabase.instance.client
-                .from('request')
-                .select()
-                .eq('articleID', widget.item.id)
-                .eq('companyID', _companyId!)
-                .order('lastUpdate', ascending: false)
-                .limit(1)
-                .maybeSingle();
+            final existingRequest =
+                await Supabase.instance.client
+                    .from('request')
+                    .select()
+                    .eq('articleID', widget.item.id)
+                    .eq('companyID', _companyId!)
+                    .eq('state', 1)
+                    .order('lastUpdate', ascending: false)
+                    .limit(1)
+                    .maybeSingle();
 
             if (existingRequest != null && mounted) {
               setState(() {
                 _existingRequest = Request.fromMap(existingRequest);
               });
             }
+
+            // ✅ Load task status after we have companyId
+            await _loadTaskStatus();
           }
         }
       }
@@ -1601,6 +2330,45 @@ class _CompanyArticleModalState extends State<_CompanyArticleModal> {
     } finally {
       if (mounted) {
         setState(() => _isLoadingRequest = false);
+      }
+    }
+  }
+
+  /// ✅ Load task status for this article
+  Future<void> _loadTaskStatus() async {
+    if (_isLoadingTask) return; // Prevent duplicate calls
+    setState(() => _isLoadingTask = true);
+
+    try {
+      if (_companyId != null) {
+        final existingTask =
+            await Supabase.instance.client
+                .from('tasks')
+                .select()
+                .eq('articleID', widget.item.id)
+                .eq('companyID', _companyId!)
+                .eq('state', 1)
+                .neq('workflowStatus', 'vencido')
+                .order('assignedDate', ascending: false)
+                .limit(1)
+                .maybeSingle();
+
+        if (existingTask != null && mounted) {
+          setState(() {
+            _existingTask = existingTask;
+          });
+          print(
+            '✅ Found task for article ${widget.item.id}: ${existingTask['workflowStatus']}',
+          );
+        } else {
+          print('ℹ️ No task found for article ${widget.item.id}');
+        }
+      }
+    } catch (e) {
+      print('❌ Error loading task status: $e');
+    } finally {
+      if (mounted) {
+        setState(() => _isLoadingTask = false);
       }
     }
   }
@@ -1633,179 +2401,421 @@ class _CompanyArticleModalState extends State<_CompanyArticleModal> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                if (isLoadingPhoto)
-                  const Center(child: CircularProgressIndicator())
-                else if (currentPhoto?.url != null)
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(12),
-                    child: Image.network(
-                      currentPhoto!.url!,
-                      height: 200,
-                      width: double.infinity,
-                      fit: BoxFit.cover,
-                    ),
-                  )
-                else
-                  _buildPlaceholder(),
-                const SizedBox(height: 16),
-                Text(
-                  widget.item.title,
-                  style: const TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                
-                // Category
-                Row(
-                  children: [
-                    Icon(
-                      CategoryUtils.getCategoryIcon(widget.item.categoryName),
-                      size: 20,
-                      color: const Color(0xFF2D8A8A),
-                    ),
-                    const SizedBox(width: 8),
-                    Text(
-                      widget.item.categoryName,
-                      style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w500,
-                        color: Color(0xFF2D8A8A),
+                  if (isLoadingPhoto)
+                    const Center(child: CircularProgressIndicator())
+                  else if (currentPhoto?.url != null)
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(12),
+                      child: Image.network(
+                        currentPhoto!.url!,
+                        height: 200,
+                        width: double.infinity,
+                        fit: BoxFit.cover,
                       ),
+                    )
+                  else
+                    _buildPlaceholder(),
+                  const SizedBox(height: 16),
+                  Text(
+                    widget.item.title,
+                    style: const TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
                     ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                
-                // Condition
-                if (widget.item.condition != null)
+                  ),
+                  const SizedBox(height: 8),
+
+                  // Category
                   Row(
                     children: [
-                      Icon(Icons.info_outline, size: 16, color: Colors.grey[600]),
+                      Icon(
+                        CategoryUtils.getCategoryIcon(widget.item.categoryName),
+                        size: 20,
+                        color: const Color(0xFF2D8A8A),
+                      ),
                       const SizedBox(width: 8),
                       Text(
-                        'Condición: ${widget.item.condition}',
-                        style: TextStyle(color: Colors.grey[700], fontSize: 14),
+                        widget.item.categoryName,
+                        style: const TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w500,
+                          color: Color(0xFF2D8A8A),
+                        ),
                       ),
                     ],
                   ),
-                if (widget.item.condition != null) const SizedBox(height: 8),
-                
-                // Description
-                if (widget.item.description != null)
-                  Text(
-                    widget.item.description!,
-                    style: TextStyle(color: Colors.grey[600]),
-                    maxLines: 3,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                if (widget.item.description != null) const SizedBox(height: 12),
-                
-                // Divider
-                Divider(color: Colors.grey[300]),
-                const SizedBox(height: 12),
-                
-                // Owner info
-                Row(
-                  children: [
-                    Icon(Icons.person_outline, size: 16, color: Colors.grey[600]),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        'Propietario: ${widget.item.userName}',
-                        style: TextStyle(color: Colors.grey[700], fontSize: 14),
+                  const SizedBox(height: 8),
+
+                  // Condition
+                  if (widget.item.condition != null)
+                    Row(
+                      children: [
+                        Icon(
+                          Icons.info_outline,
+                          size: 16,
+                          color: Colors.grey[600],
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          'Condición: ${widget.item.condition}',
+                          style: TextStyle(
+                            color: Colors.grey[700],
+                            fontSize: 14,
+                          ),
+                        ),
+                      ],
+                    ),
+                  if (widget.item.condition != null) const SizedBox(height: 8),
+
+                  // Description
+                  if (widget.item.description != null)
+                    Text(
+                      widget.item.description!,
+                      style: TextStyle(color: Colors.grey[600]),
+                      maxLines: 3,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  if (widget.item.description != null)
+                    const SizedBox(height: 12),
+
+                  // ✅ Task status badge (similar to employee view in detail_recycle_screen)
+                  if (_existingTask != null &&
+                      _existingTask!['workflowStatus'] != null) ...[
+                    Container(
+                      margin: const EdgeInsets.only(bottom: 16),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 12,
+                      ),
+                      decoration: BoxDecoration(
+                        color:
+                            _existingTask!['workflowStatus'] == 'completado'
+                                ? Colors.green.shade50
+                                : (_existingTask!['workflowStatus'] ==
+                                        'sin_asignar' ||
+                                    _existingTask!['employeeID'] == null)
+                                ? const Color(
+                                  0xFFFFF9C4,
+                                ) // Light yellow matching filter
+                                : Colors.amber.shade50,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color:
+                              _existingTask!['workflowStatus'] == 'completado'
+                                  ? Colors.green.shade200
+                                  : (_existingTask!['workflowStatus'] ==
+                                          'sin_asignar' ||
+                                      _existingTask!['employeeID'] == null)
+                                  ? const Color(
+                                    0xFFFDD835,
+                                  ) // Yellow matching filter
+                                  : Colors.amber.shade200,
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color:
+                                  _existingTask!['workflowStatus'] ==
+                                          'completado'
+                                      ? Colors.green
+                                      : (_existingTask!['workflowStatus'] ==
+                                              'sin_asignar' ||
+                                          _existingTask!['employeeID'] == null)
+                                      ? const Color(
+                                        0xFFFDD835,
+                                      ) // Yellow matching filter
+                                      : Colors.amber,
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Icon(
+                              _existingTask!['workflowStatus'] == 'completado'
+                                  ? Icons.check_circle_outline
+                                  : (_existingTask!['workflowStatus'] ==
+                                          'sin_asignar' ||
+                                      _existingTask!['employeeID'] == null)
+                                  ? Icons.person_add_outlined
+                                  : Icons.work_outline,
+                              color: Colors.white,
+                              size: 20,
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  _existingTask!['workflowStatus'] ==
+                                          'completado'
+                                      ? 'Completado'
+                                      : (_existingTask!['workflowStatus'] ==
+                                              'sin_asignar' ||
+                                          _existingTask!['employeeID'] == null)
+                                      ? 'Sin Asignar'
+                                      : 'En Proceso',
+                                  style: TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.bold,
+                                    color:
+                                        _existingTask!['workflowStatus'] ==
+                                                'completado'
+                                            ? Colors.green
+                                            : (_existingTask!['workflowStatus'] ==
+                                                    'sin_asignar' ||
+                                                _existingTask!['employeeID'] ==
+                                                    null)
+                                            ? const Color(
+                                              0xFFF57F17,
+                                            ) // Dark yellow/amber for text
+                                            : Colors.amber,
+                                  ),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  _existingTask!['workflowStatus'] ==
+                                          'completado'
+                                      ? 'Esta tarea ha sido completada'
+                                      : (_existingTask!['workflowStatus'] ==
+                                              'sin_asignar' ||
+                                          _existingTask!['employeeID'] == null)
+                                      ? 'Esperando asignación de empleado'
+                                      : 'Esta tarea está en progreso',
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    color: Colors.grey[700],
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                   ],
-                ),
-                const SizedBox(height: 8),
-                
-                // Location
-                Row(
-                  children: [
-                    Icon(Icons.location_on, size: 16, color: Colors.grey[600]),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        widget.item.address,
-                        style: TextStyle(color: Colors.grey[600], fontSize: 14),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                
-                // Availability
-                Row(
-                  children: [
-                    Icon(Icons.access_time, size: 16, color: Colors.grey[600]),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        '${widget.item.availableDays} • ${widget.item.availableTimeStart} - ${widget.item.availableTimeEnd}',
-                        style: TextStyle(color: Colors.grey[700], fontSize: 14),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 20),
-                
-                // Action buttons
-                if (_isLoadingRequest)
-                  const Center(
-                    child: CircularProgressIndicator(
-                      color: Color(0xFF2D8A8A),
-                    ),
-                  )
-                else
+
+                  // Divider
+                  Divider(color: Colors.grey[300]),
+                  const SizedBox(height: 12),
+
+                  // Owner info
                   Row(
                     children: [
-                      // View Details button
+                      Icon(
+                        Icons.person_outline,
+                        size: 16,
+                        color: Colors.grey[600],
+                      ),
+                      const SizedBox(width: 8),
                       Expanded(
-                        child: OutlinedButton.icon(
-                          onPressed: () {
-                            Navigator.pop(context);
-                            widget.onNavigateToDetails(widget.item);
-                          },
-                          icon: const Icon(Icons.info_outline),
-                          label: const Text('Ver Detalles'),
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: const Color(0xFF2D8A8A),
-                            side: const BorderSide(color: Color(0xFF2D8A8A)),
-                            padding: const EdgeInsets.symmetric(vertical: 16),
+                        child: Text(
+                          'Propietario: ${widget.item.userName}',
+                          style: TextStyle(
+                            color: Colors.grey[700],
+                            fontSize: 14,
                           ),
                         ),
                       ),
-                      const SizedBox(width: 12),
-                      // Dynamic button based on request status
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+
+                  // Location
+                  Row(
+                    children: [
+                      Icon(
+                        Icons.location_on,
+                        size: 16,
+                        color: Colors.grey[600],
+                      ),
+                      const SizedBox(width: 8),
                       Expanded(
-                        child: _buildActionButton(),
+                        child: Text(
+                          widget.item.address,
+                          style: TextStyle(
+                            color: Colors.grey[600],
+                            fontSize: 14,
+                          ),
+                        ),
                       ),
                     ],
                   ),
-              ],
+                  const SizedBox(height: 8),
+
+                  // Availability
+                  Row(
+                    children: [
+                      Icon(
+                        Icons.access_time,
+                        size: 16,
+                        color: Colors.grey[600],
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          '${widget.item.availableDays} • ${widget.item.availableTimeStart} - ${widget.item.availableTimeEnd}',
+                          style: TextStyle(
+                            color: Colors.grey[700],
+                            fontSize: 14,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 20),
+
+                  // Action buttons
+                  if (_isLoadingRequest)
+                    const Center(
+                      child: CircularProgressIndicator(
+                        color: Color(0xFF2D8A8A),
+                      ),
+                    )
+                  else
+                    Row(
+                      children: [
+                        // View Details button
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: () {
+                              Navigator.pop(context);
+                              widget.onNavigateToDetails(widget.item);
+                            },
+                            icon: const Icon(Icons.info_outline),
+                            label: const Text('Ver Detalles'),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: const Color(0xFF2D8A8A),
+                              side: const BorderSide(color: Color(0xFF2D8A8A)),
+                              padding: const EdgeInsets.symmetric(vertical: 16),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        // Dynamic button based on request status
+                        Expanded(child: _buildActionButton()),
+                      ],
+                    ),
+                ],
+              ),
             ),
           ),
-        ),
         ],
       ),
     );
   }
 
-  /// ✅ Build action button based on request status
+  /// ✅ Build action button based on request status and task status
   Widget _buildActionButton() {
+    // ✅ Check if task exists
+    if (_existingTask != null) {
+      final workflowStatus = _existingTask!['workflowStatus'] as String?;
+      final employeeId = _existingTask!['employeeID'] as int?;
+
+      print(
+        '🔍 First Modal - Task status: $workflowStatus, employeeId: $employeeId',
+      );
+
+      if (workflowStatus == 'completado') {
+        // Task completed - show completed status (disabled)
+        return Container(
+          padding: const EdgeInsets.symmetric(vertical: 16),
+          decoration: BoxDecoration(
+            color: Colors.green.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: Colors.green.withOpacity(0.3)),
+          ),
+          child: const Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.check_circle, color: Colors.green, size: 20),
+              SizedBox(width: 8),
+              Text(
+                'Completado',
+                style: TextStyle(
+                  color: Colors.green,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+        );
+      } else if (workflowStatus == 'vencido') {
+        // ✅ Task is vencido/overdue - show vencido status with reassign option
+        return Container(
+          padding: const EdgeInsets.symmetric(vertical: 16),
+          decoration: BoxDecoration(
+            color: Colors.red.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: Colors.red.withOpacity(0.3)),
+          ),
+          child: const Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.warning, color: Colors.red, size: 20),
+              SizedBox(width: 8),
+              Text(
+                'Vencido',
+                style: TextStyle(
+                  color: Colors.red,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+        );
+      } else if (workflowStatus == 'sin_asignar' || employeeId == null) {
+        // ✅ Task exists but no employee assigned - show "Asignar Empleado" button
+        print('✅ Showing Asignar Empleado button');
+        return ElevatedButton.icon(
+          onPressed:
+              () => widget.onAssignEmployeeApproved(
+                widget.item,
+                _existingRequest!,
+              ),
+          icon: const Icon(Icons.assignment_ind),
+          label: const Text('Asignar Empleado'),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.green,
+            padding: const EdgeInsets.symmetric(vertical: 16),
+          ),
+        );
+      } else {
+        // Task has employee assigned (en_proceso, asignado, etc.) - show en proceso status
+        print('⚠️ Showing En Proceso badge');
+        return Container(
+          padding: const EdgeInsets.symmetric(vertical: 16),
+          decoration: BoxDecoration(
+            color: Colors.amber.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: Colors.amber.withOpacity(0.3)),
+          ),
+          child: const Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.work_outline, color: Colors.amber, size: 20),
+              SizedBox(width: 8),
+              Text(
+                'En Proceso',
+                style: TextStyle(
+                  color: Colors.amber,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+        );
+      }
+    }
+
+    // No task assigned yet - check request status
     if (_existingRequest == null) {
       // No request exists - show "Solicitar" button
       return ElevatedButton.icon(
         onPressed: widget.onAssignEmployee,
         icon: const Icon(Icons.send),
-        label: const Text(
-          'Solicitar',
-          style: TextStyle(
-            color: Colors.white,
-          ),
-        ),
+        label: const Text('Solicitar', style: TextStyle(color: Colors.white)),
         style: ElevatedButton.styleFrom(
           backgroundColor: const Color(0xFF2D8A8A),
           padding: const EdgeInsets.symmetric(vertical: 16),
@@ -1838,7 +2848,9 @@ class _CompanyArticleModalState extends State<_CompanyArticleModal> {
     } else if (_existingRequest!.status == 'aprobado') {
       // Request approved - show green "Asignar Empleado" button
       return ElevatedButton.icon(
-        onPressed: () => widget.onAssignEmployeeApproved(widget.item, _existingRequest!),
+        onPressed:
+            () =>
+                widget.onAssignEmployeeApproved(widget.item, _existingRequest!),
         icon: const Icon(Icons.assignment_ind),
         label: const Text('Asignar Empleado'),
         style: ElevatedButton.styleFrom(
@@ -1862,26 +2874,18 @@ class _CompanyArticleModalState extends State<_CompanyArticleModal> {
             SizedBox(width: 8),
             Text(
               'Solicitud Rechazada',
-              style: TextStyle(
-                color: Colors.red,
-                fontWeight: FontWeight.bold,
-              ),
+              style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold),
             ),
           ],
         ),
       );
     }
-    
+
     // Fallback - show default "Solicitar" button
     return ElevatedButton.icon(
       onPressed: widget.onAssignEmployee,
       icon: const Icon(Icons.send),
-      label: const Text(
-        'Solicitar',
-        style: TextStyle(
-          color: Colors.white,
-        ),
-      ),
+      label: const Text('Solicitar', style: TextStyle(color: Colors.white)),
       style: ElevatedButton.styleFrom(
         backgroundColor: const Color(0xFF2D8A8A),
         padding: const EdgeInsets.symmetric(vertical: 16),
@@ -1907,4 +2911,655 @@ class _CompanyArticleModalState extends State<_CompanyArticleModal> {
   }
 }
 
+// ============================================================================
+// Company Article Navigation Modal Widget (with Anterior/Siguiente buttons)
+// ============================================================================
 
+class _CompanyArticleNavigationModal extends StatefulWidget {
+  final List<RecyclingItem> articles;
+  final int initialIndex;
+  final MediaDatabase mediaDatabase;
+  final Function(RecyclingItem) onAssignEmployee;
+  final Function(RecyclingItem, Request) onAssignEmployeeApproved;
+  final Function(RecyclingItem) onNavigateToDetails;
+  final Function(RecyclingItem) onArticleChange;
+
+  const _CompanyArticleNavigationModal({
+    required this.articles,
+    required this.initialIndex,
+    required this.mediaDatabase,
+    required this.onAssignEmployee,
+    required this.onAssignEmployeeApproved,
+    required this.onNavigateToDetails,
+    required this.onArticleChange,
+  });
+
+  @override
+  State<_CompanyArticleNavigationModal> createState() =>
+      _CompanyArticleNavigationModalState();
+}
+
+class _CompanyArticleNavigationModalState
+    extends State<_CompanyArticleNavigationModal> {
+  late int currentIndex;
+  late RecyclingItem currentItem;
+  Multimedia? currentPhoto;
+  bool isLoadingPhoto = false;
+  Request? _existingRequest;
+  bool _isLoadingRequest = false;
+  int? _companyId;
+  Map<String, dynamic>? _existingTask;
+  bool _isLoadingTask = false;
+
+  @override
+  void initState() {
+    super.initState();
+    currentIndex = widget.initialIndex;
+    currentItem = widget.articles[currentIndex];
+    _loadPhoto();
+    _loadRequestStatus();
+  }
+
+  Future<void> _loadPhoto() async {
+    setState(() => isLoadingPhoto = true);
+
+    try {
+      final urlPattern = 'articles/${currentItem.id}';
+      final photo = await widget.mediaDatabase.getMainPhotoByPattern(
+        urlPattern,
+      );
+
+      if (mounted) {
+        setState(() {
+          currentPhoto = photo;
+          isLoadingPhoto = false;
+        });
+      }
+    } catch (e) {
+      print('Error loading photo: $e');
+      if (mounted) {
+        setState(() => isLoadingPhoto = false);
+      }
+    }
+  }
+
+  Future<void> _loadRequestStatus() async {
+    setState(() => _isLoadingRequest = true);
+
+    try {
+      final email = AuthService().getCurrentUserEmail();
+      if (email != null) {
+        final userData = await UsersDatabase().getUserByEmail(email);
+        if (userData != null) {
+          final companyData =
+              await Supabase.instance.client
+                  .from('company')
+                  .select('idCompany')
+                  .eq('adminUserID', userData.id!)
+                  .maybeSingle();
+
+          if (companyData != null) {
+            _companyId = companyData['idCompany'] as int;
+
+            final requestData =
+                await Supabase.instance.client
+                    .from('request')
+                    .select('*')
+                    .eq('articleID', currentItem.id)
+                    .eq('companyID', _companyId!)
+                    .eq('state', 1)
+                    .maybeSingle();
+
+            if (requestData != null && mounted) {
+              _existingRequest = Request.fromMap(requestData);
+
+              if (_existingRequest!.status == 'aprobado') {
+                await _loadTaskStatus();
+              }
+            }
+          }
+        }
+      }
+    } catch (e) {
+      print('❌ Error loading request status: $e');
+    } finally {
+      if (mounted) {
+        setState(() => _isLoadingRequest = false);
+      }
+    }
+  }
+
+  Future<void> _loadTaskStatus() async {
+    if (_isLoadingTask) return;
+    setState(() => _isLoadingTask = true);
+
+    try {
+      final taskData =
+          await Supabase.instance.client
+              .from('tasks')
+              .select('*')
+              .eq('articleID', currentItem.id)
+              .eq('companyID', _companyId!)
+              .eq('state', 1)
+              .neq('workflowStatus', 'vencido')
+              .maybeSingle();
+
+      if (mounted && taskData != null) {
+        setState(() {
+          _existingTask = taskData;
+        });
+      }
+    } catch (e) {
+      print('❌ Error loading task status: $e');
+    } finally {
+      if (mounted) {
+        setState(() => _isLoadingTask = false);
+      }
+    }
+  }
+
+  void _goToPrevious() {
+    if (currentIndex > 0) {
+      setState(() {
+        currentIndex--;
+        currentItem = widget.articles[currentIndex];
+        currentPhoto = null;
+        _existingRequest = null;
+        _existingTask = null;
+      });
+      _loadPhoto();
+      _loadRequestStatus();
+      widget.onArticleChange(currentItem);
+    }
+  }
+
+  void _goToNext() {
+    if (currentIndex < widget.articles.length - 1) {
+      setState(() {
+        currentIndex++;
+        currentItem = widget.articles[currentIndex];
+        currentPhoto = null;
+        _existingRequest = null;
+        _existingTask = null;
+      });
+      _loadPhoto();
+      _loadRequestStatus();
+      widget.onArticleChange(currentItem);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.of(context).size.height * 0.85,
+      ),
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Drag handle
+          Container(
+            margin: const EdgeInsets.symmetric(vertical: 10),
+            width: 40,
+            height: 4,
+            decoration: BoxDecoration(
+              color: Colors.grey[300],
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+
+          // Navigation header
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                IconButton(
+                  onPressed: currentIndex > 0 ? _goToPrevious : null,
+                  icon: const Icon(Icons.arrow_back),
+                  color:
+                      currentIndex > 0 ? const Color(0xFF2D8A8A) : Colors.grey,
+                ),
+                Text(
+                  '${currentIndex + 1} de ${widget.articles.length}',
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: Color(0xFF2D8A8A),
+                  ),
+                ),
+                IconButton(
+                  onPressed:
+                      currentIndex < widget.articles.length - 1
+                          ? _goToNext
+                          : null,
+                  icon: const Icon(Icons.arrow_forward),
+                  color:
+                      currentIndex < widget.articles.length - 1
+                          ? const Color(0xFF2D8A8A)
+                          : Colors.grey,
+                ),
+              ],
+            ),
+          ),
+
+          const Divider(height: 1),
+
+          // Article content
+          Flexible(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Photo
+                  if (isLoadingPhoto)
+                    _buildPlaceholder()
+                  else if (currentPhoto != null)
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(12),
+                      child: CachedNetworkImage(
+                        imageUrl: currentPhoto!.url ?? '',
+                        height: 200,
+                        width: double.infinity,
+                        fit: BoxFit.cover,
+                        placeholder: (context, url) => _buildPlaceholder(),
+                        errorWidget:
+                            (context, url, error) => _buildPlaceholder(),
+                      ),
+                    )
+                  else
+                    _buildPlaceholder(),
+
+                  const SizedBox(height: 16),
+
+                  // Title
+                  Text(
+                    currentItem.title,
+                    style: const TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+
+                  const SizedBox(height: 8),
+
+                  // Category
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF2D8A8A).withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          CategoryUtils.getCategoryIcon(
+                            currentItem.categoryName,
+                          ),
+                          size: 16,
+                          color: const Color(0xFF2D8A8A),
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          currentItem.categoryName,
+                          style: const TextStyle(
+                            color: Color(0xFF2D8A8A),
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  const SizedBox(height: 16),
+
+                  // Description
+                  if (currentItem.description != null &&
+                      currentItem.description!.isNotEmpty) ...[
+                    const Text(
+                      'Descripción:',
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(currentItem.description!),
+                    const SizedBox(height: 16),
+                  ],
+
+                  // Info rows
+                  _buildInfoRow(
+                    Icons.location_on,
+                    'Ubicación',
+                    currentItem.address,
+                  ),
+                  const SizedBox(height: 8),
+                  _buildInfoRow(
+                    Icons.calendar_today,
+                    'Publicado',
+                    '${currentItem.createdAt.day}/${currentItem.createdAt.month}/${currentItem.createdAt.year}',
+                  ),
+
+                  const SizedBox(height: 20),
+
+                  // Action buttons
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed:
+                              () => widget.onNavigateToDetails(currentItem),
+                          icon: const Icon(Icons.info_outline),
+                          label: const Text('Ver Detalles'),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: const Color(0xFF2D8A8A),
+                            side: const BorderSide(color: Color(0xFF2D8A8A)),
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+
+                  const SizedBox(height: 12),
+
+                  // Request/Assign button
+                  SizedBox(width: double.infinity, child: _buildActionButton()),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildInfoRow(IconData icon, String label, String value) {
+    return Row(
+      children: [
+        Icon(icon, size: 20, color: Colors.grey[600]),
+        const SizedBox(width: 8),
+        Text(
+          '$label: ',
+          style: TextStyle(
+            color: Colors.grey[600],
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+        Expanded(
+          child: Text(
+            value,
+            style: const TextStyle(fontWeight: FontWeight.bold),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildActionButton() {
+    if (_isLoadingRequest || _isLoadingTask) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    // ✅ Check if article itself has completed workflow status
+    if (currentItem.workflowStatus?.toLowerCase() == 'completado') {
+      return Container(
+        padding: const EdgeInsets.symmetric(vertical: 16),
+        decoration: BoxDecoration(
+          color: Colors.green.withOpacity(0.1),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: Colors.green.withOpacity(0.3)),
+        ),
+        child: const Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.check_circle, color: Colors.green, size: 20),
+            SizedBox(width: 8),
+            Text(
+              'Artículo Completado',
+              style: TextStyle(
+                color: Colors.green,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    // Check if task exists and is assigned
+    if (_existingTask != null) {
+      final workflowStatus = _existingTask!['workflowStatus'] as String?;
+      final employeeId = _existingTask!['employeeID'] as int?;
+
+      print(
+        '🔍 Navigation Modal - Task status: $workflowStatus, employeeId: $employeeId',
+      );
+
+      if (workflowStatus == 'completado') {
+        // Task completed
+        return Container(
+          padding: const EdgeInsets.symmetric(vertical: 16),
+          decoration: BoxDecoration(
+            color: Colors.teal.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: Colors.teal.withOpacity(0.3)),
+          ),
+          child: const Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.task_alt, color: Colors.teal, size: 20),
+              SizedBox(width: 8),
+              Text(
+                'Completado',
+                style: TextStyle(
+                  color: Colors.teal,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+        );
+      } else if (workflowStatus == 'vencido') {
+        // ✅ Task is vencido/overdue
+        return Container(
+          padding: const EdgeInsets.symmetric(vertical: 16),
+          decoration: BoxDecoration(
+            color: Colors.red.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: Colors.red.withOpacity(0.3)),
+          ),
+          child: const Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.warning, color: Colors.red, size: 20),
+              SizedBox(width: 8),
+              Text(
+                'Vencido',
+                style: TextStyle(
+                  color: Colors.red,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+        );
+      } else if (workflowStatus == 'sin_asignar' || employeeId == null) {
+        // ✅ Task exists but no employee assigned - show "Asignar Empleado" button
+        print('✅ Showing Asignar Empleado button');
+        return ElevatedButton.icon(
+          onPressed:
+              () => widget.onAssignEmployeeApproved(
+                currentItem,
+                _existingRequest!,
+              ),
+          icon: const Icon(Icons.assignment_ind, color: Colors.white),
+          label: const Text(
+            'Asignar Empleado',
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+              color: Colors.white,
+            ),
+          ),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: const Color(0xFF2D8A8A),
+            padding: const EdgeInsets.symmetric(vertical: 16),
+          ),
+        );
+      } else {
+        // Employee assigned and working (asignado, en_proceso, or any other status with employee)
+        print('⚠️ Showing En Proceso badge');
+        return Container(
+          padding: const EdgeInsets.symmetric(vertical: 16),
+          decoration: BoxDecoration(
+            color: Colors.amber.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: Colors.amber.withOpacity(0.3)),
+          ),
+          child: const Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.work_outline, color: Colors.amber, size: 20),
+              SizedBox(width: 8),
+              Text(
+                'En Proceso',
+                style: TextStyle(
+                  color: Colors.amber,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+        );
+      }
+    }
+
+    // No task assigned yet - check request status
+    if (_existingRequest == null) {
+      return ElevatedButton.icon(
+        onPressed: () => widget.onAssignEmployee(currentItem),
+        icon: const Icon(Icons.send, color: Colors.white),
+        label: const Text(
+          'Solicitar Artículo',
+          style: TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.bold,
+            color: Colors.white,
+          ),
+        ),
+        style: ElevatedButton.styleFrom(
+          backgroundColor: const Color(0xFF2D8A8A),
+          padding: const EdgeInsets.symmetric(vertical: 16),
+        ),
+      );
+    } else if (_existingRequest!.status == 'pendiente') {
+      return Container(
+        padding: const EdgeInsets.symmetric(vertical: 16),
+        decoration: BoxDecoration(
+          color: Colors.orange.withOpacity(0.1),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: Colors.orange.withOpacity(0.3)),
+        ),
+        child: const Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.pending, color: Colors.orange, size: 20),
+            SizedBox(width: 8),
+            Text(
+              'Solicitud Pendiente',
+              style: TextStyle(
+                color: Colors.orange,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ],
+        ),
+      );
+    } else if (_existingRequest!.status == 'aprobado') {
+      return ElevatedButton.icon(
+        onPressed:
+            () =>
+                widget.onAssignEmployeeApproved(currentItem, _existingRequest!),
+        icon: const Icon(Icons.assignment_ind, color: Colors.white),
+        label: const Text(
+          'Asignar Empleado',
+          style: TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.bold,
+            color: Colors.white,
+          ),
+        ),
+        style: ElevatedButton.styleFrom(
+          backgroundColor: const Color(0xFF2D8A8A),
+          padding: const EdgeInsets.symmetric(vertical: 16),
+        ),
+      );
+    } else if (_existingRequest!.status == 'rechazado') {
+      return Container(
+        padding: const EdgeInsets.symmetric(vertical: 16),
+        decoration: BoxDecoration(
+          color: Colors.red.withOpacity(0.1),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: Colors.red.withOpacity(0.3)),
+        ),
+        child: const Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.cancel, color: Colors.red, size: 20),
+            SizedBox(width: 8),
+            Text(
+              'Solicitud Rechazada',
+              style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold),
+            ),
+          ],
+        ),
+      );
+    }
+
+    // Fallback
+    return ElevatedButton.icon(
+      onPressed: () => widget.onAssignEmployee(currentItem),
+      icon: const Icon(Icons.send, color: Colors.white),
+      label: const Text(
+        'Solicitar Artículo',
+        style: TextStyle(
+          fontSize: 16,
+          fontWeight: FontWeight.bold,
+          color: Colors.white,
+        ),
+      ),
+      style: ElevatedButton.styleFrom(
+        backgroundColor: const Color(0xFF2D8A8A),
+        padding: const EdgeInsets.symmetric(vertical: 16),
+      ),
+    );
+  }
+
+  Widget _buildPlaceholder() {
+    return Container(
+      height: 200,
+      decoration: BoxDecoration(
+        color: Colors.grey[300],
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Center(
+        child: Icon(
+          CategoryUtils.getCategoryIcon(currentItem.categoryName),
+          size: 60,
+          color: Colors.grey[600],
+        ),
+      ),
+    );
+  }
+}

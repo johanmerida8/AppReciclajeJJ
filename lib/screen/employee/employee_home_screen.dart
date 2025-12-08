@@ -15,18 +15,37 @@ class EmployeeHomeScreen extends StatefulWidget {
 class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
   final AuthService _authService = AuthService();
   final UsersDatabase _usersDb = UsersDatabase();
-  
+
   String? _employeeName;
   int? _employeeId;
   bool _isLoading = true;
   int _pendingTasksCount = 0;
   int _completedTasksCount = 0;
-  List<Map<String, dynamic>> _todayTasks = [];
+  List<Map<String, dynamic>> _allTasks = [];
+  List<Map<String, dynamic>> _displayedTasks = [];
+  String _selectedFilter = 'pendiente'; // 'pendiente' or 'completado'
 
   @override
   void initState() {
     super.initState();
     _loadEmployeeData();
+  }
+
+  /// ✅ Mark task as vencido in database
+  Future<void> _markTaskAsVencido(int taskId) async {
+    try {
+      await Supabase.instance.client
+          .from('tasks')
+          .update({
+            'workflowStatus': 'vencido',
+            'lastUpdate': DateTime.now().toIso8601String(),
+          })
+          .eq('idTask', taskId);
+
+      print('✅ Task $taskId marked as vencido');
+    } catch (e) {
+      print('❌ Error marking task as vencido: $e');
+    }
   }
 
   Future<void> _loadEmployeeData() async {
@@ -36,18 +55,19 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
         final user = await _usersDb.getUserByEmail(email);
         if (user != null) {
           // Get employee ID
-          final employeeData = await Supabase.instance.client
-              .from('employees')
-              .select('idEmployee')
-              .eq('userID', user.id!)
-              .maybeSingle();
+          final employeeData =
+              await Supabase.instance.client
+                  .from('employees')
+                  .select('idEmployee')
+                  .eq('userID', user.id!)
+                  .maybeSingle();
 
           if (mounted && employeeData != null) {
             setState(() {
               _employeeName = user.names;
               _employeeId = employeeData['idEmployee'] as int;
             });
-            
+
             // Load tasks after getting employee ID
             await _loadTasks();
           }
@@ -103,25 +123,25 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
 
       if (mounted) {
         final taskList = List<Map<String, dynamic>>.from(tasks);
-        
-        // Count pending and completed
-        final pending = taskList.where((t) => 
-            t['workflowStatus'] == 'asignado' || t['workflowStatus'] == 'en_proceso'
-        ).length;
-        
-        final completed = taskList.where((t) => 
-            t['workflowStatus'] == 'completado'
-        ).length;
 
-        // Get today's tasks (only in progress for employee view)
-        final today = taskList.where((t) => 
-            t['workflowStatus'] == 'en_proceso'
-        ).toList();
+        // Count pending and completed
+        final pending =
+            taskList
+                .where(
+                  (t) =>
+                      t['workflowStatus'] == 'asignado' ||
+                      t['workflowStatus'] == 'en_proceso',
+                )
+                .length;
+
+        final completed =
+            taskList.where((t) => t['workflowStatus'] == 'completado').length;
 
         setState(() {
           _pendingTasksCount = pending;
           _completedTasksCount = completed;
-          _todayTasks = today;
+          _allTasks = taskList;
+          _filterTasks(); // Apply initial filter
           _isLoading = false;
         });
 
@@ -135,12 +155,35 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
     }
   }
 
+  /// Filter tasks based on selected filter
+  void _filterTasks() {
+    if (_selectedFilter == 'pendiente') {
+      _displayedTasks =
+          _allTasks
+              .where(
+                (t) =>
+                    t['workflowStatus'] == 'asignado' ||
+                    t['workflowStatus'] == 'en_proceso',
+              )
+              .toList();
+    } else {
+      _displayedTasks =
+          _allTasks.where((t) => t['workflowStatus'] == 'completado').toList();
+    }
+  }
+
+  /// Change filter
+  void _changeFilter(String filter) {
+    setState(() {
+      _selectedFilter = filter;
+      _filterTasks();
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_isLoading) {
-      return const Scaffold(
-        body: Center(child: CircularProgressIndicator()),
-      );
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
 
     return Scaffold(
@@ -169,10 +212,7 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
                       const SizedBox(height: 4),
                       Text(
                         'Bienvenido a tu panel',
-                        style: TextStyle(
-                          fontSize: 14,
-                          color: Colors.grey[600],
-                        ),
+                        style: TextStyle(fontSize: 14, color: Colors.grey[600]),
                       ),
                     ],
                   ),
@@ -216,50 +256,76 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
               ),
               const SizedBox(height: 30),
 
-              // Today's Tasks Section
-              const Text(
-                'Tareas de Hoy',
-                style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                  color: Color(0xFF2D8A8A),
-                ),
+              // Filter tabs header
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Mis Tareas',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF2D8A8A),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  // Filter chips
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _buildFilterChip(
+                          label: 'Pendientes',
+                          value: 'pendiente',
+                          count: _pendingTasksCount,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: _buildFilterChip(
+                          label: 'Completadas',
+                          value: 'completado',
+                          count: _completedTasksCount,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
               ),
               const SizedBox(height: 16),
-              
+
               // Tasks list or empty state
-              if (_todayTasks.isEmpty)
+              if (_displayedTasks.isEmpty)
                 Center(
                   child: Column(
                     children: [
                       const SizedBox(height: 40),
                       Icon(
-                        Icons.assignment_outlined,
+                        _selectedFilter == 'pendiente'
+                            ? Icons.assignment_outlined
+                            : Icons.check_circle_outline,
                         size: 80,
                         color: Colors.grey[300],
                       ),
                       const SizedBox(height: 16),
                       Text(
-                        'No hay tareas asignadas',
-                        style: TextStyle(
-                          fontSize: 16,
-                          color: Colors.grey[600],
-                        ),
+                        _selectedFilter == 'pendiente'
+                            ? 'No hay tareas pendientes'
+                            : 'No hay tareas completadas',
+                        style: TextStyle(fontSize: 16, color: Colors.grey[600]),
                       ),
                       const SizedBox(height: 8),
                       Text(
-                        'Las tareas aparecerán aquí cuando se te asignen',
-                        style: TextStyle(
-                          fontSize: 14,
-                          color: Colors.grey[500],
-                        ),
+                        _selectedFilter == 'pendiente'
+                            ? 'Las tareas aparecerán aquí cuando se te asignen'
+                            : 'Las tareas completadas aparecerán aquí',
+                        style: TextStyle(fontSize: 14, color: Colors.grey[500]),
                         textAlign: TextAlign.center,
                       ),
                     ],
                   ),
                 )
               else
-                ..._todayTasks.map((task) => _buildTaskCard(task)).toList(),
+                ..._displayedTasks.map((task) => _buildTaskCard(task)).toList(),
             ],
           ),
         ),
@@ -272,18 +338,69 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
     final request = task['request'] as Map<String, dynamic>?;
     final category = article?['category'] as Map<String, dynamic>?;
     final user = article?['user'] as Map<String, dynamic>?;
-    
+
     final title = article?['name'] ?? 'Sin título';
     final address = article?['address'] ?? 'Sin dirección';
     final status = task['workflowStatus'] as String;
     final scheduledDay = request?['scheduledDay'] ?? 'No especificado';
     final scheduledTime = request?['scheduledStartTime'] ?? 'No especificado';
-    
+
+    // ✅ Check if task is vencido (overdue)
     Color statusColor = Colors.orange;
     String statusText = 'Asignado';
     IconData statusIcon = Icons.pending;
-    
-    if (status == 'en_proceso') {
+
+    // ✅ Check for vencido status with 15-minute grace period
+    bool isVencido = false;
+    bool isWithinGracePeriod = false;
+    if (status == 'asignado' || status == 'en_proceso') {
+      if (request != null) {
+        final scheduledDay = request['scheduledDay'] as String?;
+        final scheduledEndTime = request['scheduledEndTime'] as String?;
+
+        if (scheduledDay != null && scheduledEndTime != null) {
+          try {
+            final scheduledDate = DateTime.parse(scheduledDay);
+            final endTimeParts = scheduledEndTime.split(':');
+            final scheduledDateTime = DateTime(
+              scheduledDate.year,
+              scheduledDate.month,
+              scheduledDate.day,
+              int.parse(endTimeParts[0]),
+              int.parse(endTimeParts[1]),
+            );
+
+            final now = DateTime.now();
+            final gracePeriodEnd = scheduledDateTime.add(
+              const Duration(minutes: 15),
+            );
+
+            if (now.isAfter(gracePeriodEnd)) {
+              // More than 15 minutes late - VENCIDO
+              isVencido = true;
+              // ✅ Auto-update task to vencido in database
+              _markTaskAsVencido(task['idTask'] as int);
+            } else if (now.isAfter(scheduledDateTime)) {
+              // Late but within grace period - Still can work
+              isWithinGracePeriod = true;
+            }
+          } catch (e) {
+            print('Error checking vencido: $e');
+          }
+        }
+      }
+    }
+
+    if (isVencido) {
+      statusColor = Colors.red;
+      statusText = 'Vencido';
+      statusIcon = Icons.warning;
+    } else if (isWithinGracePeriod) {
+      statusColor = Colors.deepOrange;
+      statusText =
+          status == 'en_proceso' ? 'En Proceso (Tarde)' : 'Asignado (Tarde)';
+      statusIcon = Icons.access_time;
+    } else if (status == 'en_proceso') {
       statusColor = Colors.blue;
       statusText = 'En Proceso';
       statusIcon = Icons.play_circle;
@@ -319,19 +436,19 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
 
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-      ),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       elevation: 2,
       child: InkWell(
-        onTap: recyclingItem != null
-            ? () => Navigator.push(
+        onTap:
+            recyclingItem != null
+                ? () => Navigator.push(
                   context,
                   MaterialPageRoute(
-                    builder: (context) => DetailRecycleScreen(item: recyclingItem!),
+                    builder:
+                        (context) => DetailRecycleScreen(item: recyclingItem!),
                   ),
                 )
-            : null,
+                : null,
         borderRadius: BorderRadius.circular(12),
         child: Padding(
           padding: const EdgeInsets.all(16),
@@ -341,7 +458,10 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
               Row(
                 children: [
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 6,
+                    ),
                     decoration: BoxDecoration(
                       color: statusColor.withOpacity(0.1),
                       borderRadius: BorderRadius.circular(20),
@@ -364,7 +484,10 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
                   const Spacer(),
                   if (category != null)
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 4,
+                      ),
                       decoration: BoxDecoration(
                         color: const Color(0xFF2D8A8A).withOpacity(0.1),
                         borderRadius: BorderRadius.circular(8),
@@ -395,10 +518,7 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
                   Expanded(
                     child: Text(
                       address,
-                      style: TextStyle(
-                        fontSize: 13,
-                        color: Colors.grey[600],
-                      ),
+                      style: TextStyle(fontSize: 13, color: Colors.grey[600]),
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
@@ -411,17 +531,42 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
                   const SizedBox(width: 4),
                   Text(
                     '$scheduledDay a las $scheduledTime',
-                    style: TextStyle(
-                      fontSize: 13,
-                      color: Colors.grey[600],
-                    ),
+                    style: TextStyle(fontSize: 13, color: Colors.grey[600]),
                   ),
                 ],
               ),
               const SizedBox(height: 12),
+              // ✅ Show grace period warning
+              if (isWithinGracePeriod)
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Colors.orange.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.orange),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.access_time, size: 16, color: Colors.orange),
+                      const SizedBox(width: 4),
+                      Expanded(
+                        child: Text(
+                          '⚠️ Llegas tarde. Tienes 15 min de gracia',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Colors.orange[800],
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              if (isWithinGracePeriod) const SizedBox(height: 8),
+
               Row(
                 children: [
-                  if (status == 'asignado')
+                  if (status == 'asignado' && !isVencido)
                     Expanded(
                       child: ElevatedButton.icon(
                         onPressed: () {
@@ -436,26 +581,61 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
                         ),
                       ),
                     ),
-                  if (status == 'asignado') const SizedBox(width: 8),
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed: recyclingItem != null
-                          ? () => Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                  builder: (context) => DetailRecycleScreen(item: recyclingItem!),
-                                ),
-                              )
-                          : null,
-                      icon: const Icon(Icons.info_outline, size: 18),
-                      label: const Text('Ver Detalles'),
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: const Color(0xFF2D8A8A),
-                        side: const BorderSide(color: Color(0xFF2D8A8A)),
-                        padding: const EdgeInsets.symmetric(vertical: 12),
+                  if (status == 'asignado' && !isVencido)
+                    const SizedBox(width: 8),
+                  if (!isVencido)
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed:
+                            recyclingItem != null
+                                ? () => Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder:
+                                        (context) => DetailRecycleScreen(
+                                          item: recyclingItem!,
+                                        ),
+                                  ),
+                                )
+                                : null,
+                        icon: const Icon(Icons.info_outline, size: 18),
+                        label: const Text('Ver Detalles'),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: const Color(0xFF2D8A8A),
+                          side: const BorderSide(color: Color(0xFF2D8A8A)),
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                        ),
                       ),
                     ),
-                  ),
+                  if (isVencido)
+                    Expanded(
+                      child: Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.red.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.red),
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(Icons.block, size: 16, color: Colors.red),
+                            const SizedBox(width: 4),
+                            Expanded(
+                              child: Text(
+                                'Tarea vencida - No se puede completar',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.red[800],
+                                  fontWeight: FontWeight.w600,
+                                ),
+                                textAlign: TextAlign.center,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
                 ],
               ),
             ],
@@ -499,14 +679,64 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
             ),
           ),
           const SizedBox(height: 4),
-          Text(
-            label,
-            style: TextStyle(
-              fontSize: 12,
-              color: Colors.grey[600],
-            ),
-          ),
+          Text(label, style: TextStyle(fontSize: 12, color: Colors.grey[600])),
         ],
+      ),
+    );
+  }
+
+  Widget _buildFilterChip({
+    required String label,
+    required String value,
+    required int count,
+  }) {
+    final isSelected = _selectedFilter == value;
+
+    return GestureDetector(
+      onTap: () => _changeFilter(value),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: isSelected ? const Color(0xFF2D8A8A) : Colors.grey[200],
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: isSelected ? const Color(0xFF2D8A8A) : Colors.grey[300]!,
+            width: 1,
+          ),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Flexible(
+              child: Text(
+                label,
+                style: TextStyle(
+                  color: isSelected ? Colors.white : Colors.grey[700],
+                  fontSize: 13,
+                  fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+                ),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            const SizedBox(width: 6),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: isSelected ? Colors.white : const Color(0xFF2D8A8A),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Text(
+                '$count',
+                style: TextStyle(
+                  color: isSelected ? const Color(0xFF2D8A8A) : Colors.white,
+                  fontSize: 11,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

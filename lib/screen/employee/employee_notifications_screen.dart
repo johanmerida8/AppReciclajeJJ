@@ -7,6 +7,7 @@ import 'package:reciclaje_app/screen/distribuidor/detail_recycle_screen.dart';
 import 'package:reciclaje_app/model/recycling_items.dart';
 import 'package:reciclaje_app/utils/category_utils.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 /// 🔔 Employee Notifications Screen
 /// Shows tasks with "asignado" status with article name and scheduled date/time
@@ -14,10 +15,12 @@ class EmployeeNotificationsScreen extends StatefulWidget {
   const EmployeeNotificationsScreen({super.key});
 
   @override
-  State<EmployeeNotificationsScreen> createState() => _EmployeeNotificationsScreenState();
+  State<EmployeeNotificationsScreen> createState() =>
+      _EmployeeNotificationsScreenState();
 }
 
-class _EmployeeNotificationsScreenState extends State<EmployeeNotificationsScreen> {
+class _EmployeeNotificationsScreenState
+    extends State<EmployeeNotificationsScreen> {
   final _authService = AuthService();
   final _usersDatabase = UsersDatabase();
   final _mediaDatabase = MediaDatabase();
@@ -26,15 +29,96 @@ class _EmployeeNotificationsScreenState extends State<EmployeeNotificationsScree
   int? _employeeId;
   bool _isLoading = true;
 
+  RealtimeChannel? _taskChannel;
+
   @override
   void initState() {
     super.initState();
     _initialize();
+    _setupRealtimeListener();
+  }
+
+  @override
+  void dispose() {
+    _taskChannel?.unsubscribe();
+    super.dispose();
+  }
+
+  /// ✅ Setup real-time listener for task changes
+  void _setupRealtimeListener() {
+    _taskChannel =
+        Supabase.instance.client
+            .channel('employee-notifications')
+            .onPostgresChanges(
+              event: PostgresChangeEvent.all,
+              schema: 'public',
+              table: 'tasks',
+              callback: (payload) {
+                print('🔔 Real-time task update: ${payload.eventType}');
+                _loadNotifications();
+              },
+            )
+            .subscribe();
+  }
+
+  /// ✅ Mark all current notifications as read locally
+  Future<void> _markAllAsReadLocally() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final readNotifications =
+          prefs.getStringList('read_employee_notifications') ?? [];
+
+      for (var notification in _notifications) {
+        final taskId = notification['idTask'].toString();
+        if (!readNotifications.contains(taskId)) {
+          readNotifications.add(taskId);
+        }
+      }
+
+      await prefs.setStringList(
+        'read_employee_notifications',
+        readNotifications,
+      );
+      print('✅ Marked ${_notifications.length} notifications as read locally');
+    } catch (e) {
+      print('❌ Error marking notifications as read: $e');
+    }
+  }
+
+  /// ✅ Get count of unread notifications for an employee
+  static Future<int> getUnreadCount(int? employeeId) async {
+    if (employeeId == null) return 0;
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final readNotifications =
+          prefs.getStringList('read_employee_notifications') ?? [];
+
+      // Get tasks with "en_proceso" status for this employee
+      final tasks = await Supabase.instance.client
+          .from('tasks')
+          .select('idTask')
+          .eq('employeeID', employeeId)
+          .eq('workflowStatus', 'en_proceso');
+
+      // Count unread
+      final unreadCount =
+          tasks.where((task) {
+            final taskId = task['idTask'].toString();
+            return !readNotifications.contains(taskId);
+          }).length;
+
+      return unreadCount;
+    } catch (e) {
+      print('❌ Error getting unread count: $e');
+      return 0;
+    }
   }
 
   Future<void> _initialize() async {
     await _loadEmployeeId();
     await _loadNotifications();
+    await _markAllAsReadLocally();
   }
 
   Future<void> _loadEmployeeId() async {
@@ -45,11 +129,12 @@ class _EmployeeNotificationsScreenState extends State<EmployeeNotificationsScree
       final user = await _usersDatabase.getUserByEmail(email);
       if (user == null) throw Exception('User not found');
 
-      final employeeData = await Supabase.instance.client
-          .from('employees')
-          .select('idEmployee')
-          .eq('userID', user.id!)
-          .maybeSingle();
+      final employeeData =
+          await Supabase.instance.client
+              .from('employees')
+              .select('idEmployee')
+              .eq('userID', user.id!)
+              .maybeSingle();
 
       if (employeeData == null) throw Exception('Employee not found');
 
@@ -62,12 +147,12 @@ class _EmployeeNotificationsScreenState extends State<EmployeeNotificationsScree
   }
 
   Future<void> _loadNotifications() async {
-    if (_employeeId == null) return;
+    if (_employeeId == null || !mounted) return;
 
     setState(() => _isLoading = true);
 
     try {
-      // Get tasks with "asignado" status
+      // Get tasks with "en_proceso" status (employee assigned and ready to collect)
       final tasks = await Supabase.instance.client
           .from('tasks')
           .select('''
@@ -96,7 +181,7 @@ class _EmployeeNotificationsScreenState extends State<EmployeeNotificationsScree
             )
           ''')
           .eq('employeeID', _employeeId!)
-          .eq('workflowStatus', 'asignado')
+          .eq('workflowStatus', 'en_proceso')
           .order('assignedDate', ascending: false);
 
       if (mounted) {
@@ -105,22 +190,27 @@ class _EmployeeNotificationsScreenState extends State<EmployeeNotificationsScree
           _isLoading = false;
         });
 
-        print('✅ Loaded ${_notifications.length} notifications for employee $_employeeId');
-        
+        print(
+          '✅ Loaded ${_notifications.length} notifications for employee $_employeeId',
+        );
+
         // Load article photos for each notification
         for (var notification in _notifications) {
           final article = notification['article'] as Map<String, dynamic>?;
           if (article != null) {
             final articleId = article['idArticle'];
             final articlePhotoPattern = 'articles/$articleId';
-            final articlePhoto = await _mediaDatabase.getMainPhotoByPattern(articlePhotoPattern);
+            final articlePhoto = await _mediaDatabase.getMainPhotoByPattern(
+              articlePhotoPattern,
+            );
             notification['articlePhoto'] = articlePhoto;
           }
         }
-        
-        // Trigger rebuild after photos are loaded
+
+        // Trigger rebuild after photos are loaded and mark as read
         if (mounted) {
           setState(() {});
+          await _markAllAsReadLocally();
         }
       }
     } catch (e) {
@@ -165,21 +255,13 @@ class _EmployeeNotificationsScreenState extends State<EmployeeNotificationsScree
             fontWeight: FontWeight.bold,
           ),
         ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh, color: Colors.white),
-            onPressed: _loadNotifications,
-            tooltip: 'Actualizar',
-          ),
-        ],
       ),
-      body: _isLoading
-          ? const Center(
-              child: CircularProgressIndicator(
-                color: Color(0xFF2D8A8A),
-              ),
-            )
-          : _notifications.isEmpty
+      body:
+          _isLoading
+              ? const Center(
+                child: CircularProgressIndicator(color: Color(0xFF2D8A8A)),
+              )
+              : _notifications.isEmpty
               ? _buildEmptyState()
               : _buildNotificationsList(),
     );
@@ -187,54 +269,64 @@ class _EmployeeNotificationsScreenState extends State<EmployeeNotificationsScree
 
   Widget _buildNotificationsList() {
     return RefreshIndicator(
-      onRefresh: _loadNotifications,
+      onRefresh: () async {
+        await _loadNotifications();
+      },
       color: const Color(0xFF2D8A8A),
       child: ListView(
         padding: const EdgeInsets.all(16),
         children: [
           Text(
             'Tienes ${_notifications.length} ${_notifications.length == 1 ? 'notificación' : 'notificaciones'}',
-            style: TextStyle(
-              fontSize: 14,
-              color: Colors.grey[600],
-            ),
+            style: TextStyle(fontSize: 14, color: Colors.grey[600]),
           ),
           const SizedBox(height: 16),
-          ..._notifications.map((notification) => _buildNotificationCard(notification)),
+          ..._notifications.map(
+            (notification) => _buildNotificationCard(notification),
+          ),
         ],
       ),
     );
   }
 
   Widget _buildEmptyState() {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
+    return RefreshIndicator(
+      onRefresh: () async {
+        await _loadNotifications();
+      },
+      color: const Color(0xFF2D8A8A),
+      child: ListView(
+        padding: const EdgeInsets.all(16),
         children: [
-          Icon(
-            Icons.notifications_none,
-            size: 100,
-            color: Colors.grey[300],
-          ),
-          const SizedBox(height: 16),
-          Text(
-            'No hay notificaciones',
-            style: TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.w500,
-              color: Colors.grey[700],
-            ),
-          ),
-          const SizedBox(height: 8),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 40),
-            child: Text(
-              'Las nuevas tareas asignadas aparecerán aquí',
-              style: TextStyle(
-                fontSize: 14,
-                color: Colors.grey[600],
-              ),
-              textAlign: TextAlign.center,
+          SizedBox(
+            height: MediaQuery.of(context).size.height - 200,
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(
+                  Icons.notifications_none,
+                  size: 100,
+                  color: Colors.grey[300],
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  'No hay notificaciones',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w500,
+                    color: Colors.grey[700],
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 40),
+                  child: Text(
+                    'Las nuevas tareas asignadas aparecerán aquí',
+                    style: TextStyle(fontSize: 14, color: Colors.grey[600]),
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+              ],
             ),
           ),
         ],
@@ -299,97 +391,100 @@ class _EmployeeNotificationsScreenState extends State<EmployeeNotificationsScree
         child: Padding(
           padding: const EdgeInsets.all(16),
           child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Header: Avatar + Title + Time
-            Row(
-              children: [
-                // Article photo
-                if (articlePhoto?.url != null)
-                  Container(
-                    width: 40,
-                    height: 40,
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(8),
-                      image: DecorationImage(
-                        image: NetworkImage(articlePhoto!.url!),
-                        fit: BoxFit.cover,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Header: Avatar + Title + Time
+              Row(
+                children: [
+                  // Article photo
+                  if (articlePhoto?.url != null)
+                    Container(
+                      width: 40,
+                      height: 40,
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(8),
+                        image: DecorationImage(
+                          image: NetworkImage(articlePhoto!.url!),
+                          fit: BoxFit.cover,
+                        ),
+                      ),
+                    )
+                  else
+                    Container(
+                      width: 40,
+                      height: 40,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF2D8A8A).withOpacity(0.15),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Icon(
+                        CategoryUtils.getCategoryIcon(categoryName),
+                        color: const Color(0xFF2D8A8A),
+                        size: 24,
                       ),
                     ),
-                  )
-                else
-                  Container(
-                    width: 40,
-                    height: 40,
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF2D8A8A).withOpacity(0.15),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Icon(
-                      CategoryUtils.getCategoryIcon(categoryName),
-                      color: const Color(0xFF2D8A8A),
-                      size: 24,
-                    ),
-                  ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Text(
-                              'Objeto asignado',
-                              style: TextStyle(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w500,
-                                color: Colors.grey[800],
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                'Tienes un objeto para recoger',
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w500,
+                                  color: Colors.grey[800],
+                                ),
                               ),
                             ),
-                          ),
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                            decoration: BoxDecoration(
-                              color: Colors.orange,
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: Text(
-                              timeAgo,
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 11,
-                                fontWeight: FontWeight.bold,
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 4,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Colors.orange,
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: Text(
+                                timeAgo,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.bold,
+                                ),
                               ),
                             ),
+                          ],
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          '"$articleName".',
+                          style: const TextStyle(
+                            fontSize: 13,
+                            color: Colors.black87,
                           ),
-                        ],
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        '"$articleName".',
-                        style: const TextStyle(
-                          fontSize: 13,
-                          color: Colors.black87,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                         ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      Text(
-                        'Entrega: $scheduledInfo',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: Colors.grey[600],
+                        Text(
+                          'Recoger: $scheduledInfo',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Colors.grey[600],
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                         ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
-                ),
-              ],
-            ),
-          ],
+                ],
+              ),
+            ],
           ),
         ),
       ),
@@ -425,9 +520,7 @@ class _EmployeeNotificationsScreenState extends State<EmployeeNotificationsScree
 
     Navigator.push(
       context,
-      MaterialPageRoute(
-        builder: (context) => DetailRecycleScreen(item: item),
-      ),
+      MaterialPageRoute(builder: (context) => DetailRecycleScreen(item: item)),
     ).then((_) {
       // Refresh notifications when returning
       _loadNotifications();

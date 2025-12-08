@@ -1,3 +1,5 @@
+import 'package:reciclaje_app/screen/administrator/employeesList.dart';
+
 import '/database/admin/companyList_db.dart';
 import '/model/admin/company_model.dart';
 import '/components/admin/company_card.dart';
@@ -138,8 +140,42 @@ class _CompanyListState extends State<CompanyList> {
                                     onPressed: () {
                                       // Acción para abrir perfil o detalles
                                     },
-                                    onArchive: () {
-                                      // Acción para archivar
+                                    onArchive: () async {
+                                      final newState = user.state == 1 ? 0 : 1;
+
+                                      final ok = await _db.setCompanyState(
+                                        user.idCompany,
+                                        newState,
+                                      );
+
+                                      if (ok && mounted) {
+                                        setState(() {
+                                          user.state = newState;
+                                        });
+
+                                        ScaffoldMessenger.of(
+                                          context,
+                                        ).showSnackBar(
+                                          SnackBar(
+                                            content: Text(
+                                              newState == 0
+                                                  ? "Compañía archivada correctamente"
+                                                  : "Compañía activada correctamente",
+                                            ),
+                                          ),
+                                        );
+                                      }
+                                    },
+                                    onEmployees: () {
+                                      Navigator.push(
+                                        context,
+                                        MaterialPageRoute(
+                                          builder:
+                                              (_) => EmployeesList(
+                                                companyId: user.idCompany,
+                                              ),
+                                        ),
+                                      );
                                     },
                                   );
                                 },
