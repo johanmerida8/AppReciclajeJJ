@@ -50,12 +50,17 @@ class DetailRecycleScreen extends StatefulWidget {
   isEmpresaView; // ✅ Flag to indicate empresa view (read-only, reviews only)
   final Map<String, dynamic>?
   taskData; // ✅ Optional task data with reviews and schedule
+  final String? cardType; // ✅ 'task' or 'request' - which card type was clicked
+  final String?
+  cardStatus; // ✅ Display status of the card clicked (vencido, en_espera, etc.)
 
   const DetailRecycleScreen({
     super.key,
     required this.item,
     this.isEmpresaView = false, // Default to false (normal admin view)
     this.taskData, // Optional task data for empresa view
+    this.cardType, // ✅ Track which card type was clicked
+    this.cardStatus, // ✅ Track the card's display status
   });
 
   @override
@@ -78,7 +83,7 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
   final taskDatabase = TaskDatabase(); // ✅ Add task database
   final pointsLogDatabase =
       UserpointslogDatabase(); // ✅ Add points log database
-  
+
   final _articleHistoryDb = ArticlehistoryDatabase();
 
   final _authService = AuthService();
@@ -176,6 +181,7 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
     _checkApprovedRequests(); // ✅ Check for approved requests
     _loadEmployeeTask(); // ✅ Load employee's task if employee
     _loadDistributorTask(); // ✅ Load distributor's task if owner
+    _checkVencidoAndPromptReschedule(); // ✅ Check if vencido and prompt to reschedule
     // ✅ _loadCompanyTask() is now called AFTER _loadUserRoleAndRequest() completes
     // ❌ DON'T load employees here - they need _companyId to be set first
 
@@ -294,6 +300,7 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
                     .select()
                     .eq('articleID', widget.item.id)
                     .eq('companyID', _companyId!)
+                    .eq('state', 1) // ✅ Only get active requests
                     .order(
                       'lastUpdate',
                       ascending: false,
@@ -681,6 +688,7 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
     try {
       // Query tasks table for this article where distributor needs to confirm delivery
       // ✅ Join with employees table to get the userID and request to get scheduled time
+      // ✅ Include all tasks (including completado) to show reviews section
       final taskData =
           await Supabase.instance.client
               .from('tasks')
@@ -688,7 +696,6 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
             idTask, 
             workflowStatus, 
             employeeID,
-            employees:employeeID(userID),
             request:requestID(
               scheduledDay,
               scheduledStartTime,
@@ -697,24 +704,45 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
           ''')
               .eq('articleID', widget.item.id)
               .eq('state', 1)
+              .order('lastUpdate', ascending: false) // ✅ Get most recent first
+              .limit(1)
               .maybeSingle();
 
       if (taskData != null) {
-        final employeeData = taskData['employees'] as Map<String, dynamic>?;
         final request = taskData['request'] as Map<String, dynamic>?;
 
         setState(() {
           _distributorTaskId = taskData['idTask'] as int?;
           _distributorTaskStatus = taskData['workflowStatus'] as String?;
           _distributorEmployeeId = taskData['employeeID'] as int?;
-          _distributorEmployeeUserId =
-              employeeData?['userID'] as int?; // ✅ Get userID for review
           _distributorScheduledDay = request?['scheduledDay'] as String?;
           _distributorScheduledTime = request?['scheduledStartTime'] as String?;
         });
 
+        // ✅ If there's an employee assigned, get their userID separately
+        if (_distributorEmployeeId != null) {
+          try {
+            final employeeData =
+                await Supabase.instance.client
+                    .from('employees')
+                    .select('userID')
+                    .eq('idEmployee', _distributorEmployeeId!)
+                    .single();
+
+            setState(() {
+              _distributorEmployeeUserId = employeeData['userID'] as int?;
+            });
+
+            print(
+              '✅ Retrieved employee userID: $_distributorEmployeeUserId for employeeID: $_distributorEmployeeId',
+            );
+          } catch (e) {
+            print('❌ Error getting employee userID: $e');
+          }
+        }
+
         print(
-          '✅ Loaded distributor task (ID: $_distributorTaskId, Status: $_distributorTaskStatus, Employee UserID: $_distributorEmployeeUserId)',
+          '✅ Loaded distributor task (ID: $_distributorTaskId, Status: $_distributorTaskStatus, Employee ID: $_distributorEmployeeId)',
         );
 
         // ✅ Setup real-time listener for task status changes
@@ -767,6 +795,211 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
     print('🔔 Real-time listener setup for task $_distributorTaskId');
   }
 
+  /// ✅ Check if task is vencido and prompt distributor to reschedule
+  Future<void> _checkVencidoAndPromptReschedule() async {
+    // Wait a bit for all data to load
+    await Future.delayed(const Duration(milliseconds: 500));
+
+    if (!_isOwner || !mounted) return;
+
+    try {
+      // Check if there's a vencido task for this article
+      final vencidoTask =
+          await Supabase.instance.client
+              .from('tasks')
+              .select('idTask, workflowStatus, articleID, lastUpdate')
+              .eq('articleID', widget.item.id)
+              .eq('workflowStatus', 'vencido')
+              .maybeSingle();
+
+      if (vencidoTask == null) return; // No vencido task found
+
+      print('⚠️ Found vencido task for article ${widget.item.id}');
+
+      // Get the task's lastUpdate time (when it was marked vencido)
+      final taskLastUpdate = DateTime.parse(
+        vencidoTask['lastUpdate'] as String,
+      );
+
+      // Check how many days are available for this article
+      final availableDaysData = await Supabase.instance.client
+          .from('daysAvailable')
+          .select('idDaysAvailable, created_at')
+          .eq('articleID', widget.item.id);
+
+      final availableDaysCount = availableDaysData.length;
+
+      // ✅ Check if user has added NEW availability AFTER task became vencido
+      bool hasNewAvailability = false;
+      if (availableDaysData.isNotEmpty) {
+        for (var day in availableDaysData) {
+          if (day['created_at'] != null) {
+            final createdAt = DateTime.parse(day['created_at'] as String);
+            if (createdAt.isAfter(taskLastUpdate)) {
+              hasNewAvailability = true;
+              break;
+            }
+          }
+        }
+      }
+
+      print('📅 Article has $availableDaysCount available day(s)');
+      print('✨ Has new availability after vencido: $hasNewAvailability');
+
+      // ✅ Only show dialog if user hasn't added new availability yet
+      if (mounted && !hasNewAvailability) {
+        _showRescheduleDialog(availableDaysCount);
+      }
+    } catch (e) {
+      print('❌ Error checking vencido status: $e');
+    }
+  }
+
+  /// ✅ Show dialog prompting distributor to add more availability
+  void _showRescheduleDialog(int currentDaysCount) {
+    final bool needsMoreDays = currentDaysCount < 2;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder:
+          (context) => AlertDialog(
+            title: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Colors.red.shade100,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Icon(
+                    Icons.warning_rounded,
+                    color: Colors.red.shade700,
+                    size: 28,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                const Expanded(
+                  child: Text(
+                    'Tarea Vencida',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ],
+            ),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  needsMoreDays
+                      ? '⚠️ La tarea asignada ha vencido.\n\n'
+                          '❌ La fecha/hora solicitada anteriormente ya no es válida.\n\n'
+                          'Actualmente tienes solo $currentDaysCount día(s) de disponibilidad.\n\n'
+                          '💡 Recomendación: Agrega al menos 2-3 días con diferentes horarios para mayor flexibilidad.'
+                      : '⏰ La tarea asignada ha vencido.\n\n'
+                          '❌ La fecha/hora solicitada anteriormente ya no es válida.\n\n'
+                          'Tienes $currentDaysCount días disponibles, pero considera agregar más días u horarios para facilitar la coordinación.',
+                  style: const TextStyle(fontSize: 14),
+                ),
+                const SizedBox(height: 16),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.blue.shade50,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.blue.shade200),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.info_outline,
+                        color: Colors.blue.shade700,
+                        size: 20,
+                      ),
+                      const SizedBox(width: 8),
+                      const Expanded(
+                        child: Text(
+                          'Más días disponibles = Más posibilidades de coordinar',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Después'),
+              ),
+              ElevatedButton.icon(
+                onPressed: () async {
+                  // ✅ Store navigator and scaffold messenger before async operations
+                  final navigator = Navigator.of(context);
+                  final scaffoldMessenger = ScaffoldMessenger.of(context);
+
+                  navigator.pop(); // Close dialog first
+
+                  // ✅ Check if user has only 1 day or multiple days
+                  try {
+                    final availableDaysData = await Supabase.instance.client
+                        .from('daysAvailable')
+                        .select('idDaysAvailable')
+                        .eq('articleID', widget.item.id);
+
+                    final availableDaysCount = availableDaysData.length;
+
+                    if (mounted) {
+                      setState(() {
+                        _isEditing = true;
+                        // ✅ If only 1 day (the vencido one), clear completely for fresh start
+                        // ✅ If 2+ days, keep _selectedAvailability so other days show (vencido day will be handled separately)
+                        if (availableDaysCount <= 1) {
+                          _selectedAvailability = null; // Clean slate
+                        }
+                        // else: keep _selectedAvailability with existing days
+                      });
+
+                      // Show appropriate snackbar
+                      scaffoldMessenger.showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            availableDaysCount <= 1
+                                ? '📅 Selecciona nuevos días de disponibilidad abajo'
+                                : '📅 Agrega más días o ajusta tu disponibilidad',
+                          ),
+                          backgroundColor: const Color(0xFF2D8A8A),
+                          duration: const Duration(seconds: 4),
+                        ),
+                      );
+                    }
+                  } catch (e) {
+                    print('❌ Error checking available days: $e');
+                    if (mounted) {
+                      setState(() {
+                        _isEditing = true;
+                        _selectedAvailability = null; // Default to clean
+                      });
+                    }
+                  }
+                },
+                icon: const Icon(Icons.calendar_today),
+                label: const Text('Reprogramar Ahora'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF2D8A8A),
+                  foregroundColor: Colors.white,
+                ),
+              ),
+            ],
+          ),
+    );
+  }
+
   /// ✅ Load company admin's task to check status and show appropriate UI
   Future<void> _loadCompanyTask() async {
     if (_isOwner || !_isCompanyAdmin || _companyId == null) {
@@ -783,6 +1016,7 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
 
       // Get task for this article and company with request details
       // Note: Reviews are loaded separately via _loadReviews() since they reference articleID directly
+      // ✅ Include all tasks (including completado) to show reviews section
       final taskData =
           await Supabase.instance.client
               .from('tasks')
@@ -797,6 +1031,8 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
               .eq('articleID', widget.item.id)
               .eq('companyID', _companyId!)
               .eq('state', 1)
+              .order('lastUpdate', ascending: false) // ✅ Get most recent first
+              .limit(1)
               .maybeSingle();
 
       if (taskData != null && mounted) {
@@ -2341,18 +2577,17 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
                 .select('companyID')
                 .eq('idTask', _distributorTaskId!)
                 .single();
-        
+
         final companyId = taskData['companyID'] as int;
 
         final deliveredLog = articleHistory(
           articleId: widget.item.id,
           actorId: widget.item.ownerUserId,
           targetId: companyId,
-          description: 'delivered'
+          description: 'delivered',
         );
         await _articleHistoryDb.createArticleHistory(deliveredLog);
       }
-
 
       // ℹ️ Note: Employees do NOT receive points in userPointsLog (Option B)
       // Only distributors receive points when employees review them
@@ -2367,16 +2602,93 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
       if (mounted) Navigator.pop(context);
 
       if (mounted) {
+        // Show success message
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(message), backgroundColor: Colors.green),
         );
 
-        // Navigate back to home
-        Navigator.pushAndRemoveUntil(
-          context,
-          MaterialPageRoute(builder: (context) => const NavigationScreens()),
-          (route) => false,
+        // ✅ Reload the screen to show reviews section
+        setState(() {
+          // Reload task data to update UI
+          _loadDistributorTask();
+        });
+
+        // ✅ Show dialog with article received confirmation and navigate after
+        await showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder:
+              (context) => AlertDialog(
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                title: Row(
+                  children: [
+                    Icon(
+                      taskCompleted
+                          ? Icons.check_circle
+                          : Icons.hourglass_empty,
+                      color: taskCompleted ? Colors.green : Colors.orange,
+                      size: 28,
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        taskCompleted
+                            ? '¡Artículo Entregado!'
+                            : 'Confirmación Enviada',
+                        style: const TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                content: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      taskCompleted
+                          ? 'La entrega se ha completado exitosamente. Puedes ver las calificaciones más abajo.'
+                          : 'Tu confirmación ha sido enviada. Esperando confirmación del empleado.',
+                      style: const TextStyle(fontSize: 16),
+                    ),
+                  ],
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () {
+                      Navigator.pop(context);
+                      if (taskCompleted) {
+                        // Scroll to reviews section after dialog closes
+                        Future.delayed(const Duration(milliseconds: 300), () {
+                          // Reviews section will be visible after reload
+                        });
+                      }
+                    },
+                    child: Text(
+                      taskCompleted ? 'Ver Calificaciones' : 'Entendido',
+                      style: const TextStyle(
+                        color: Color(0xFF2D8A8A),
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
         );
+
+        // If completed, stay on screen to show reviews
+        // Otherwise navigate back
+        if (!taskCompleted) {
+          Navigator.pushAndRemoveUntil(
+            context,
+            MaterialPageRoute(builder: (context) => const NavigationScreens()),
+            (route) => false,
+          );
+        }
       }
     } catch (e) {
       // Close loading dialog
@@ -2404,6 +2716,86 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
     }
 
     try {
+      // ✅ Check if task is vencido before proceeding
+      final taskCheck =
+          await Supabase.instance.client
+              .from('tasks')
+              .select(
+                'workflowStatus, requestID, request:requestID(scheduledDay, scheduledEndTime)',
+              )
+              .eq('idTask', _employeeTaskId!)
+              .single();
+
+      final currentWorkflowStatus = taskCheck['workflowStatus'] as String?;
+      final request = taskCheck['request'] as Map<String, dynamic>?;
+
+      // Check if task is already marked as vencido
+      if (currentWorkflowStatus == 'vencido') {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                '❌ Esta tarea está vencida. No se puede completar.',
+              ),
+              backgroundColor: Colors.red,
+              duration: Duration(seconds: 4),
+            ),
+          );
+        }
+        return;
+      }
+
+      // ✅ Check if task is past grace period (15 minutes after scheduled end time)
+      if (request != null) {
+        final scheduledDay = request['scheduledDay'] as String?;
+        final scheduledEndTime = request['scheduledEndTime'] as String?;
+
+        if (scheduledDay != null && scheduledEndTime != null) {
+          try {
+            final scheduledDate = DateTime.parse(scheduledDay);
+            final endTimeParts = scheduledEndTime.split(':');
+            final scheduledDateTime = DateTime(
+              scheduledDate.year,
+              scheduledDate.month,
+              scheduledDate.day,
+              int.parse(endTimeParts[0]),
+              int.parse(endTimeParts[1]),
+            );
+
+            final now = DateTime.now();
+            final gracePeriodEnd = scheduledDateTime.add(
+              const Duration(minutes: 15),
+            );
+
+            if (now.isAfter(gracePeriodEnd)) {
+              // More than 15 minutes late - mark as vencido and prevent completion
+              await Supabase.instance.client
+                  .from('tasks')
+                  .update({
+                    'workflowStatus': 'vencido',
+                    'lastUpdate': DateTime.now().toIso8601String(),
+                  })
+                  .eq('idTask', _employeeTaskId!);
+
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text(
+                      '❌ Esta tarea está vencida (más de 15 min de retraso). No se puede completar.',
+                    ),
+                    backgroundColor: Colors.red,
+                    duration: Duration(seconds: 4),
+                  ),
+                );
+              }
+              return;
+            }
+          } catch (e) {
+            print('Error checking task deadline: $e');
+          }
+        }
+      }
+
       // Show loading
       showDialog(
         context: context,
@@ -2476,27 +2868,33 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
             'lastUpdate': DateTime.now().toIso8601String(),
           })
           .eq('idTask', _employeeTaskId!);
-      
+
       if (taskCompleted && newStatus == 'completado') {
         // Get company ID from the task
-        final taskData = await Supabase.instance.client
-            .from('tasks')
-            .select('companyID')
-            .eq('idTask', _employeeTaskId!)
-            .single();
-        
+        final taskData =
+            await Supabase.instance.client
+                .from('tasks')
+                .select('companyID')
+                .eq('idTask', _employeeTaskId!)
+                .single();
+
         final companyId = taskData['companyID'] as int?;
-        
+
         if (companyId != null) {
           final deliveredLog = articleHistory(
             articleId: widget.item.id,
-            actorId: widget.item.ownerUserId, // ✅ Distributor (article owner) who delivered
+            actorId:
+                widget
+                    .item
+                    .ownerUserId, // ✅ Distributor (article owner) who delivered
             targetId: companyId, // ✅ Company (empresa) who received
             description: 'delivered',
           );
-          
+
           await _articleHistoryDb.createArticleHistory(deliveredLog);
-          print('✅ Article history "delivered" log created - Distributor ${widget.item.ownerUserId} delivered to Company $companyId');
+          print(
+            '✅ Article history "delivered" log created - Distributor ${widget.item.ownerUserId} delivered to Company $companyId',
+          );
         }
       }
 
@@ -2599,14 +2997,114 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
           SnackBar(content: Text(message), backgroundColor: Colors.green),
         );
 
-        // Navigate back to home
-        Navigator.pushAndRemoveUntil(
-          context,
-          MaterialPageRoute(
-            builder: (context) => const EmployeeNavigationScreens(),
-          ),
-          (route) => false,
+        // ✅ Reload the screen to show reviews section
+        setState(() {
+          // Reload task data to update UI
+          _loadEmployeeTask();
+        });
+
+        // ✅ Show dialog with article received confirmation and navigate after
+        await showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder:
+              (context) => AlertDialog(
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                title: Row(
+                  children: [
+                    Icon(
+                      taskCompleted
+                          ? Icons.check_circle
+                          : Icons.hourglass_empty,
+                      color: taskCompleted ? Colors.green : Colors.orange,
+                      size: 28,
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        taskCompleted
+                            ? '¡Artículo Recibido!'
+                            : 'Confirmación Enviada',
+                        style: const TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                content: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      taskCompleted
+                          ? 'El artículo ha sido recogido exitosamente. Puedes ver las calificaciones más abajo.'
+                          : 'Tu confirmación ha sido enviada. Esperando confirmación del distribuidor.',
+                      style: const TextStyle(fontSize: 16),
+                    ),
+                    const SizedBox(height: 16),
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.orange[50],
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.orange[200]!),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(Icons.info_outline, color: Colors.orange[700]),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'Ten cuidado al manipular el objeto',
+                              style: TextStyle(
+                                color: Colors.orange[900],
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () {
+                      Navigator.pop(context);
+                      if (taskCompleted) {
+                        // Scroll to reviews section after dialog closes
+                        Future.delayed(const Duration(milliseconds: 300), () {
+                          // Reviews section will be visible after reload
+                        });
+                      }
+                    },
+                    child: Text(
+                      taskCompleted ? 'Ver Calificaciones' : 'Entendido',
+                      style: const TextStyle(
+                        color: Color(0xFF2D8A8A),
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
         );
+
+        // If completed, stay on screen to show reviews
+        // Otherwise navigate back
+        if (!taskCompleted) {
+          Navigator.pushAndRemoveUntil(
+            context,
+            MaterialPageRoute(
+              builder: (context) => const EmployeeNavigationScreens(),
+            ),
+            (route) => false,
+          );
+        }
       }
     } catch (e) {
       // Close loading dialog
@@ -3302,12 +3800,20 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
 
       await articleDatabase.updateArticle(updatedArticle);
 
-      // Update daysAvailable records - delete old and create new ones
+      // Update daysAvailability records - delete old and create new ones
       if (_selectedAvailability != null) {
         await _updateDaysAvailableRecords(
           widget.item.id,
           _selectedAvailability!,
         );
+
+        // ✅ If there's a vencido task, deactivate the old request
+        // This allows the company to send a new request with the new schedule
+        await _deactivateOldRequestIfVencido(widget.item.id);
+
+        // ✅ Note: Vencido tasks remain with state=1 for history
+        // The article will automatically become "publicados" again because
+        // old requests are deactivated (state=0) and vencido tasks don't block new requests
       }
 
       // 5. reload photos to update UI
@@ -3426,6 +3932,39 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
           await daysAvailableDatabase.createDaysAvailable(newDaysAvailable);
         }
       }
+    }
+  }
+
+  /// ✅ Deactivate old requests if there's a vencido task
+  /// This allows the company to send a new request after distributor updates availability
+  Future<void> _deactivateOldRequestIfVencido(int articleId) async {
+    try {
+      // Check if there's a vencido task for this article
+      final vencidoTask =
+          await Supabase.instance.client
+              .from('tasks')
+              .select('idTask, workflowStatus')
+              .eq('articleID', articleId)
+              .eq('workflowStatus', 'vencido')
+              .eq('state', 1)
+              .maybeSingle();
+
+      if (vencidoTask == null) return; // No vencido task found
+
+      print(
+        '⚠️ Found vencido task for article $articleId, deactivating old requests...',
+      );
+
+      // Deactivate all active requests for this article (set state=0)
+      await Supabase.instance.client
+          .from('request')
+          .update({'state': 0})
+          .eq('articleID', articleId)
+          .eq('state', 1);
+
+      print('✅ Deactivated old requests for article $articleId');
+    } catch (e) {
+      print('❌ Error deactivating old requests: $e');
     }
   }
 
@@ -4311,20 +4850,24 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
 
                       const SizedBox(height: 16),
 
-                      // ✅ Show scheduled time for employees, distributors, AND company admins with active tasks (but not completed)
+                      // ✅ Show scheduled time ONLY for active tasks (not completed or vencido)
                       if (((_isEmployee &&
                               _employeeScheduledDay != null &&
                               _employeeScheduledTime != null &&
-                              _employeeTaskStatus != 'completado') ||
+                              _employeeTaskStatus != null &&
+                              _employeeTaskStatus != 'completado' &&
+                              _employeeTaskStatus != 'vencido') ||
                           (_isOwner &&
                               _distributorTaskStatus != null &&
                               _distributorTaskStatus != 'completado' &&
+                              _distributorTaskStatus != 'vencido' &&
                               _distributorScheduledDay != null &&
                               _distributorScheduledTime != null) ||
                           (!_isOwner &&
                               _isCompanyAdmin &&
                               _companyTaskStatus != null &&
                               _companyTaskStatus != 'completado' &&
+                              _companyTaskStatus != 'vencido' &&
                               _companyScheduledDay != null &&
                               _companyScheduledTime != null)))
                         Container(
@@ -4428,8 +4971,10 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
                           !(!_isOwner &&
                               _isCompanyAdmin &&
                               _companyTaskStatus != null)) ...[
-                        if (!(_isOwner && _distributorTaskStatus != null))
-                          // availability - only show if distributor doesn't have active task
+                        if (!(_isOwner &&
+                            _distributorTaskStatus != null &&
+                            _distributorTaskStatus != 'vencido'))
+                          // availability - show if distributor doesn't have active task OR task is vencido
                           AvailabilityPicker(
                             selectedAvailability:
                                 _isEditing
@@ -4453,10 +4998,12 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
                       ],
 
                       // ✅ Empresa view OR Company admin with completed task OR Employee with completed task OR Distributor with completed task: Show ONLY reviews (no schedule, no user info)
+                      // ✅ Exclude vencido tasks from showing reviews for admin-empresa
                       if ((widget.isEmpresaView && widget.taskData != null) ||
                           (!_isOwner &&
                               _isCompanyAdmin &&
-                              _companyTaskStatus == 'completado') ||
+                              _companyTaskStatus == 'completado' &&
+                              widget.cardStatus != 'vencido') ||
                           (_isEmployee &&
                               (widget.item.workflowStatus == 'completado' ||
                                   _employeeTaskStatus == 'completado')) ||
@@ -4998,12 +5545,15 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
                         else
                           Column(
                             children: [
-                              // ✅ Hide edit/delete when there are approved requests OR task is in progress/completed
-                              if (_hasApprovedRequests ||
+                              // ✅ Hide edit/delete when there are approved requests OR task is in progress OR task is completed
+                              // ✅ ALLOW edit/delete ONLY if: no approved requests OR task is vencido (expired)
+                              // ✅ For completado: don't show anything (reviews section above handles it)
+                              if (_distributorTaskStatus == 'completado') ...[
+                                // Don't show anything - reviews section above shows "Artículo entregado"
+                              ] else if (_hasApprovedRequests ||
                                   (_distributorTaskStatus != null &&
-                                      (_distributorTaskStatus == 'completado' ||
-                                          _distributorTaskStatus ==
-                                              'en_proceso' ||
+                                      _distributorTaskStatus != 'vencido' &&
+                                      (_distributorTaskStatus == 'en_proceso' ||
                                           _distributorTaskStatus ==
                                               'sin_asignar' ||
                                           _distributorTaskStatus ==
@@ -5013,39 +5563,38 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
                                           _distributorTaskStatus ==
                                               'esperando_confirmacion_empleado'))) ...[
                                 // Show lock message for approved requests or in-process tasks (not completed)
-                                if (_hasApprovedRequests ||
-                                    _distributorTaskStatus != 'completado')
-                                  Container(
-                                    padding: const EdgeInsets.all(16),
-                                    decoration: BoxDecoration(
-                                      color: Colors.orange.withOpacity(0.1),
-                                      borderRadius: BorderRadius.circular(8),
-                                      border: Border.all(
-                                        color: Colors.orange.withOpacity(0.3),
-                                      ),
-                                    ),
-                                    child: Row(
-                                      children: [
-                                        Icon(
-                                          Icons.lock,
-                                          color: Colors.orange.shade700,
-                                        ),
-                                        const SizedBox(width: 12),
-                                        Expanded(
-                                          child: Text(
-                                            _hasApprovedRequests
-                                                ? 'No puedes editar o eliminar este artículo porque una empresa ha solicitado recogerlo'
-                                                : 'No puedes editar o eliminar este artículo mientras está en proceso',
-                                            style: TextStyle(
-                                              color: Colors.orange.shade900,
-                                              fontSize: 14,
-                                            ),
-                                          ),
-                                        ),
-                                      ],
+                                Container(
+                                  padding: const EdgeInsets.all(16),
+                                  decoration: BoxDecoration(
+                                    color: Colors.orange.withOpacity(0.1),
+                                    borderRadius: BorderRadius.circular(8),
+                                    border: Border.all(
+                                      color: Colors.orange.withOpacity(0.3),
                                     ),
                                   ),
+                                  child: Row(
+                                    children: [
+                                      Icon(
+                                        Icons.lock,
+                                        color: Colors.orange.shade700,
+                                      ),
+                                      const SizedBox(width: 12),
+                                      Expanded(
+                                        child: Text(
+                                          _hasApprovedRequests
+                                              ? 'No puedes editar o eliminar este artículo porque una empresa ha solicitado recogerlo'
+                                              : 'No puedes editar o eliminar este artículo mientras está en proceso',
+                                          style: TextStyle(
+                                            color: Colors.orange.shade900,
+                                            fontSize: 14,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
                               ] else ...[
+                                // Show Edit/Delete buttons only when no approved requests or task is vencido
                                 MyButton(
                                   onTap: () async {
                                     // ✅ Refrescar categorías bloqueadas antes de entrar en modo edición
@@ -5085,7 +5634,35 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
                             text: 'Solicitar Artículo',
                             color: const Color(0xFF2D8A8A),
                           )
-                        else if (_existingRequest!.status == 'pendiente')
+                        else if (widget.cardStatus == 'vencido')
+                          // Show "Artículo Vencido" message for vencido cards
+                          Container(
+                            padding: const EdgeInsets.all(16),
+                            decoration: BoxDecoration(
+                              color: Colors.red.withOpacity(0.1),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(
+                                color: Colors.red.withOpacity(0.3),
+                              ),
+                            ),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                const Icon(Icons.event_busy, color: Colors.red),
+                                const SizedBox(width: 8),
+                                const Text(
+                                  'Artículo Vencido',
+                                  style: TextStyle(
+                                    color: Colors.red,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          )
+                        else if (_existingRequest!.status == 'pendiente' &&
+                            widget.cardStatus !=
+                                'vencido') // ✅ Don't show for vencido cards
                           // Show "Solicitud Pendiente" button (disabled)
                           Container(
                             padding: const EdgeInsets.all(16),
@@ -5152,9 +5729,10 @@ class _DetailRecycleScreenState extends State<DetailRecycleScreen> {
                             ),
                           )
                         else if (_existingRequest!.status == 'aprobado' &&
+                            _companyTaskStatus != 'completado' &&
                             (_companyTaskStatus == null ||
                                 _companyTaskStatus == 'sin_asignar'))
-                          // Show "Asignar Empleado" button (only when no task yet or task not assigned)
+                          // Show "Asignar Empleado" button (only when approved and not completed and no active task)
                           MyButton(
                             onTap: () {
                               // ✅ Show employee assignment dialog

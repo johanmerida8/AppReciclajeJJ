@@ -509,12 +509,25 @@ class _CompanyMapScreenState extends State<CompanyMapScreen>
 
   String _getItemStatus(RecyclingItem item) {
     // Check if there's a task for this article (most recent status)
+    // ✅ Ignore vencido tasks - they don't block new requests
     final task = _tasksByArticleId[item.id];
     if (task != null) {
       final taskStatus = task['workflowStatus'] as String?;
       final request = task['request'] as Map<String, dynamic>?;
 
-      // ✅ Check if task is overdue (vencido)
+      // ✅ Skip vencido tasks - article should be available for new requests
+      if (taskStatus == 'vencido') {
+        // Check if there's a non-vencido request for this article
+        final request = _requestsByArticleId[item.id];
+        if (request != null && request.status != 'rechazado') {
+          if (request.status == 'aprobado') return 'sin_asignar';
+          if (request.status == 'pendiente') return 'en_espera';
+        }
+        // No active request - article is available
+        return 'publicados';
+      }
+
+      // ✅ Check if task is overdue (vencido) based on schedule
       if (taskStatus == 'asignado' || taskStatus == 'en_proceso') {
         if (request != null) {
           final scheduledDay = request['scheduledDay'] as String?;
@@ -543,6 +556,7 @@ class _CompanyMapScreenState extends State<CompanyMapScreen>
       }
 
       if (taskStatus == 'completado') return 'recogidos'; // ✅ Completed
+      // Note: vencido is already handled at the top of this function
       if (taskStatus == 'en_proceso') return 'en_proceso'; // ✅ Employee working
       if (taskStatus == 'asignado')
         return 'en_proceso'; // ✅ Employee assigned (treat as en_proceso)
@@ -860,7 +874,7 @@ class _CompanyMapScreenState extends State<CompanyMapScreen>
       final newLog = articleHistory(
         articleId: item.id,
         actorId: item.ownerUserId,
-        targetId: _companyId, 
+        targetId: _companyId,
         description: 'request_sent',
       );
 
@@ -2287,7 +2301,7 @@ class _CompanyArticleModalState extends State<_CompanyArticleModal> {
             _companyId = companyData['idCompany'] as int?;
           }
 
-          // Check for existing request
+          // Check for existing ACTIVE request (state=1)
           if (_companyId != null) {
             final existingRequest =
                 await Supabase.instance.client
@@ -2295,6 +2309,7 @@ class _CompanyArticleModalState extends State<_CompanyArticleModal> {
                     .select()
                     .eq('articleID', widget.item.id)
                     .eq('companyID', _companyId!)
+                    .eq('state', 1)
                     .order('lastUpdate', ascending: false)
                     .limit(1)
                     .maybeSingle();
@@ -2332,6 +2347,8 @@ class _CompanyArticleModalState extends State<_CompanyArticleModal> {
                 .select()
                 .eq('articleID', widget.item.id)
                 .eq('companyID', _companyId!)
+                .eq('state', 1)
+                .neq('workflowStatus', 'vencido')
                 .order('assignedDate', ascending: false)
                 .limit(1)
                 .maybeSingle();
@@ -2724,6 +2741,30 @@ class _CompanyArticleModalState extends State<_CompanyArticleModal> {
             ],
           ),
         );
+      } else if (workflowStatus == 'vencido') {
+        // ✅ Task is vencido/overdue - show vencido status with reassign option
+        return Container(
+          padding: const EdgeInsets.symmetric(vertical: 16),
+          decoration: BoxDecoration(
+            color: Colors.red.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: Colors.red.withOpacity(0.3)),
+          ),
+          child: const Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.warning, color: Colors.red, size: 20),
+              SizedBox(width: 8),
+              Text(
+                'Vencido',
+                style: TextStyle(
+                  color: Colors.red,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+        );
       } else if (workflowStatus == 'sin_asignar' || employeeId == null) {
         // ✅ Task exists but no employee assigned - show "Asignar Empleado" button
         print('✅ Showing Asignar Empleado button');
@@ -2966,6 +3007,7 @@ class _CompanyArticleNavigationModalState
                     .select('*')
                     .eq('articleID', currentItem.id)
                     .eq('companyID', _companyId!)
+                    .eq('state', 1)
                     .maybeSingle();
 
             if (requestData != null && mounted) {
@@ -2998,6 +3040,8 @@ class _CompanyArticleNavigationModalState
               .select('*')
               .eq('articleID', currentItem.id)
               .eq('companyID', _companyId!)
+              .eq('state', 1)
+              .neq('workflowStatus', 'vencido')
               .maybeSingle();
 
       if (mounted && taskData != null) {
@@ -3320,6 +3364,30 @@ class _CompanyArticleNavigationModalState
                 'Completado',
                 style: TextStyle(
                   color: Colors.teal,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+        );
+      } else if (workflowStatus == 'vencido') {
+        // ✅ Task is vencido/overdue
+        return Container(
+          padding: const EdgeInsets.symmetric(vertical: 16),
+          decoration: BoxDecoration(
+            color: Colors.red.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: Colors.red.withOpacity(0.3)),
+          ),
+          child: const Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.warning, color: Colors.red, size: 20),
+              SizedBox(width: 8),
+              Text(
+                'Vencido',
+                style: TextStyle(
+                  color: Colors.red,
                   fontWeight: FontWeight.bold,
                 ),
               ),

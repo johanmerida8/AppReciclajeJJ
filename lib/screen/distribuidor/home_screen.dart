@@ -184,26 +184,51 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   /// Initialize all data
   Future<void> _initialize() async {
-    await _loadUserData();
-    await _loadPendingRequestCount(); // Load notification count
-    await _loadData();
+    // ✅ Step 1: Show map immediately (hide loading overlay)
+    if (mounted) {
+      setState(() {
+        _isLoading = false;
+      });
+    }
 
-    // ✅ Verificar GPS primero antes de intentar cargar ubicación
+    // ✅ Step 2: Load user data in background
+    await _loadUserData();
+
+    // ✅ Step 3: Load notification count
+    _loadPendingRequestCount(); // Don't await - load in background
+
+    // ✅ Step 4: Check GPS
     await _checkLocationServices();
 
-    // ✅ Mostrar diálogo si GPS está deshabilitado (solo si usuario no lo rechazó previamente)
+    // ✅ Step 5: Show GPS dialog if needed
     if ((!_isLocationServiceEnabled || !_hasLocationPermission) &&
         !_userDismissedLocationDialog) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        // ✅ Verificar que el widget esté montado y sea la ruta activa
         if (mounted && ModalRoute.of(context)?.isCurrent == true) {
           _showEnableLocationDialog();
         }
       });
     } else if (_isLocationServiceEnabled && _hasLocationPermission) {
-      // GPS está habilitado, cargar ubicación automáticamente
-      await _loadUserLocation();
+      // GPS enabled, load location in background
+      _loadUserLocation(); // Don't await - load in background
     }
+
+    // ✅ Step 6: Load articles progressively in background
+    _loadDataProgressively();
+  }
+
+  /// Load data progressively without blocking UI
+  Future<void> _loadDataProgressively() async {
+    // First try cache for instant display
+    final hasCache = await _loadFromCache();
+
+    if (!hasCache) {
+      // No cache, show empty map while loading
+      print('📭 No cache available, loading fresh data...');
+    }
+
+    // Always load fresh data in background to update
+    await _loadFreshData(showLoading: false);
   }
 
   /// Load current user data
@@ -308,8 +333,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
         setState(() {
           _items = List<RecyclingItem>.from(cachedData['items']);
-          _isLoading = false;
         });
+
+        // Load statuses after setting items
+        await _loadArticleStatuses();
+
         print('✅ Loaded ${_items.length} items from cache');
         return true;
       }
@@ -330,7 +358,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
       setState(() {
         _items = items;
-        _isLoading = false;
         _hasError = false;
       });
 
@@ -355,7 +382,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       setState(() {
         _hasError = true;
         _errorMessage = 'Error al cargar datos: $e';
-        _isLoading = false;
       });
       print('❌ Error loading fresh data: $e');
     }
@@ -674,9 +700,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             TextButton(
               onPressed: () {
                 // Mark that user dismissed the dialog so we don't show it again in this session
-                setState(() {
-                  _userDismissedLocationDialog = true;
-                });
+                if (mounted) {
+                  setState(() {
+                    _userDismissedLocationDialog = true;
+                  });
+                }
                 Navigator.of(context).pop();
                 print('❌ Usuario rechazó activar ubicación');
               },
@@ -808,11 +836,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     if (!mounted) return;
 
-    setState(() {
-      _quickRegisterLocation = point;
-      _quickRegisterAddress = address;
-      _showTemporaryMarker = true;
-    });
+    if (mounted) {
+      setState(() {
+        _quickRegisterLocation = point;
+        _quickRegisterAddress = address;
+        _showTemporaryMarker = true;
+      });
+    }
 
     if (_mapService.isMapReady(_mapController)) {
       _mapController.move(point, MapService.closeZoomLevel);
@@ -863,11 +893,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   /// Cancel quick register
   void _cancelQuickRegister() {
     Navigator.pop(context);
-    setState(() {
-      _quickRegisterLocation = null;
-      _quickRegisterAddress = null;
-      _showTemporaryMarker = false;
-    });
+    if (mounted) {
+      setState(() {
+        _quickRegisterLocation = null;
+        _quickRegisterAddress = null;
+        _showTemporaryMarker = false;
+      });
+    }
   }
 
   /// Confirm quick register
@@ -888,11 +920,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
       if (!mounted) return;
 
-      setState(() {
-        _quickRegisterLocation = null;
-        _quickRegisterAddress = null;
-        _showTemporaryMarker = false;
-      });
+      if (mounted) {
+        setState(() {
+          _quickRegisterLocation = null;
+          _quickRegisterAddress = null;
+          _showTemporaryMarker = false;
+        });
+      }
 
       // ✅ Siempre refrescar datos al volver del registro
       print('🔄 Reloading data after returning from registration...');
@@ -1427,7 +1461,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final taskStatus = _articleTaskStatus[item.id];
 
     // Priority 1: Check task status (if task exists)
-    if (taskStatus == 'completado') {
+    if (taskStatus == 'vencido') {
+      markerColor = Colors.red; // ✅ Vencido (expired) - Red
+    } else if (taskStatus == 'completado') {
       markerColor = Colors.green; // ✅ Completed - Green
     } else if (taskStatus == 'en_proceso' || taskStatus == 'asignado') {
       markerColor = Colors.amber; // ✅ Employee working - Amber
@@ -1706,10 +1742,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final nearbyItems = _findNearbyArticles(item, maxDistance: 300.0);
 
     // ✅ Actualizar índice y ACTIVAR navegación para mostrar borde blanco
-    setState(() {
-      _currentArticleIndex = index;
-      _showArticleNavigation = true;
-    });
+    if (mounted) {
+      setState(() {
+        _currentArticleIndex = index;
+        _showArticleNavigation = true;
+      });
+    }
 
     // ✅ Centrar mapa en el marcador con zoom consistente
     if (_mapService.isMapReady(_mapController)) {
@@ -1820,10 +1858,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final index = _myItems.indexWhere((i) => i.id == firstItem.id);
 
     // Activar navegación y actualizar índice
-    setState(() {
-      _currentArticleIndex = index;
-      _showArticleNavigation = true;
-    });
+    if (mounted) {
+      setState(() {
+        _currentArticleIndex = index;
+        _showArticleNavigation = true;
+      });
+    }
 
     // ✅ Centrar mapa en el cluster con zoom cercano (como la ubicación del usuario)
     if (_mapService.isMapReady(_mapController)) {

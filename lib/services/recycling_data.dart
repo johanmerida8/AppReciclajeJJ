@@ -129,10 +129,9 @@ class RecyclingDataService {
       // ✅ Get workflow status from tasks table and check for vencido
       String? workflowStatus;
       try {
-        final task =
-            await Supabase.instance.client
-                .from('tasks')
-                .select('''
+        final task = await Supabase.instance.client
+            .from('tasks')
+            .select('''
               workflowStatus,
               request:requestID(
                 scheduledDay,
@@ -140,8 +139,11 @@ class RecyclingDataService {
                 scheduledEndTime
               )
             ''')
-                .eq('articleID', article.id!)
-                .maybeSingle();
+            .eq('articleID', article.id!)
+            .eq('state', 1)
+            .order('lastUpdate', ascending: false)
+            .limit(1)
+            .maybeSingle();
 
         if (task != null) {
           workflowStatus = task['workflowStatus'] as String?;

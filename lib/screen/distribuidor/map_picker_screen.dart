@@ -293,6 +293,8 @@ class _MapPickerScreenState extends State<MapPickerScreen> with WidgetsBindingOb
     );
   }
 
+  double _currentZoom = 13.0;
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -318,6 +320,12 @@ class _MapPickerScreenState extends State<MapPickerScreen> with WidgetsBindingOb
               interactionOptions: const InteractionOptions(
                 flags: InteractiveFlag.all & ~InteractiveFlag.rotate,
               ),
+              cameraConstraint: CameraConstraint.contain(
+                bounds: LatLngBounds(
+                  const LatLng(-22.9, -69.7), // Southwest corner of Bolivia
+                  const LatLng(-9.6, -57.4), // Northeast corner of Bolivia
+                ),
+              ),
               onTap: (tapPosition, point) async {
                 await _handleLocationSelection(
                   point.latitude, 
@@ -325,23 +333,10 @@ class _MapPickerScreenState extends State<MapPickerScreen> with WidgetsBindingOb
                   fromMap: true
                 );
               },
-              onPositionChanged: (position, hasGesture) {
-                // ✅ Restrict map to Bolivia boundaries
-                if (hasGesture) {
-                  final center = position.center;
-                  const double minLat = -22.9;  // Southwest corner of Bolivia
-                  const double maxLat = -9.6;   // Northeast corner of Bolivia
-                  const double minLng = -69.7;  // Southwest corner of Bolivia
-                  const double maxLng = -57.4;  // Northeast corner of Bolivia
-                  
-                  // Check if we're outside Bolivia boundaries
-                  if (center.latitude < minLat || center.latitude > maxLat ||
-                      center.longitude < minLng || center.longitude > maxLng) {
-                    // Clamp position to Bolivia boundaries
-                    final clampedLat = center.latitude.clamp(minLat, maxLat);
-                    final clampedLng = center.longitude.clamp(minLng, maxLng);
-                    _mapController.move(LatLng(clampedLat, clampedLng), position.zoom);
-                  }
+              onPositionChanged: (MapCamera position, bool hasGesture) {
+                _currentZoom = position.zoom;
+                if (position.zoom >= 14 || position.zoom < 12) {
+                  FocusScope.of(context).unfocus();
                 }
               },
             ),

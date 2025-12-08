@@ -34,13 +34,16 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
   Multimedia? currentUserAvatar; // Admin user's avatar from multimedia table
   Multimedia? companyAvatar; // Company's avatar/logo from multimedia table
   Company? currentCompany;
-  List<Article> companyArticles = [];
-  List<Article> filteredArticles = []; // Filtered and sorted articles
+
+  // ✅ New: Store article cards with their specific request/task info
+  List<Map<String, dynamic>> articleCards =
+      []; // Each card has: article, status, type (task/request), id
+  List<Map<String, dynamic>> filteredArticleCards = []; // Filtered cards
+
   List<Map<String, dynamic>> completedTasks =
       []; // Completed tasks with reviews for empresa view
   Map<int, Multimedia?> articlePhotos = {};
   Map<int, String> categoryNames = {};
-  Map<int, String> articleStatuses = {}; // Store status for each article
   bool isLoading = true;
   bool isLoadingArticles = true; // ✅ Track article loading state
   bool isViewingCompanyProfile =
@@ -84,9 +87,8 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
     // ✅ Clear cached data to prevent memory leaks
     articlePhotos.clear();
     categoryNames.clear();
-    articleStatuses.clear();
-    companyArticles.clear();
-    filteredArticles.clear();
+    articleCards.clear();
+    filteredArticleCards.clear();
     completedTasks.clear();
     super.dispose();
   }
@@ -187,7 +189,6 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
 
               await _loadArticleStats();
               await _loadArticlesFromTasks();
-              await _loadArticleStatuses();
               _applyFilters();
 
               // ✅ Load article photos and categories progressively
@@ -258,8 +259,15 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
   //   }
   // }
 
-  Future<RecyclingItem?> _getRecyclingItemFromArticle(Article article) async {
+  Future<RecyclingItem?> _getRecyclingItemFromCard(
+    Map<String, dynamic> card,
+  ) async {
     try {
+      final article = card['article'] as Article?;
+      if (article == null) return null;
+
+      final cardStatus = card['status'] as String?;
+
       final categoryName =
           article.categoryID != null
               ? await _getCategoryName(article.categoryID!)
@@ -284,20 +292,23 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
         longitude: article.lng ?? 0.0,
         address: article.address ?? '',
         createdAt: article.lastUpdate ?? DateTime.now(),
-        workflowStatus: articleStatuses[article.id!],
+        workflowStatus: cardStatus,
         availableDays: null,
         availableTimeStart: null,
         availableTimeEnd: null,
       );
     } catch (e) {
-      print('❌ Error converting Article to RecyclingItem: $e');
+      print('❌ Error converting card to RecyclingItem: $e');
       return null;
     }
   }
 
-  void _navigateToDetail(Article article) async {
-    final recyclingItem = await _getRecyclingItemFromArticle(article);
+  void _navigateToDetail(Map<String, dynamic> card) async {
+    final recyclingItem = await _getRecyclingItemFromCard(card);
     if (recyclingItem == null) return;
+
+    final article = card['article'] as Article?;
+    if (article == null) return;
 
     // Check if this is a completed task for empresa view
     Map<String, dynamic>? taskData;
@@ -321,6 +332,11 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
               item: recyclingItem,
               isEmpresaView: isViewingCompanyProfile, // Pass empresa view flag
               taskData: taskData, // Pass task data with reviews
+              cardType:
+                  card['type'] as String?, // ✅ Pass card type (task/request)
+              cardStatus:
+                  card['status']
+                      as String?, // ✅ Pass card status (vencido, en_espera, etc.)
             ),
       ),
     );
@@ -423,6 +439,9 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
 
         if (workflowStatus == 'completado') {
           articleStats['recibido'] = articleStats['recibido']! + 1;
+        } else if (workflowStatus == 'vencido') {
+          // ✅ Task is overdue/expired
+          articleStats['vencido'] = articleStats['vencido']! + 1;
         } else if (workflowStatus == 'en_proceso' ||
             workflowStatus == 'asignado') {
           articleStats['enProceso'] = articleStats['enProceso']! + 1;
@@ -435,20 +454,38 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
         }
       }
 
-      // Count requests that don't have tasks yet
+      // Count requests (can exist alongside tasks, e.g., new pendiente request after vencido task)
       for (var request in requests) {
         final articleId = request['articleID'] as int?;
-        if (articleId == null || articleIdsWithTasks.contains(articleId))
-          continue;
+        if (articleId == null) continue;
 
         final requestStatus = request['status'] as String?;
         print('   📨 Request for article $articleId: status=$requestStatus');
 
+        // ✅ Check if this article has ANY task (completed, vencido, or active)
+        bool hasAnyTask = articleIdsWithTasks.contains(articleId);
+        String? taskStatus;
+
+        if (hasAnyTask) {
+          // Find the task for this article
+          final articleTask = tasks.firstWhere(
+            (t) => t['articleID'] == articleId,
+            orElse: () => {},
+          );
+          taskStatus = articleTask['workflowStatus'] as String?;
+        }
+
         if (requestStatus == 'aprobado') {
-          // Approved but no task yet - waiting for assignment
-          articleStats['sinAsignar'] = articleStats['sinAsignar']! + 1;
+          // ✅ Only count as "Sin Asignar" if:
+          // 1. No task exists at all (never assigned), OR
+          // 2. Task exists but is "sin_asignar" status (distributor accepted but hasn't assigned employee yet)
+          if (!hasAnyTask || taskStatus == 'sin_asignar') {
+            articleStats['sinAsignar'] = articleStats['sinAsignar']! + 1;
+          }
+          // ✅ If task is vencido/completado/en_proceso, the request is ALREADY processed - don't count it
         } else if (requestStatus == 'pendiente') {
-          // Waiting for distributor approval
+          // ✅ Always count pendiente requests (waiting for distributor approval)
+          // Can exist even if there's a vencido task (distributor needs to approve new request)
           articleStats['enEspera'] = articleStats['enEspera']! + 1;
         }
         // Note: 'rechazado' requests are not counted
@@ -474,52 +511,122 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
       if (companies.isEmpty) return;
       final companyId = companies.first['idCompany'] as int;
 
-      // Load all tasks for this company to get article IDs
+      // Load all tasks with full data
       final tasks = await Supabase.instance.client
           .from('tasks')
-          .select('articleID')
+          .select('idTask, articleID, workflowStatus, employeeID, lastUpdate')
           .eq('companyID', companyId)
           .eq('state', 1);
 
-      // Get unique article IDs
-      final articleIds = <int>{};
-      for (var task in tasks) {
-        final articleId = task['articleID'] as int?;
-        if (articleId != null) articleIds.add(articleId);
-      }
-
-      // Also load requests to get articles that may not have tasks yet
+      // Load all requests with full data
       final requests = await Supabase.instance.client
           .from('request')
-          .select('articleID')
+          .select('idRequest, articleID, status, requestDate')
           .eq('companyID', companyId)
           .eq('state', 1);
 
-      for (var request in requests) {
-        final articleId = request['articleID'] as int?;
-        if (articleId != null) articleIds.add(articleId);
+      // ✅ Create card objects for each task
+      articleCards = [];
+      Set<int> uniqueArticleIds = {};
+
+      // Add task cards
+      for (var task in tasks) {
+        final articleId = task['articleID'] as int?;
+        final workflowStatus = task['workflowStatus'] as String?;
+
+        if (articleId != null && workflowStatus != null) {
+          uniqueArticleIds.add(articleId);
+
+          // Determine display status from workflowStatus
+          String displayStatus;
+          if (workflowStatus == 'completado') {
+            displayStatus = 'recibido';
+          } else if (workflowStatus == 'vencido') {
+            displayStatus = 'vencido';
+          } else if (workflowStatus == 'en_proceso' ||
+              workflowStatus == 'asignado') {
+            displayStatus = 'en_proceso';
+          } else if (task['employeeID'] == null ||
+              workflowStatus == 'sin_asignar') {
+            displayStatus = 'sin_asignar';
+          } else {
+            displayStatus = 'en_proceso';
+          }
+
+          articleCards.add({
+            'articleId': articleId,
+            'type': 'task',
+            'id': task['idTask'],
+            'status': displayStatus,
+            'rawStatus': workflowStatus,
+            'date': task['lastUpdate'],
+          });
+        }
       }
 
-      if (articleIds.isEmpty) {
-        companyArticles = [];
+      // Add request cards (only pendiente, or aprobado without task)
+      for (var request in requests) {
+        final articleId = request['articleID'] as int?;
+        final requestStatus = request['status'] as String?;
+
+        if (articleId != null && requestStatus != null) {
+          uniqueArticleIds.add(articleId);
+
+          // Check if this article already has a task
+          final hasTask = tasks.any((t) => t['articleID'] == articleId);
+
+          if (requestStatus == 'pendiente') {
+            // Always show pendiente requests (even with vencido task)
+            articleCards.add({
+              'articleId': articleId,
+              'type': 'request',
+              'id': request['idRequest'],
+              'status': 'en_espera',
+              'rawStatus': requestStatus,
+              'date': request['requestDate'],
+            });
+          } else if (requestStatus == 'aprobado' && !hasTask) {
+            // Only show aprobado if no task exists yet
+            articleCards.add({
+              'articleId': articleId,
+              'type': 'request',
+              'id': request['idRequest'],
+              'status': 'sin_asignar',
+              'rawStatus': requestStatus,
+              'date': request['requestDate'],
+            });
+          }
+        }
+      }
+
+      if (uniqueArticleIds.isEmpty) {
         return;
       }
 
-      print('📦 Loading ${articleIds.length} articles from tasks/requests');
+      print(
+        '📦 Created ${articleCards.length} article cards from ${uniqueArticleIds.length} unique articles',
+      );
 
-      // Load articles by IDs (without photos - photos loaded progressively later)
+      // Load article data for all unique IDs
       final articlesData = await Supabase.instance.client
           .from('article')
           .select()
-          .inFilter('idArticle', articleIds.toList())
+          .inFilter('idArticle', uniqueArticleIds.toList())
           .eq('state', 1);
 
-      companyArticles =
-          articlesData.map((data) => Article.fromMap(data)).toList();
+      // Map articles by ID for quick lookup
+      final articlesMap = {
+        for (var data in articlesData)
+          data['idArticle'] as int: Article.fromMap(data),
+      };
 
-      print(
-        '✅ Loaded ${companyArticles.length} articles (photos will load progressively)',
-      );
+      // Attach article data to each card
+      for (var card in articleCards) {
+        final articleId = card['articleId'] as int;
+        card['article'] = articlesMap[articleId];
+      }
+
+      print('✅ Loaded article data for ${articlesMap.length} articles');
     } catch (e) {
       print('❌ Error loading articles from tasks: $e');
     }
@@ -527,19 +634,25 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
 
   /// ✅ Load article photos and categories progressively in batches
   Future<void> _loadArticlePhotosProgressively() async {
-    if (companyArticles.isEmpty) return;
+    if (articleCards.isEmpty) return;
 
     print('📸 Loading article photos progressively...');
 
+    // Get unique article IDs to avoid loading same photo multiple times
+    final Set<int> loadedArticleIds = {};
+
     // ✅ Load in batches of 4 to match pagination (faster initial display)
     const batchSize = 4;
-    for (var i = 0; i < companyArticles.length; i += batchSize) {
+    for (var i = 0; i < articleCards.length; i += batchSize) {
       if (!mounted) break;
 
-      final batch = companyArticles.skip(i).take(batchSize);
+      final batch = articleCards.skip(i).take(batchSize);
 
-      for (var article in batch) {
-        if (article.id != null) {
+      for (var card in batch) {
+        final article = card['article'] as Article?;
+        if (article?.id != null && !loadedArticleIds.contains(article!.id)) {
+          loadedArticleIds.add(article.id!);
+
           // Load photo
           final photo = await mediaDatabase.getMainPhotoByPattern(
             'articles/${article.id}',
@@ -574,7 +687,7 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
       }
 
       // Small delay between batches for smooth rendering
-      if (i + batchSize < companyArticles.length) {
+      if (i + batchSize < articleCards.length) {
         await Future.delayed(
           const Duration(milliseconds: 30),
         ); // ✅ Reduced delay for faster loading
@@ -584,108 +697,27 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
     print('✅ Finished loading ${articlePhotos.length} article photos');
   }
 
-  Future<void> _loadArticleStatuses() async {
-    if (currentUser?.id == null) return;
-
-    try {
-      // Get company ID
-      final companies = await Supabase.instance.client
-          .from('company')
-          .select('idCompany')
-          .eq('adminUserID', currentUser!.id!)
-          .limit(1);
-
-      if (companies.isEmpty) return;
-      final companyId = companies.first['idCompany'] as int;
-
-      // Load all requests for this company
-      final requests = await Supabase.instance.client
-          .from('request')
-          .select('*')
-          .eq('companyID', companyId)
-          .eq('state', 1);
-
-      // Load all tasks for this company
-      final tasks = await Supabase.instance.client
-          .from('tasks')
-          .select('*')
-          .eq('companyID', companyId)
-          .eq('state', 1);
-
-      // Map by article ID
-      final requestsByArticleId = <int, Map<String, dynamic>>{};
-      for (var req in requests) {
-        final articleId = req['articleID'] as int?;
-        if (articleId != null) requestsByArticleId[articleId] = req;
-      }
-
-      final tasksByArticleId = <int, Map<String, dynamic>>{};
-      for (var task in tasks) {
-        final articleId = task['articleID'] as int?;
-        if (articleId != null) tasksByArticleId[articleId] = task;
-      }
-
-      // Determine status for each article
-      articleStatuses = {};
-      for (var article in companyArticles) {
-        if (article.id == null) continue;
-        articleStatuses[article.id!] = _getArticleStatusFromData(
-          article.id!,
-          requestsByArticleId,
-          tasksByArticleId,
-        );
-      }
-    } catch (e) {
-      print('❌ Error loading article statuses: $e');
-    }
-  }
-
-  String _getArticleStatusFromData(
-    int articleId,
-    Map<int, Map<String, dynamic>> requestsByArticleId,
-    Map<int, Map<String, dynamic>> tasksByArticleId,
-  ) {
-    // Check task first
-    final task = tasksByArticleId[articleId];
-    if (task != null) {
-      final workflowStatus = task['workflowStatus'] as String?;
-      if (workflowStatus == 'completado') return 'recibido';
-      if (workflowStatus == 'en_proceso' || workflowStatus == 'asignado')
-        return 'en_proceso';
-      final employeeId = task['employeeID'] as int?;
-      if (employeeId == null) return 'sin_asignar';
-      return 'en_proceso';
-    }
-
-    // Check request
-    final request = requestsByArticleId[articleId];
-    if (request != null) {
-      final requestStatus = request['status'] as String?;
-      if (requestStatus == 'aprobado') return 'sin_asignar';
-      if (requestStatus == 'pendiente') return 'en_espera';
-    }
-
-    return 'publicado';
-  }
+  // ✅ Status is now determined when creating cards in _loadArticlesFromTasks()
+  // No need for separate _loadArticleStatuses() method
 
   void _applyFilters() {
-    List<Article> filtered = List.from(companyArticles);
+    List<Map<String, dynamic>> filtered = List.from(articleCards);
 
     // Filter by view type
     if (isViewingCompanyProfile) {
       // Company view: only show completed/recibido articles
       filtered =
-          filtered.where((article) {
-            final status = articleStatuses[article.id];
+          filtered.where((card) {
+            final status = card['status'] as String?;
             return status == 'recibido';
           }).toList();
     } else {
       // Admin view: filter by selected statuses (if any)
       if (selectedStatusFilters.isNotEmpty) {
         filtered =
-            filtered.where((article) {
-              final status = articleStatuses[article.id];
-              return selectedStatusFilters.contains(status);
+            filtered.where((card) {
+              final status = card['status'] as String?;
+              return status != null && selectedStatusFilters.contains(status);
             }).toList();
       }
     }
@@ -693,7 +725,9 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
     // Apply search filter
     if (searchQuery.isNotEmpty) {
       filtered =
-          filtered.where((article) {
+          filtered.where((card) {
+            final article = card['article'] as Article?;
+            if (article == null) return false;
             final name = article.name?.toLowerCase() ?? '';
             final condition = article.condition?.toLowerCase() ?? '';
             final query = searchQuery.toLowerCase();
@@ -701,23 +735,22 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
           }).toList();
     }
 
-    // Sort by date (using lastUpdate for more accurate sorting)
+    // Sort by date
     filtered.sort((a, b) {
+      final dateA =
+          DateTime.tryParse(a['date'] as String? ?? '') ?? DateTime(2000);
+      final dateB =
+          DateTime.tryParse(b['date'] as String? ?? '') ?? DateTime(2000);
+
       if (sortAscending) {
-        // Ascending: Oldest first
-        return (a.lastUpdate ?? DateTime(2000)).compareTo(
-          b.lastUpdate ?? DateTime(2000),
-        );
+        return dateA.compareTo(dateB);
       } else {
-        // Descending: Latest/Newest first (DEFAULT)
-        return (b.lastUpdate ?? DateTime(2000)).compareTo(
-          a.lastUpdate ?? DateTime(2000),
-        );
+        return dateB.compareTo(dateA);
       }
     });
 
     setState(() {
-      filteredArticles = filtered;
+      filteredArticleCards = filtered;
     });
   }
 
@@ -978,7 +1011,6 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
       await _loadArticleStats();
       await _loadCompanyRating();
       await _loadArticlesFromTasks();
-      await _loadArticleStatuses();
       await _loadArticlePhotosProgressively();
       await _loadCompletedTasks();
       _applyFilters();
@@ -1497,7 +1529,7 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
                                       MainAxisAlignment.spaceBetween,
                                   children: [
                                     Text(
-                                      'Total ${filteredArticles.length} publicaciones',
+                                      'Total ${filteredArticleCards.length} publicaciones',
                                       style: TextStyle(
                                         fontSize: 13,
                                         color: Colors.grey[600],
@@ -1573,7 +1605,7 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
                             ),
                           ),
                         )
-                      else if (filteredArticles.isEmpty)
+                      else if (filteredArticleCards.isEmpty)
                         SliverFillRemaining(
                           hasScrollBody: false,
                           child: Center(
@@ -1620,9 +1652,11 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
                                 final totalToShow =
                                     _currentArticlePage * _articlesPerPage;
                                 final paginatedArticles =
-                                    filteredArticles.take(totalToShow).toList();
+                                    filteredArticleCards
+                                        .take(totalToShow)
+                                        .toList();
                                 final hasMore =
-                                    filteredArticles.length >
+                                    filteredArticleCards.length >
                                     paginatedArticles.length;
 
                                 // Update hasMoreArticles flag
@@ -1663,22 +1697,24 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
                                   );
                                 }
 
-                                final article = paginatedArticles[index];
+                                final card = paginatedArticles[index];
                                 return GestureDetector(
                                   onTap: () async {
                                     // Navigate to detail screen
-                                    _navigateToDetail(article);
+                                    _navigateToDetail(card);
                                   },
-                                  child: _buildArticleCard(article),
+                                  child: _buildArticleCard(card),
                                 );
                               },
                               childCount: () {
                                 final totalToShow =
                                     _currentArticlePage * _articlesPerPage;
                                 final paginatedArticles =
-                                    filteredArticles.take(totalToShow).toList();
+                                    filteredArticleCards
+                                        .take(totalToShow)
+                                        .toList();
                                 final hasMore =
-                                    filteredArticles.length >
+                                    filteredArticleCards.length >
                                     paginatedArticles.length;
                                 return paginatedArticles.length +
                                     (hasMore ? 1 : 0);
@@ -1714,9 +1750,12 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
     );
   }
 
-  Widget _buildArticleCard(Article article) {
-    // Get workflow status badge
-    final status = articleStatuses[article.id] ?? 'publicado';
+  Widget _buildArticleCard(Map<String, dynamic> card) {
+    final article = card['article'] as Article?;
+    if (article == null) return const SizedBox();
+
+    // Get status from card
+    final status = card['status'] as String? ?? 'publicado';
     Color statusColor;
     String statusText;
 

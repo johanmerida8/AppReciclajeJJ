@@ -12,5 +12,17 @@ class DistribuidorWidgetController {
       name: 'DistribuidorWidget',
       androidName: 'DistribuidorWidget',
     );
+    
+    // Force widget to refresh with new layout
+    print('🔄 Widget updated - Points: $puntos, Ranking: $ranking');
+  }
+  
+  /// Force widget refresh (useful after layout changes)
+  static Future<void> forceRefresh() async {
+    await HomeWidget.updateWidget(
+      name: 'DistribuidorWidget',
+      androidName: 'DistribuidorWidget',
+    );
+    print('🔄 Widget force refreshed');
   }
 }

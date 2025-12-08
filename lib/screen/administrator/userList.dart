@@ -86,6 +86,8 @@ class _UserListState extends State<UserList> {
     }
   }
 
+  
+
   @override
   void dispose() {
     _searchController.dispose();
@@ -103,6 +105,12 @@ class _UserListState extends State<UserList> {
         elevation: 0,
         toolbarHeight: 48,
         title: const Text('Usuarios', style: AppTextStyles.title),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.logout, color: Colors.red),
+            onPressed: _logout,
+          ),
+        ],
       ),
       body:
           _isLoading

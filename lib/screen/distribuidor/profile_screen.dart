@@ -119,7 +119,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         }
 
         // ✅ Load user avatar in background
-        if (currentUser?.id != null) {
+        if (currentUser?.id != null && mounted) {
           final userRole = currentUser!.role?.toLowerCase() ?? 'user';
           String avatarPattern = 'users/$userRole/${currentUser!.id}/avatars/';
           currentUserAvatar = await mediaDatabase.getMainPhotoByPattern(
@@ -137,10 +137,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
         }
 
         // ✅ Fetch user's articles
-        if (currentUser?.id != null) {
+        if (currentUser?.id != null && mounted) {
           userArticles = await articleDatabase.getArticlesByUserId(
             currentUser!.id!,
           );
+
+          if (!mounted) return; // Early exit if disposed
 
           print(
             '📦 Found ${userArticles.length} articles - loading progressively',
@@ -148,6 +150,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
           // ✅ Load article statuses first (lightweight query)
           await _loadArticleStatuses();
+
+          if (!mounted) return; // Early exit if disposed
 
           // ✅ Calculate stats and apply filters early
           _calculateStats();
@@ -199,8 +203,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
           }
 
           // ✅ Load secondary data in background (non-critical)
-          _loadDistributorRating();
-          _loadCompletedTasks();
+          if (mounted) {
+            _loadDistributorRating();
+            _loadCompletedTasks();
+          }
         }
       }
     } catch (e) {
