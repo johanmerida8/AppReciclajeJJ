@@ -26,7 +26,7 @@ class RankingDB {
         .rpc('get_ranking_by_cycle', params: {'cycle_id': cycleId});
 
     if (response == null) return [];
-
+    print('RPC Response: $response'); // 👉 Línea de depuración
     return (response as List)
         .map((json) => RankingModel.fromJson(json))
         .toList();
