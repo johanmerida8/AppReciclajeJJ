@@ -1,14 +1,15 @@
 class CompanyModel {
   final int idCompany;
   final String nameCompany;
-   int state;
+  int state;
   final DateTime createdAt;
   final int? adminUserID;
   final String adminName;
   final String? adminEmail;
   final String? avatarUrl; // 👈 nueva propiedad opcional
   final int totalEmployees;
-final int totalArticlesApproved;
+  final int totalArticlesApproved;
+   String isApproved;
 
 
   CompanyModel({
@@ -22,6 +23,9 @@ final int totalArticlesApproved;
     this.adminUserID,
     this.adminEmail,
     this.avatarUrl,
+    required this.isApproved,
+    
+    
   });
 
   factory CompanyModel.fromJson(Map<String, dynamic> json) {
@@ -34,8 +38,17 @@ final int totalArticlesApproved;
       adminName: json['users'] != null ? json['users']['names'] : null,
       adminEmail: json['users'] != null ? json['users']['email'] : null,
       avatarUrl: json['avatarUrl'],
-          totalEmployees: json['totalemployees'] ?? 0,
-    totalArticlesApproved: json['totalarticlesapproved'] ?? 0,
+      isApproved: json['isApproved'] ?? "Pending",
+
+      // 👇 ESTO ES LO IMPORTANTE
+      totalEmployees:
+          json['employees'] != null && json['employees'].isNotEmpty
+              ? json['employees'][0]['count'] ?? 0
+              : 0,
+          totalArticlesApproved:
+        json['request'] != null && json['request'].isNotEmpty
+            ? json['request'][0]['count'] ?? 0
+            : 0,
     );
   }
 }

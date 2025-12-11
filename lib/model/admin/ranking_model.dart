@@ -23,10 +23,15 @@ class RankingModel {
     return RankingModel(
       idUser: json['idUser'] ?? 0,
       names: json['names'] ?? '',
-      totalPoints: json['totalpoints'] ?? 0,
+      totalPoints: 
+    json['totalPoints'] ??
+    json['totalpoints'] ??
+    json['total_points'] ??
+    0,
+
       position: json['position'] ?? 0,
       idCycle: json['idCycle'] ?? 0,
-      cycleName: json['cyclename'] ?? '',
+      cycleName: json['cycleName'] ?? '',
       startDate:
           json['startDate'] != null
               ? DateTime.parse(json['startDate'].toString())

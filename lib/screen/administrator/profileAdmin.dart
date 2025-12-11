@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:reciclaje_app/auth/auth_service.dart';
+import 'package:reciclaje_app/components/admin/history_screen.dart';
 import 'package:reciclaje_app/database/admin/ArticleHistory_db.dart';
 import 'package:reciclaje_app/database/article_database.dart';
 import 'package:reciclaje_app/database/media_database.dart';
@@ -139,7 +140,7 @@ Future<String> _getCompanyName(int companyId) async {
       return "$actorName publicó el artículo";
     case 'request_sent':
       return targetName != null
-          ? "$actorName envió una solicitud a $targetName"
+          ? "$targetName envió una solicitud a $actorName"
           : "$actorName envió una solicitud";
     case 'request_accepted':
       return targetName != null
@@ -627,10 +628,20 @@ Future<String> _getCompanyName(int companyId) async {
                                                   () => _navigateToDetail(
                                                     article,
                                                   ),
-                                              onLongPress:
-                                                  () => _showHistoryBottomSheet(
-                                                    article,
-                                                  ), // ✅ Aquí mostramos el historial
+                                              onLongPress: () {
+  showModalBottomSheet(
+    context: context,
+    isScrollControlled: true,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(25)),
+    ),
+    builder: (_) => HistoryBottomSheet(
+      articleId: article.id!,
+      articleName: article.name ?? 'Artículo',
+    ),
+  );
+},
+// ✅ Aquí mostramos el historial
                                               child: _buildArticleCard(article),
                                             );
                                           },
