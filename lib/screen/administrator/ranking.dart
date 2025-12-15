@@ -21,53 +21,13 @@ class _RankingState extends State<Ranking> {
   List<RankingModel> _ranking = [];
   bool _isLoading = true;
 
+
   @override
   void initState() {
     super.initState();
     _loadRanking();
   }
-/*
-  Future<void> _loadRanking() async {
-    setState(() => _isLoading = true);
 
-    final manualUsers = [
-      RankingModel(
-        idUser: 1,
-        names: 'Usuario 1',
-        totalPoints: 100,
-        position: 1,
-        idCycle: 1,
-        cycleName: "Ciclo Noviembre",
-        startDate: DateTime(2025, 11, 1),
-        endDate: DateTime(2025, 11, 30),
-      ),
-      RankingModel(
-        idUser: 2,
-        names: 'Usuario 2',
-        totalPoints: 90,
-        position: 2,
-        idCycle: 1,
-        cycleName: "Ciclo Noviembre",
-        startDate: DateTime(2025, 11, 1),
-        endDate: DateTime(2025, 11, 30),
-      ),
-
-    ];
-
-    setState(() {
-      _ranking = manualUsers;
-      _isLoading = false;
-
-      if (_ranking.isNotEmpty) {
-        DistribuidorWidgetController.actualizar(
-          puntos: _ranking.first.totalPoints,
-          ranking: _ranking.first.position,
-        );
-      }
-    });
-  }
-
-  */
   Future<void> _loadRanking() async {
     setState(() => _isLoading = true);
     final data = await _db.fetchRanking();

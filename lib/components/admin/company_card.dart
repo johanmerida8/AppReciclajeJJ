@@ -328,6 +328,7 @@ class CompanyCard extends StatelessWidget {
                   borderRadius: BorderRadius.circular(2),
                 ),
               ),
+              /*
               // Ver perfil
               ListTile(
                 leading: const Icon(
@@ -343,7 +344,9 @@ class CompanyCard extends StatelessWidget {
                   onPressed?.call();
                 },
               ),
+              */
               // Ver perfil
+              /*
               ListTile(
                 leading: const Icon(
                   Icons.person_outline,
@@ -358,6 +361,7 @@ class CompanyCard extends StatelessWidget {
                   onPressed?.call();
                 },
               ),
+              */
               // Archivar usuario
               ListTile(
                 leading: Icon(

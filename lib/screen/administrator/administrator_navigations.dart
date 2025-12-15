@@ -7,6 +7,8 @@ import 'package:reciclaje_app/screen/administrator/ranking.dart';
 import 'package:reciclaje_app/screen/administrator/cycleList.dart';
 import 'package:reciclaje_app/theme/app_colors.dart';
 // import 'package:reciclaje_app/screen/administrator/profileAdmin.dart';
+import 'package:reciclaje_app/screen/administrator/profileAdministrator.dart';
+
 
 class adminNavigationScreens extends StatefulWidget {
   const adminNavigationScreens({super.key});
@@ -26,6 +28,7 @@ class _adminNavigationScreensState extends State<adminNavigationScreens> {
     const Ranking(),
     const CycleList(),
     // const ProfileAdmin(),
+    const ProfileAdministratorScreen()
   ];
 
   final List<Widget> _navigationItems = [
@@ -34,6 +37,8 @@ class _adminNavigationScreensState extends State<adminNavigationScreens> {
     const Icon(Icons.business_rounded, size: 30, color: Colors.white),
     const Icon(Icons.leaderboard, size: 30, color: Colors.white),
     const Icon(Icons.timelapse, size: 30, color: Colors.white),
+    const Icon(Icons.person, size: 30, color: Colors.white),
+
     // const Icon(Icons.person, size: 30, color: Colors.white),
   ];
 
