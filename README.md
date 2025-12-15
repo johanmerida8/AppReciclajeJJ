@@ -56,6 +56,3 @@ lib/
 - `main`: Rama principal
 - `master`: Rama de producción
 - `johan-dev`: Desarrollo de características principales
-
-## Licencia
-Este proyecto está bajo la Licencia MIT.
