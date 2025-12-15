@@ -8,6 +8,7 @@ class LocationSelector extends StatelessWidget {
   final VoidCallback onPickLocation;
   final bool isRequired;
   final String labelText;
+  final String? Function(LatLng?)? validator;
 
   const LocationSelector({
     super.key,
@@ -16,6 +17,7 @@ class LocationSelector extends StatelessWidget {
     required this.onPickLocation,
     this.isRequired = false,
     this.labelText = 'Preferencia de entrega',
+    this.validator,
   });
 
   @override
@@ -103,6 +105,25 @@ class LocationSelector extends StatelessWidget {
             ),
           ),
         ),
+        if (validator != null)
+          Builder(
+            builder: (context) {
+              final errorMessage = validator!(selectedLocation);
+              if (errorMessage != null) {
+                return Padding(
+                  padding: const EdgeInsets.only(top: 8.0, left: 12.0),
+                  child: Text(
+                    errorMessage,
+                    style: const TextStyle(
+                      color: Colors.red,
+                      fontSize: 12,
+                    ),
+                  ),
+                );
+              }
+              return const SizedBox.shrink();
+            },
+          ),
       ],
     );
   }

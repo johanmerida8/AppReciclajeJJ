@@ -217,6 +217,7 @@ class AvailabilityPicker extends StatelessWidget {
   final String labelText;
   final IconData? prefixIcon;
   final bool isRequired;
+  final String? Function(AvailabilityData?)? validator;
 
   const AvailabilityPicker({
     super.key,
@@ -225,6 +226,7 @@ class AvailabilityPicker extends StatelessWidget {
     this.labelText = 'Disponibilidad para entrega',
     this.prefixIcon = Icons.calendar_month,
     this.isRequired = false,
+    this.validator,
   });
 
   @override
@@ -337,6 +339,25 @@ class AvailabilityPicker extends StatelessWidget {
             ),
           ),
         ),
+        if (validator != null)
+          Builder(
+            builder: (context) {
+              final errorMessage = validator!(selectedAvailability);
+              if (errorMessage != null) {
+                return Padding(
+                  padding: const EdgeInsets.only(top: 8.0, left: 12.0),
+                  child: Text(
+                    errorMessage,
+                    style: const TextStyle(
+                      color: Colors.red,
+                      fontSize: 12,
+                    ),
+                  ),
+                );
+              }
+              return const SizedBox.shrink();
+            },
+          ),
       ],
     );
   }

@@ -70,6 +70,7 @@ class _RegisterRecycleScreenState extends State<RegisterRecycleScreen> {
   bool _isSubmitting = false;
   bool _canPublish = true; // ✅ Estado para saber si puede publicar
   Set<int> _usedCategoryIds = {};
+  bool _showValidationErrors = false; // ✅ Para mostrar errores de validación
 
   // Location variables
   LatLng? _selectedLocation;
@@ -198,6 +199,11 @@ class _RegisterRecycleScreenState extends State<RegisterRecycleScreen> {
       return;
     }
     
+    // ✅ Activar visualización de errores
+    setState(() {
+      _showValidationErrors = true;
+    });
+
     if (!_formKey.currentState!.validate()) {
       return;
     }
@@ -833,6 +839,7 @@ class _RegisterRecycleScreenState extends State<RegisterRecycleScreen> {
       _selectedAvailability = null;
       _selectedCondition = null;
       pickedImages = []; // Clear the images
+      _showValidationErrors = false; // ✅ Reset validation errors
     });
   }
 
@@ -889,6 +896,25 @@ class _RegisterRecycleScreenState extends State<RegisterRecycleScreen> {
                           return null;
                         },
                       ),
+                      
+                      const SizedBox(height: 16),
+
+                      // Description field using LimitCharacterTwo
+                      LimitCharacterTwo(
+                        controller: _descriptionController,
+                        hintText: 'Describe tu artículo',
+                        text: 'Descripción',
+                        obscureText: false,
+                        isEnabled: true,
+                        isVisible: true,
+                        validator: (value) {
+                          if (value != null && value.length > 150) {
+                            return 'La descripción no puede exceder los 150 caracteres';
+                          }
+                          return null;
+                        },
+                      ),
+
                       const SizedBox(height: 16),
                       
                       // Category tags
@@ -929,16 +955,6 @@ class _RegisterRecycleScreenState extends State<RegisterRecycleScreen> {
 
                       const SizedBox(height: 16),
                       
-                      // Description field using LimitCharacterTwo
-                      LimitCharacterTwo(
-                        controller: _descriptionController,
-                        hintText: 'Describe tu artículo',
-                        text: 'Descripción',
-                        obscureText: false,
-                        isEnabled: true,
-                        isVisible: true,
-                      ),
-                      const SizedBox(height: 16),
 
                       LocationSelector(
                         selectedLocation: _selectedLocation,
@@ -948,6 +964,12 @@ class _RegisterRecycleScreenState extends State<RegisterRecycleScreen> {
                             ? 'Preferencia de entrega' 
                             : 'Ubicación seleccionada (desde mapa)',
                         isRequired: true,
+                        validator: _showValidationErrors ? (location) {
+                          if (location == null) {
+                            return 'Por favor selecciona una ubicación';
+                          }
+                          return null;
+                        } : null,
                       ),
 
                       const SizedBox(height: 16),
@@ -963,6 +985,12 @@ class _RegisterRecycleScreenState extends State<RegisterRecycleScreen> {
                         labelText: 'Disponibilidad semanal',
                         prefixIcon: Icons.calendar_month,
                         isRequired: false,
+                        validator: _showValidationErrors ? (availability) {
+                          if (availability == null || !availability.isComplete) {
+                            return 'Por favor selecciona la disponibilidad completa';
+                          }
+                          return null;
+                        } : null,
                       ),
                       
                       const SizedBox(height: 24),

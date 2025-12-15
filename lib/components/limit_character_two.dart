@@ -7,6 +7,7 @@ class LimitCharacterTwo extends StatefulWidget {
   final bool obscureText;
   final bool isEnabled;
   final bool isVisible;
+  final String? Function(String?)? validator;
 
   const LimitCharacterTwo({
     Key? key,
@@ -16,6 +17,7 @@ class LimitCharacterTwo extends StatefulWidget {
     required this.obscureText,
     required this.isEnabled,
     required this.isVisible,
+    this.validator,
   }) : super(key: key);
 
   @override
