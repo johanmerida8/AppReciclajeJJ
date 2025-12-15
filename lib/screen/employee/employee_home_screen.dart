@@ -216,18 +216,6 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
                       ),
                     ],
                   ),
-                  CircleAvatar(
-                    radius: 25,
-                    backgroundColor: const Color(0xFF2D8A8A),
-                    child: Text(
-                      _employeeName?.substring(0, 1).toUpperCase() ?? 'E',
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 20,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ),
                 ],
               ),
               const SizedBox(height: 30),
