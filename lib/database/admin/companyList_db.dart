@@ -7,16 +7,21 @@ class CompanyListDB {
   /// ✅ Obtiene todas las empresas con su administrador y logo principal
   Future<List<CompanyModel>> fetchCompanies() async {
     try {
-      // 1️⃣ Traer las empresas con el nombre del administrador
-      final response = await client
-          .from('company')
-          .select(
-            'idCompany, nameCompany, state, created_at, adminUserID, users(names, email)',
-          );
+      final response = await client.from('company').select('''
+          idCompany,
+          nameCompany,
+          state,
+          created_at,
+          adminUserID,
+          isApproved,
+          users:adminUserID (names, email),
+          employees(count),
+          request(count)
+        ''');
 
       final List companiesData = response as List;
 
-      // 2️⃣ Para cada empresa, buscamos su logo principal en multimedia
+      // Logo + conteos
       for (var company in companiesData) {
         final logoResponse = await client
             .from('multimedia')
@@ -27,13 +32,21 @@ class CompanyListDB {
 
         company['avatarUrl'] =
             logoResponse.isNotEmpty ? logoResponse[0]['url'] : null;
+
+        company['employeeCount'] =
+            company['employees'] != null && company['employees'].isNotEmpty
+                ? company['employees'][0]['count'] ?? 0
+                : 0;
+
+        company['totalArticlesApproved'] =
+            company['request'] != null && company['request'].isNotEmpty
+                ? company['request'][0]['count'] ?? 0
+                : 0;
       }
 
-      // 4️⃣ Convertir los datos al modelo
-      final List<CompanyModel> companies =
-          companiesData.map((json) => CompanyModel.fromJson(json)).toList();
+      print('✅ Empresas obtenidas: $companiesData');
 
-      return companies;
+      return companiesData.map((json) => CompanyModel.fromJson(json)).toList();
     } catch (e) {
       print('❌ Error al obtener empresas: $e');
       return [];
@@ -41,13 +54,29 @@ class CompanyListDB {
   }
 
   Future<bool> setCompanyState(int companyId, int newState) async {
-  try {
-    await client.from('company').update({'state': newState}).eq('idCompany', companyId);
-    return true;
-  } catch (e) {
-    print('❌ Error cambiando estado de compañía: $e');
-    return false;
+    try {
+      await client
+          .from('company')
+          .update({'state': newState})
+          .eq('idCompany', companyId);
+      return true;
+    } catch (e) {
+      print('❌ Error cambiando estado de compañía: $e');
+      return false;
+    }
   }
-}
 
+  Future<bool> updateCompanyApproval(int idCompany, String newStatus) async {
+    try {
+      final response = await client
+          .from('company')
+          .update({'isApproved': newStatus})
+          .eq('idCompany', idCompany);
+
+      return true;
+    } catch (e) {
+      print("❌ Error al cambiar aprobación: $e");
+      return false;
+    }
+  }
 }

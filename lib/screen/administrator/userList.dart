@@ -1,4 +1,5 @@
 import 'package:reciclaje_app/auth/auth_service.dart';
+import 'package:reciclaje_app/screen/administrator/profileDistributor.dart';
 import 'package:reciclaje_app/screen/distribuidor/login_screen.dart';
 
 import '/database/admin/userList_db.dart';
@@ -56,23 +57,24 @@ class _UserListState extends State<UserList> {
     // Show confirmation dialog
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Cerrar Sesión'),
-        content: const Text('¿Estás seguro que deseas cerrar sesión?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancelar'),
+      builder:
+          (context) => AlertDialog(
+            title: const Text('Cerrar Sesión'),
+            content: const Text('¿Estás seguro que deseas cerrar sesión?'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('Cancelar'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text(
+                  'Cerrar Sesión',
+                  style: TextStyle(color: Colors.red),
+                ),
+              ),
+            ],
           ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text(
-              'Cerrar Sesión',
-              style: TextStyle(color: Colors.red),
-            ),
-          ),
-        ],
-      ),
     );
 
     if (confirmed == true) {
@@ -85,8 +87,6 @@ class _UserListState extends State<UserList> {
       }
     }
   }
-
-  
 
   @override
   void dispose() {
@@ -182,8 +182,17 @@ class _UserListState extends State<UserList> {
                                                 '&bold=true',
 
                                     onPressed: () {
-                                      // Acción para abrir perfil o detalles
+                                      Navigator.push(
+                                        context,
+                                        MaterialPageRoute(
+                                          builder:
+                                              (_) => ProfileDistributorScreen(
+                                                userId: user.idUser,
+                                              ),
+                                        ),
+                                      );
                                     },
+
                                     onArchive: () async {
                                       final newState = user.state == 1 ? 0 : 1;
 

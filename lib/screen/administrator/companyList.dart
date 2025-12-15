@@ -122,6 +122,10 @@ class _CompanyListState extends State<CompanyList> {
                                     name: user.nameCompany,
                                     adminName: user.adminName,
                                     state: user.state,
+                                    isApproved: user.isApproved,
+                                    totalEmployees: user.totalEmployees,
+                                    totalArticlesApproved:
+                                        user.totalArticlesApproved,
                                     date:
                                         user.createdAt
                                             .toLocal()
@@ -176,6 +180,30 @@ class _CompanyListState extends State<CompanyList> {
                                               ),
                                         ),
                                       );
+                                    },
+                                    onApprove: () async {
+                                      final ok = await _db
+                                          .updateCompanyApproval(
+                                            user.idCompany,
+                                            "Approved",
+                                          );
+
+                                      if (ok && mounted) {
+                                        setState(() {
+                                          user.isApproved =
+                                              "Approved"; // Solo si existe en el modelo
+                                        });
+
+                                        ScaffoldMessenger.of(
+                                          context,
+                                        ).showSnackBar(
+                                          const SnackBar(
+                                            content: Text(
+                                              "Empresa aprobada correctamente",
+                                            ),
+                                          ),
+                                        );
+                                      }
                                     },
                                   );
                                 },

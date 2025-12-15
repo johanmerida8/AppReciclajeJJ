@@ -12,6 +12,10 @@ class CompanyCard extends StatelessWidget {
   final VoidCallback? onPressed;
   final VoidCallback? onArchive;
   final VoidCallback? onEmployees; // 👉 NUEVO CALLBACK
+  final int totalEmployees;
+  final int totalArticlesApproved;
+  final VoidCallback? onApprove; // 👉 NUEVO
+  final String isApproved;
 
   const CompanyCard({
     super.key,
@@ -20,9 +24,14 @@ class CompanyCard extends StatelessWidget {
     required this.state,
     required this.date,
     required this.imageUrl,
+    required this.totalEmployees,
+    required this.totalArticlesApproved,
+    required this.isApproved,
+
     this.onPressed,
     this.onArchive,
     this.onEmployees, // 👉 NUEVO CALLBACK
+    this.onApprove, // 👉 NUEVO
   });
 
   @override
@@ -121,6 +130,39 @@ class CompanyCard extends StatelessWidget {
                           ),
                         ],
                       ),
+                      Row(
+                        children: [
+                          Icon(
+                            Icons.verified_outlined,
+                            size: 16,
+                            color:
+                                isApproved == "Approved"
+                                    ? AppColors
+                                        .verdeOscuro // Aprobado
+                                    : isApproved == "Pending"
+                                    ? Colors
+                                        .orange // Pendiente
+                                    : Colors.red, // Rechazado
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            isApproved == "Approved"
+                                ? "Aprobada"
+                                : isApproved == "Pending"
+                                ? "Pendiente"
+                                : "Rechazada",
+                            style: AppTextStyles.textSmall.copyWith(
+                              color:
+                                  isApproved == "Approved"
+                                      ? AppColors.verdeOscuro
+                                      : isApproved == "Pending"
+                                      ? Colors.orange
+                                      : Colors.red,
+                            ),
+                          ),
+                        ],
+                      ),
+
                       const SizedBox(height: 2),
                       // Calificación/* estrellas */
                       /*
@@ -175,7 +217,7 @@ class CompanyCard extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          '15', // número de empleados
+                          '$totalEmployees', // número de empleados
                           style: AppTextStyles.textSmall.copyWith(
                             color: AppColors.grisLetra,
                           ),
@@ -206,7 +248,7 @@ class CompanyCard extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          '250', // número de recolecciones
+                          '$totalArticlesApproved', // número de recolecciones
                           style: AppTextStyles.textSmall.copyWith(
                             color: AppColors.grisLetra,
                           ),
@@ -286,6 +328,7 @@ class CompanyCard extends StatelessWidget {
                   borderRadius: BorderRadius.circular(2),
                 ),
               ),
+              /*
               // Ver perfil
               ListTile(
                 leading: const Icon(
@@ -301,7 +344,9 @@ class CompanyCard extends StatelessWidget {
                   onPressed?.call();
                 },
               ),
+              */
               // Ver perfil
+              /*
               ListTile(
                 leading: const Icon(
                   Icons.person_outline,
@@ -316,6 +361,7 @@ class CompanyCard extends StatelessWidget {
                   onPressed?.call();
                 },
               ),
+              */
               // Archivar usuario
               ListTile(
                 leading: Icon(
@@ -334,7 +380,20 @@ class CompanyCard extends StatelessWidget {
                   onArchive?.call();
                 },
               ),
-              const SizedBox(height: AppSpacing.spacingMedium),
+              ListTile(
+                leading: const Icon(
+                  Icons.verified_outlined,
+                  color: AppColors.verdeOscuro,
+                ),
+                title: const Text(
+                  'Aprobar empresa',
+                  style: AppTextStyles.textLarge,
+                ),
+                onTap: () {
+                  Navigator.pop(context);
+                  onApprove?.call(); // 👉 LLAMADA AL CALLBACK
+                },
+              ),
               // Ver empleados de la empresa
               ListTile(
                 leading: const Icon(
@@ -350,6 +409,7 @@ class CompanyCard extends StatelessWidget {
                   onEmployees?.call(); // 👉 NUEVO CALLBACK
                 },
               ),
+              const SizedBox(height: AppSpacing.spacingMedium),
             ],
           ),
         );
